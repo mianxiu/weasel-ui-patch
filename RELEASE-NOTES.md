@@ -53,6 +53,8 @@ translation / filter / preedit 都不会重算，UI 不动 —— 纯 Lua 侧试
 2. 以管理员权限运行 `WeaselSetup.exe /s` 重新注册 TSF DLL
    （只替换 `WeaselServer.exe` 是不够的，`System32`/`SysWOW64` 里的客户端也要换）
 3. 在 `weasel.custom.yaml` 里开启 `rewrite_ui/enabled: true`
+   （附带的 `install-rime-files.ps1 -Apply` 会装好 Lua、补上开关，并自动删掉
+   已废弃的 `lua_filter@*indexed_rewrite_tab_ui_v2` 行，不需要手工改 YAML）
 4. **重新部署（`WeaselDeployer.exe /deploy`）并重启服务**
    —— 服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`
 5. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
@@ -93,3 +95,4 @@ clone Weasel 并打上全部补丁，重建出与本次构建完全一致的源�
 基于 [rime/weasel](https://github.com/rime/weasel) 修改，沿用其 **GPLv3**
 （见包内 `licenses/`）。上游作者与贡献者名单见上游仓库。
 万象 Pro 词库与方案数据不属于本项目，也不随本包分发。
+
