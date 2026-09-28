@@ -1,0 +1,9 @@
+# 补丁仓库要求字节保真，禁止任何行尾转换。
+#
+# 原因：上游 weasel 的 blob 行尾不一致（RimeWithWeasel.cpp 是 CRLF，而
+# DirectWriteResources.cpp 是 LF），补丁文件里的内容行也照此混着 LF 与 CRLF。
+# 一旦 git 在 checkout 时统一转成 CRLF，那些原本是 LF 的内容行就再也对不上
+# 目标文件，git am 会以 "patch does not apply" 失败。
+#
+# -text = 不做任何行尾转换（既不在提交时不转，也不在检出时不转）
+* -text
