@@ -1,7 +1,7 @@
 From e06f9be6ab54aec9f4d15e4dd442600d2ca83102 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:53:50 +0800
-Subject: [PATCH 13/20] docs: add upstream-update rebuild manual and record
+Subject: [PATCH 13/21] docs: add upstream-update rebuild manual and record
  runtime files outside the repo
 
 ---

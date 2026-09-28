@@ -1,0 +1,192 @@
+From e87329bd7e4380e9ddfab4f62321b7769a0534f2 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 22:53:23 +0800
+Subject: [PATCH 21/21] feat(rime): remove the obsolete filter line
+ automatically and warn when rewrite_ui is disabled
+
+---
+ README.md                   | 14 +++++++----
+ REWRITE-UI.md               |  9 +++----
+ rime/README.md              |  7 ++++--
+ rime/install-rime-files.ps1 | 47 +++++++++++++++++++++++++++++--------
+ 4 files changed, 57 insertions(+), 20 deletions(-)
+
+diff --git a/README.md b/README.md
+index d001615..647b457 100644
+--- a/README.md
++++ b/README.md
+@@ -114,8 +114,10 @@ GitHub  mianxiu/weasel-ui-patch       ← 只有补丁，约 300 KB
+    ```
+ 
+    它会安装核心 `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`
+-   （`Tab` 绑定与 processor 注册），并只补齐 `weasel.custom.yaml` 里
+-   **缺失**的开关行——你原有的主题配置不会被覆盖。详见 [`rime/README.md`](rime/README.md)。
++   （`Tab` 绑定与 processor 注册），**删掉 `wanxiang_pro.custom.yaml` 里已废弃的
++   `lua_filter@*indexed_rewrite_tab_ui_v2` 行**（先备份），并只补齐
++   `weasel.custom.yaml` 里**缺失**的开关行 —— 你原有的主题配置不会被覆盖。
++   详见 [`rime/README.md`](rime/README.md)。
+ 3. 确认 `weasel.custom.yaml` 的 `patch:` 下有这两行：
+ 
+    ```yaml
+@@ -123,12 +125,16 @@ GitHub  mianxiu/weasel-ui-patch       ← 只有补丁，约 300 KB
+    rewrite_ui/debug: false
+    ```
+ 
++   脚本**不会**把已有的 `enabled: false` 擅自改成 `true`（那是你的开关），
++   只会打印警告提醒你补丁不会生效。
++
+ 4. 改动后**必须重新部署（`WeaselDeployer.exe /deploy`）并重启服务**。
+    服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`，
+    不是同目录的 `weasel.yaml`，也不是 `weasel.custom.yaml`；
+    只改 custom 文件不部署是无效的。
+-5. 从 schema 的 filters 里移除旧的 `lua_filter@*indexed_rewrite_tab_ui_v2`，
+-   否则编号会被 Lua filter 和 Weasel 各画一遍。
++5. 旧 filter 行如果没被删掉（比如脚本报告 `MISSING required lines` 而跳过了
++   那个文件），编号会被 Lua filter 和 Weasel 各画一遍 —— 手动删掉
++   `engine/filters` 段里那一行即可。
+ 
+ ## 验证情况
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index ac6ec53..e003fdb 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -80,16 +80,17 @@ TSF 客户端，64 位 Windows 同样需要二者。`WeaselSetup.exe` 是上游
+    ```
+ 
+    它会安装 `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`
+-   （含 `Tab -> send_sequence: "//"` 绑定与 processor 注册），并只补齐
+-   `weasel.custom.yaml` 里**缺失**的这两行开关，不覆盖你原有的主题：
++   （含 `Tab -> send_sequence: "//"` 绑定与 processor 注册），删掉
++   `wanxiang_pro.custom.yaml` 里已废弃的 `lua_filter@*indexed_rewrite_tab_ui_v2`
++   行（先备份），并只补齐 `weasel.custom.yaml` 里**缺失**的这两行开关，
++   不覆盖你原有的主题：
+ 
+    ```yaml
+    rewrite_ui/enabled: true
+    rewrite_ui/debug: false
+    ```
+ 
+-5. 从 schema 的 filters 中移除旧的 `lua_filter@*indexed_rewrite_tab_ui_v2`
+-   条目，避免编号被画两遍。
++   脚本不会把已有的 `enabled: false` 擅自改成 `true`，只会警告补丁不会生效。
+ 6. 重新部署、注销并重新登录 Windows，使应用加载新 DLL，再启动小狼毫。
+ 
+ 如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true`，然后
+diff --git a/rime/README.md b/rime/README.md
+index a0e7dc1..b80224e 100644
+--- a/rime/README.md
++++ b/rime/README.md
+@@ -28,9 +28,12 @@ pwsh -NoProfile -File .\install-rime-files.ps1 -Apply
+ 
+ - `lua\indexed_rewrite_pro.lua`：不存在就复制；已存在且内容不同则先备份再覆盖
+ - `wanxiang_pro.custom.yaml`：不存在就复制；已存在则**只检查**必需的几行是否齐全，
+-  不覆盖（你可能有模糊音之类的额外自定义），报告缺什么
++  不覆盖（你可能有模糊音之类的额外自定义），缺行会列出来让你手工合并。
++  齐全的话，会**删掉已废弃的 `lua_filter@*indexed_rewrite_tab_ui_v2` 行**
++  （先备份）—— 留着它编号会被画两遍
+ - `weasel.custom.yaml`：不存在就复制；已存在则在 `patch:` 下补齐两行开关，
+-  不改动你原有的主题配置
++  不改动你原有的主题配置。已有的 `rewrite_ui/enabled: false` 不会被改成 `true`，
++  但脚本会警告你补丁不会生效
+ 
+ 写入完成后脚本会打印后续必须执行的步骤（重新部署 + 重启服务）。
+ 
+diff --git a/rime/install-rime-files.ps1 b/rime/install-rime-files.ps1
+index 79542ac..5077ce3 100644
+--- a/rime/install-rime-files.ps1
++++ b/rime/install-rime-files.ps1
+@@ -51,6 +51,9 @@ switch ($luaAction) {
+ # ------------------------------------------- 2. wanxiang_pro.custom.yaml
+ Write-Output '[2/3] wanxiang_pro.custom.yaml'
+ $required = @('lua_processor@\*indexed_rewrite_pro', 'key_binder/bindings/\+:', 'speller/algebra:')
++# 这一行必须移除，否则编号会被旧 Lua filter 和 Weasel 各画一遍
++$legacyRe = '^\s*engine/filters/@before last:\s*lua_filter@\*indexed_rewrite_tab_ui_v2\s*$'
++$schemaLinesToWrite = $null
+ if (!(Test-Path -LiteralPath $schemaDst)) {
+   $schemaAction = 'copy'
+   Write-Output '  will install (target does not exist)'
+@@ -59,25 +62,35 @@ else {
+   # Never overwrite silently: the file may carry unrelated customisations.
+   $existing = [IO.File]::ReadAllLines($schemaDst)
+   $missing = @($required | Where-Object { -not ($existing -match $_) })
+-  if ($missing.Count -eq 0) {
+-    $schemaAction = 'unchanged'
+-    Write-Output '  existing file already has the required patch lines, left untouched'
++  $legacyHits = @($existing | Where-Object { $_ -match $legacyRe })
++  if ($missing.Count -gt 0) {
++    if ($Force) {
++      $schemaAction = 'replace'
++      Write-Output '  missing required lines; -Force given, will overwrite (backup kept)'
++    }
++    else {
++      $schemaAction = 'skip'
++      Write-Output '  MISSING required lines, left untouched:'
++      $missing | ForEach-Object { Write-Output "    - $_" }
++      Write-Output '  merge them manually, or re-run with -Force to overwrite.'
++    }
+   }
+-  elseif ($Force) {
+-    $schemaAction = 'replace'
+-    Write-Output '  existing file is missing required lines; -Force given, will overwrite (backup kept)'
++  elseif ($legacyHits.Count -gt 0) {
++    $schemaAction = 'removelegacy'
++    $schemaLinesToWrite = @($existing | Where-Object { $_ -notmatch $legacyRe })
++    Write-Output ('  required lines OK; will REMOVE the obsolete filter line ({0} 处, backup kept):' -f $legacyHits.Count)
++    $legacyHits | ForEach-Object { Write-Output ('    - ' + $_.Trim()) }
+   }
+   else {
+-    $schemaAction = 'skip'
+-    Write-Output '  existing file is MISSING required lines and was left untouched:'
+-    $missing | ForEach-Object { Write-Output "    - $_" }
+-    Write-Output '  merge them manually, or re-run with -Force to overwrite.'
++    $schemaAction = 'unchanged'
++    Write-Output '  required lines present and no obsolete filter line, left untouched'
+   }
+ }
+ 
+ # ------------------------------------------------- 3. weasel.custom.yaml
+ Write-Output '[3/3] weasel.custom.yaml'
+ $uiAction = 'merge'
++$warnDisabled = $false
+ if (!(Test-Path -LiteralPath $uiDst)) {
+   $uiAction = 'copy'
+   Write-Output '  will install (target does not exist)'
+@@ -92,6 +105,9 @@ else {
+   }
+   $needEnabled = -not ($lines -match '^\s*["'']?rewrite_ui/enabled["'']?\s*:')
+   $needDebug = -not ($lines -match '^\s*["'']?rewrite_ui/debug["'']?\s*:')
++  # 已存在 enabled: false 时不擅自改成 true（那是你的开关），但必须明确提醒
++  $enabledLine = $lines | Where-Object { $_ -match '^\s*["'']?rewrite_ui/enabled["'']?\s*:' } | Select-Object -First 1
++  if ($enabledLine -and $enabledLine -notmatch ':\s*true\s*$') { $warnDisabled = $true }
+   if (!$needEnabled -and !$needDebug) {
+     $uiAction = 'unchanged'
+     Write-Output '  both rewrite_ui switches already present, left untouched'
+@@ -134,6 +150,12 @@ if ($schemaAction -eq 'copy' -or $schemaAction -eq 'replace') {
+   Copy-Item -LiteralPath $schemaSrc -Destination $schemaDst -Force
+   Write-Output '  wanxiang_pro.custom.yaml    : installed'
+ }
++elseif ($schemaAction -eq 'removelegacy') {
++  Backup-File $schemaDst
++  $utf8 = New-Object Text.UTF8Encoding($false)
++  [IO.File]::WriteAllLines($schemaDst, [string[]]$schemaLinesToWrite, $utf8)
++  Write-Output '  wanxiang_pro.custom.yaml    : obsolete filter line removed'
++}
+ if ($uiAction -eq 'copy') {
+   Copy-Item -LiteralPath $uiSrc -Destination $uiDst -Force
+   Write-Output '  weasel.custom.yaml          : installed'
+@@ -146,6 +168,11 @@ elseif ($uiAction -eq 'merge') {
+ }
+ 
+ Write-Output ''
++if ($warnDisabled) {
++  Write-Output '⚠ rewrite_ui/enabled 现在是关闭状态 —— 补丁不会生效。'
++  Write-Output '  要打开：把 weasel.custom.yaml 里那一行改成 true，或跑 enable-rewrite-ui.ps1 -Apply。'
++  Write-Output ''
++}
+ Write-Output 'Next steps (both are required):'
+ Write-Output '  1. WeaselDeployer.exe /deploy        # rebuilds %APPDATA%\Rime\build\weasel.yaml'
+ Write-Output '  2. restart WeaselServer.exe          # Initialize() reads the config at startup'
+-- 
+2.53.0.windows.2
+
