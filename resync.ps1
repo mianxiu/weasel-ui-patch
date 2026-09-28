@@ -98,8 +98,12 @@ if ($isRepo) {
 
 if ($Push) {
   & git -C $PSScriptRoot add -A
-  & git -C $PSScriptRoot commit -m ("patches: rebase onto upstream {0}" -f $base.Substring(0,8)) | Out-Null
-  & git -C $PSScriptRoot push
+  if ($LASTEXITCODE -ne 0) { throw "git add 失败" }
+  & git -C $PSScriptRoot commit -m ("patches: rebase onto upstream {0}" -f $base.Substring(0,8)) 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { Write-Warning "没有需要提交的改动" }
+  # 用 -u origin HEAD：本地分支若没配 upstream，裸 git push 会直接失败
+  & git -C $PSScriptRoot push -u origin HEAD
+  if ($LASTEXITCODE -ne 0) { throw "git push 失败（改动已在本地提交，请手动推送）" }
   Write-Host "已提交并推送"
 }
 else {
