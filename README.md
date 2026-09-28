@@ -77,13 +77,18 @@ pwsh -NoProfile -File .\resync.ps1
 上游仓库里的 blob **行尾是不一致的**：`RimeWithWeasel/RimeWithWeasel.cpp` 是
 CRLF + BOM，`WeaselUI/DirectWriteResources.cpp` 却是纯 LF。因此：
 
-1. **`git clone` 时必须带 `--config core.autocrlf=false`**（在 checkout 之前生效），
-   否则工作区行尾与补丁不一致，补丁会以 `patch does not apply` 失败。
-2. **必须用 `git am --keep-cr`**。`git am` 内部先经过 `git mailsplit`，
+1. **本仓库的 `.gitattributes` 必须是 `* -text`**（已配置，别删）。
+   否则全局 `core.autocrlf=true` 会在 `git add` 时把补丁里那些 CRLF 内容行
+   规范化成 LF —— 补丁被改坏、打上去必然失败，而且**从文件大小上看不出来**。
+   顺序很重要：**先 `.gitattributes`，再提交补丁**。
+2. **`git clone` 上游时必须带 `--config core.autocrlf=false`**（要在 checkout
+   之前生效），否则工作区行尾与补丁不一致。
+3. **必须用 `git am --keep-cr`**。`git am` 内部先经过 `git mailsplit`，
    而 mailsplit 默认剥掉内容行末尾的 CR，CRLF 补丁就再也对不上。
    （`git apply` 不走 mailsplit，所以它单独测是通的，这点很容易误判。）
 
-两个参数都已经写在 `setup.ps1` 里，手工操作时别忘了。
+三条都已经写在 `setup.ps1` / `resync.ps1` 里，手工操作时别忘了。
+另外 `setup.ps1` 会用 `EXPECTED-TREE.txt` 校验重建结果，任何行尾损坏都会立刻暴露。
 
 ## 完整文档
 
