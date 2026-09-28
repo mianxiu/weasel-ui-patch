@@ -1,0 +1,58 @@
+From b6b62f40ff5cc576622c544d4e31a9aeb706025b Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 22:22:53 +0800
+Subject: [PATCH 19/19] docs: record the three hard requirements of the patch
+ repository
+
+---
+ agent.md | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/agent.md b/agent.md
+index 0a2fa92..5c12d11 100644
+--- a/agent.md
++++ b/agent.md
+@@ -2162,3 +2162,40 @@ pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+ 两者在"上游改到补丁附近"时都要人工介入；区别只是 rebase 把冲突标记写在文件里
+ （两边都看得见），patch 只给你一个 `.rej` 片段要自己找位置贴回去。
+ 真正的差别是 patch 方案每次上游同步后要**多一步重新导出补丁**（约一分钟）。
++
++### 25.8 补丁仓库自身的三个硬要求【血泪教训】
++
++这三条都是 2026-09-28 实际踩出来的，重建补丁仓库时一个都不能少：
++
++**① 补丁仓库必须有 `.gitattributes` 且内容是 `* -text`**
++
++上游 weasel 的 blob 行尾是**不一致**的：
++
++| 文件 | blob 行尾 |
++|---|---|
++| `RimeWithWeasel/RimeWithWeasel.cpp` | CRLF + BOM |
++| `WeaselIPC/ContextUpdater.cpp` | CRLF |
++| `WeaselUI/DirectWriteResources.cpp` | **LF** |
++| `README.md` | CRLF + BOM |
++
++所以 `git format-patch` 出来的补丁里，**结构行是 LF、内容行照抄 blob 的 CRLF**，
++一个补丁文件里两种行尾混着。如果 `.gitattributes` 没锁死，全局
++`core.autocrlf=true` 会在 `git add` 时把那些 CRLF 内容行规范化成 LF ——
++补丁就被改坏了，打上去必然失败，而且**从文件大小上看不出来**。
++
++我们就是这么踩了一次：先提交补丁、后加 `.gitattributes`，结果推上 GitHub 的
++补丁已经损坏，只能重新生成重提。**顺序必须是：先 `.gitattributes`，再提交补丁。**
++
++**② 工作副本的 clone 必须带 `--config core.autocrlf=false`**
++
++这个参数要在 **fetch/checkout 之前**生效，否则工作区行尾与补丁不一致。
++
++**③ 打补丁必须用 `git am --keep-cr`**
++
++`git am` 内部先经过 `git mailsplit`，而 mailsplit **默认剥掉内容行末尾的 CR**。
++CRLF 补丁被剥成 LF 后就再也对不上 CRLF 的目标文件。
++`git apply` 不走 mailsplit，所以单独测 `git apply` 是通的 —— 这一点极容易误判，
++我就是被它绕了很久。
++
++三条都写在 `setup.ps1` / `resync.ps1` 里了。另外 `setup.ps1` 会用
++`EXPECTED-TREE.txt` 校验重建结果，任何行尾损坏都会立刻暴露。
+-- 
+2.53.0.windows.2
+
