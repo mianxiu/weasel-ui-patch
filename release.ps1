@@ -101,10 +101,28 @@ Write-Host ("  已创建: " + $release.html_url)
 # --------------------------------------------------------------- 上传附件
 Write-Host "上传附件 ..."
 $uploadUri = "https://uploads.github.com/repos/$Owner/$Repo/releases/$($release.id)/assets?name=$([uri]::EscapeDataString($assetItem.Name))"
-$asset = Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/zip' `
-  -Uri $uploadUri -InFile $assetItem.FullName
-Write-Host ("  已上传: {0}  ({1:N1} MB)" -f $asset.name, ($asset.size / 1MB))
-Write-Host ("  下载地址: " + $asset.browser_download_url)
+try {
+  Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/zip' `
+    -Uri $uploadUri -InFile $assetItem.FullName | Out-Null
+}
+catch {
+  # 422 already_exists 说明附件本来就在，按成功处理
+  if ($_.Exception.Response.StatusCode.value__ -ne 422) { throw }
+  Write-Host "  （附件已存在，跳过）"
+}
+
+# 不要相信 POST 的响应体（实测可能返回空对象），重新拉一次列表来核对
+$assets = @(Invoke-RestMethod -Method Get -Headers $headers `
+  -Uri "https://api.github.com/repos/$Owner/$Repo/releases/$($release.id)/assets")
+$mine = $assets | Where-Object { $_.name -eq $assetItem.Name } | Select-Object -First 1
+if (!$mine) {
+  throw "上传后没在附件列表里找到 $($assetItem.Name)，请到网页上确认：$($release.html_url)"
+}
+if ($mine.size -ne $assetItem.Length) {
+  throw "附件大小不符：远端 $($mine.size) 字节 / 本地 $($assetItem.Length) 字节"
+}
+Write-Host ("  已上传并核对: {0}  ({1:N1} MB, state={2})" -f $mine.name, ($mine.size / 1MB), $mine.state)
+Write-Host ("  下载地址: " + $mine.browser_download_url)
 
 Write-Host ""
 Write-Host "完成。"
