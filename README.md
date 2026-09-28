@@ -71,6 +71,33 @@ pwsh -NoProfile -File .\resync.ps1
 | `EXPECTED-TREE.txt` | 打完补丁后应有的 `tree` hash，`setup.ps1` 用它校验重建结果 |
 | `setup.ps1` | 重建工作副本 |
 | `resync.ps1` | 同步上游并重新导出补丁 |
+| `release.ps1` | 把工作副本里打好的包发成 GitHub Release |
+| `RELEASE-NOTES.md` | Release 说明（发版时作为正文） |
+
+## 发 Release（二进制包）
+
+编译好的安装包体积约 8.7 MB，不放进 git，而是作为 **Release 附件**上传
+—— 这样仓库始终只有几百 KB。
+
+```powershell
+# 1) 在工作副本里出包
+cd ..\weasel
+.\build-rewrite.cmd
+pwsh -NoProfile -File .\package-rewrite.ps1      # 生成 dist\Weasel-Rewrite-UI.zip
+
+# 2) 准备令牌（推荐 fine-grained PAT，只勾本仓库的 Contents: Read and write）
+#    不要把它写进任何文件或贴到对话里
+$env:GITHUB_TOKEN = '<你的令牌>'
+
+# 3) 发版（先加 -WhatIf 预览）
+cd ..\weasel-ui-patch
+pwsh -NoProfile -File .\release.ps1 -Tag v0.17.4.1-rewrite-ui -WhatIf
+pwsh -NoProfile -File .\release.ps1 -Tag v0.17.4.1-rewrite-ui
+```
+
+不改脚本也可以，直接走网页：**Releases → Draft a new release** → 选 tag →
+正文粘贴 `RELEASE-NOTES.md` → 把 `weasel\dist\Weasel-Rewrite-UI.zip` 拖进附件区 →
+Publish release。
 
 ## 两个必须知道的坑
 
