@@ -1,0 +1,263 @@
+From 4dc24d7e2c43c5f761022853d422b39985facc78 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 21:25:09 +0800
+Subject: [PATCH 16/18] docs: migrate references to the standalone
+ weasel-ui-patch repository
+
+---
+ README.md      | 11 ++++----
+ REWRITE-UI.md  | 22 +++++++++------
+ agent.md       | 74 ++++++++++++++++++++++++++++++++++----------------
+ rime/README.md |  2 +-
+ 4 files changed, 70 insertions(+), 39 deletions(-)
+
+diff --git a/README.md b/README.md
+index d87b6b0..eb47873 100644
+--- a/README.md
++++ b/README.md
+@@ -1,11 +1,12 @@
+ # 小狼毫 · 万象 Pro 编码重写补丁
+ 
+-基于 [rime/weasel](https://github.com/rime/weasel) 的个人定制分支，为 Windows
++基于 [rime/weasel](https://github.com/rime/weasel) 的个人定制，为 Windows
+ 小狼毫增加「未上屏编码快速重写」的**原生 UI**。
+ 
+-> **个人自用项目，不向上游提交 PR。** `master` 保持与上游一致的干净镜像，
+-> 所有改动都在 `feature/rewrite-ui` 分支上。将来若要把某部分贡献上游，
+-> 应另开干净分支单独整理。
++> **个人自用项目，不向上游提交 PR。** 这是独立仓库，主线分支 `main`（15 个提交
++> 直接叠在 `d73f6295` 之上）。上游镜像另存为 `upstream-master` 分支，用于对比：
++> [`compare/upstream-master...main`](https://github.com/mianxiu/weasel-ui-patch/compare/upstream-master...main)。
++> 将来若要把某部分贡献上游，应另开干净分支单独整理。
+ 
+ ## 这是什么
+ 
+@@ -136,7 +137,7 @@ librime、marisa-trie、OpenCC、plum、WinSparkle、yaml-cpp、7-Zip（完整
+ 
+ 换机器或重装时的完整顺序：
+ 
+-1. `git clone --recursive` 本仓库（`feature/rewrite-ui` 分支）
++1. `git clone --recursive` 本仓库（主线 `main`）
+ 2. 装好小狼毫与万象 Pro，准备好词库
+ 3. `rime\install-rime-files.ps1 -Apply` —— 装回 Lua 与配置
+ 4. `build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd` —— 编译并安装程序
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 6ed0120..ace1cf5 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -137,7 +137,7 @@ custom 里已改成 `false`，但 `build\weasel.yaml` 里还是 `true`，
+ 
+ ## 构建基线
+ 
+-- Weasel：`d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，分支 `feature/rewrite-ui`。
++- Weasel：`d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，主线分支 `main`。
+ - 源码中 librime 子模块：`1c23358157934bd6e6d6981f0c0164f05393b497`。
+ - 实际链接/打包：官方 librime 1.17.0 `33e7814`，含 librime-lua `ec52e48`；
+   没有声称打包 DLL 来自本地子模块编译。
+@@ -151,7 +151,7 @@ custom 里已改成 `false`，但 `build\weasel.yaml` 里还是 `true`，
+ 
+ ## 源码提交
+ 
+-改动全部位于 `feature/rewrite-ui` 分支，基线为
++改动全部位于 `main` 分支，基线为
+ `d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，共 7 个提交：
+ 
+ ```text
+@@ -168,16 +168,20 @@ fd33dc1 test(rewrite-ui): add state, IPC pipeline and librime property tests
+ 进入隐藏交互窗口的问题）和 `WEASEL_SETUP_LOG` 门控的安装 trace；两者落在同一个
+ 代码块内，无法干净拆分。trace 不设置该环境变量时零开销。
+ 
+-remote 配置（2026-09-28 补做）：
++remote 配置（2026-09-28 最终状态）：
+ 
+ ```text
+-origin    https://github.com/mianxiu/weasel.git   （fork）
+-upstream  https://github.com/rime/weasel.git      （官方）
++origin        https://github.com/mianxiu/weasel-ui-patch.git  （独立仓库，主线 main）
++upstream      https://github.com/rime/weasel.git              （官方）
++fork-backup   https://github.com/mianxiu/weasel.git           （早期 fork，留作备份）
+ ```
+ 
+-`feature/rewrite-ui` 已 push 到 fork，跟踪 `origin/feature/rewrite-ui`，
+-远端 SHA 与本地一致，领先 `upstream/master` 10 个提交。同步上游用
+-`git fetch upstream` 后 rebase 或 merge 到 `feature/rewrite-ui`。
++主分支 `main` 跟踪 `origin/main`，远端 SHA 与本地一致，领先 `upstream/master`
++15 个提交。同步上游用 `git fetch upstream` 后 rebase 或 merge 到 `main`。
++
++远端还有一个 `upstream-master` 分支（就是 `d73f6295` 的上游镜像），
++专门用于 GitHub 上的对比视图：
++`compare/upstream-master...main`。
+ 
+ **本包是个人自用，不向上游 `rime/weasel` 提 PR。** 这个分支混着软件渲染改动
+ （issue #1913）、安装脚本 trace 和个人偏好，不适合整体提交上游；将来若要贡献
+@@ -238,7 +242,7 @@ pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+ ```powershell
+ cd weasel
+ git fetch upstream
+-git checkout feature/rewrite-ui
++git checkout main
+ git rebase upstream/master          # 冲突热点：RimeWithWeasel.cpp、WeaselPanel.cpp、README.md
+ Test-Path weasel.props              # 被 git 忽略，rebase 不会提示版本号变更
+ .\build-rewrite.cmd                 # 构建 x64 + x86
+diff --git a/agent.md b/agent.md
+index 101c671..09794a2 100644
+--- a/agent.md
++++ b/agent.md
+@@ -12,30 +12,32 @@
+ > ```text
+ > 1. rime/lua/indexed_rewrite_pro.lua     核心编辑算法（%APPDATA%\Rime 的版本控制副本）
+ > 2. rime/                                另外两个运行期文件 + 一键装回脚本
+-> 3. weasel/ 仓库 feature/rewrite-ui 分支（Weasel 侧 Rewrite UI 补丁）
+-> 4. weasel/dist/Weasel-Rewrite-UI.zip（补丁包，由 package-rewrite.ps1 生成）
++> 3. main 分支                             Weasel 侧 Rewrite UI 补丁
++> 4. weasel/dist/Weasel-Rewrite-UI.zip    补丁包，由 package-rewrite.ps1 生成
+ > ```
+ >
+ > 注意 `indexed_rewrite_pro.lua` 有**两个副本**：`%APPDATA%\Rime\lua\` 里那份是
+ > 真正被加载的，仓库里 `rime/lua/` 那份是版本控制副本。改完要通过
+ > `rime/install-rime-files.ps1 -Apply` 装回去，见 §25.6。
+ >
+-> **用途：个人自用，不提上游 PR。** `feature/rewrite-ui` 长期留在自己的
+-> fork（`mianxiu/weasel`）上；同步官方用 `upstream` remote。将来若要把某部分
+-> 改动贡献给上游，再从干净分支单独整理，**不要直接拿这个分支开 PR**——
++> **用途：个人自用，不提上游 PR。** 代码托管在**独立仓库**
++> `https://github.com/mianxiu/weasel-ui-patch`（2026-09-28 从 fork 迁出），
++> 主线就是 `main`；同步官方用 `upstream` remote。将来若要把某部分改动
++> 贡献给上游，再从干净分支单独整理，**不要直接拿 `main` 开 PR**——
+ > 它混着软件渲染改动、安装脚本 trace 和个人偏好配置。
+ >
+-> **Fork 首页说明**：仓库根的 `README.md` 已替换为本项目说明（简中技术向），
+-> 写在 `feature/rewrite-ui` 上；`master` 的 `README.md` 保持上游原文。
+-> 要让首页显示新说明，需在 GitHub 网页里把 fork 的默认分支改成
+-> `feature/rewrite-ui`（`Settings → General → Default branch`），
+-> 这是网页设置，git 命令改不了。
++> 仓库根 `README.md` 就是本项目说明（简中技术向），默认分支是 `main`，
++> 所以 GitHub 首页直接显示它——**不需要再去改任何默认分支设置**。
+ 
+ ## 0. 仓库准备与开发流程
+ 
+ 本项目建议基于官方小狼毫 Weasel 仓库做长期维护，不建议直接在官方源码临时修改。
+ 
+-### 0.1 先 Fork【已完成】
++### 0.1 先 Fork【已完成 · 后改为独立仓库】
++
++> 【现状】这一节记录的是最初的方案。实际经历过 fork 阶段后，由于确定不会
++> 向上游提 PR，已于 2026-09-28 迁到**独立仓库** `mianxiu/weasel-ui-patch`
++> （它同样保留了与上游共享的完整历史），详见 §0.7.2。下面保留原始约定。
+ 
+ 官方仓库：
+ 
+@@ -99,6 +101,11 @@ upstream  https://github.com/rime/weasel.git
+ 
+ ### 0.4 不要直接在主分支开发
+ 
++> 【已调整】这一条针对的是**官方仓库**：不要在 `rime/weasel` 的 `master` 上直接改。
++> 本项目现在是独立仓库 `mianxiu/weasel-ui-patch`，它的 `main` **就是**本补丁的主线
++> （上游镜像另存为 `master` 与远端的 `upstream-master`），所以日常改动直接提交到
++> `main` 即可。下面的原始约定保留为历史记录。
++
+ 创建独立功能分支：
+ 
+ ```bash
+@@ -144,7 +151,7 @@ agent.md
+ ```
+ 
+ 【已完成】已于 2026-09-28 复制到 `weasel/agent.md` 并纳入版本控制，
+-随 `feature/rewrite-ui` 一起 push 到 fork。
++随主线 `main` 一起 push 到 `mianxiu/weasel-ui-patch`。
+ 
+ 【单一来源】原来放在工作目录根部（`小狼毫万象补丁\agent.md`）的那份重复副本
+ **已删除**，避免两份内容分叉。现在 `weasel/agent.md`（即仓库根的 `agent.md`）
+@@ -230,8 +237,8 @@ git submodule status
+ ### 0.7.1 本项目的实际基线【已完成】
+ 
+ ```text
+-仓库        https://github.com/rime/weasel （origin 直接指向官方，尚未 Fork）
+-分支        feature/rewrite-ui
++仓库        https://github.com/mianxiu/weasel-ui-patch （独立仓库，非 fork）
++主线分支    main
+ 基线 commit d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ librime     git 子模块 1c23358157934bd6e6d6981f0c0164f05393b497（1.13.1）
+ 实际链接    官方 librime 1.17.0 33e7814（含 librime-lua ec52e48）
+@@ -240,20 +247,39 @@ Boost       1.84.0（静态库）
+ 文件版本    0.17.4.1（未做发行代码签名）
+ ```
+ 
+-【已完成】§0.1／§0.3 要求的 Fork 与 remote 配置已于 2026-09-28 补做：
++### 0.7.2 remote 布局【已完成】
++
++2026-09-28 的最终状态（经历过 fork 阶段，现已迁到独立仓库）：
+ 
+ ```text
+-origin    https://github.com/mianxiu/weasel.git   （自己的 fork）
+-upstream  https://github.com/rime/weasel.git      （官方）
++origin        https://github.com/mianxiu/weasel-ui-patch.git  （独立仓库，主线 main）
++upstream      https://github.com/rime/weasel.git              （官方）
++fork-backup   https://github.com/mianxiu/weasel.git           （早期 fork，留作备份）
+ ```
+ 
+-`master` 跟踪 `upstream/master`；`feature/rewrite-ui` 跟踪
+-`origin/feature/rewrite-ui`，已 push 到 fork（远端 SHA 与本地一致：
+-`d356b4790a14d37be492e41bd4d4cc0a432e351e`），领先 `upstream/master` 9 个提交。
++分支对应：
++
++| 本地 | 远端 | 说明 |
++|---|---|---|
++| `main` | `origin/main` | 主线，15 个提交在 `upstream/master` 之上 |
++| `master` | `upstream/master` | 上游镜像（本地便利分支，不推） |
++| — | `origin/upstream-master` | 推到远端的上游镜像，**专门用于 GitHub 的 compare 视图** |
++
++`origin/upstream-master` 与 `main` 同仓库，所以
++`github.com/mianxiu/weasel-ui-patch/compare/upstream-master...main`
++就能看到"我相对上游改了什么"，和 fork 时期的对比视图等价。
+ 
+-注意 `git remote rename origin upstream` 会把 `refs/remotes/origin/*`
++【历史】§0.1／§0.3 要求的 Fork 与 remote 配置曾在 2026-09-28 20:40 补做
++（`origin`＝fork、`upstream`＝官方）；由于确定不会向上游提 PR，fork 相对于
++独立仓库已无独有优势，当日 21:22 迁出到独立仓库。
++
++【踩坑】`git remote rename origin upstream` 会把 `refs/remotes/origin/*`
+ 整体搬到 `refs/remotes/upstream/*`，`branch.master.remote` 也会自动跟着改，
+-搬家后要重新 `git fetch origin` 才有新的 `origin/master`。
++搬家后必须重新 `git fetch` 才有新的 remote-tracking ref。
++
++【踩坑】迁到新仓库时，如果新仓库是"带 README 初始化"建的，会有一个
++自动生成的 `main`（Initial commit）。我们的做法是 force-push 覆盖它：
++`git push --force origin <你的分支>:main`，这样默认分支无需改动就是正确的。
+ 
+ ### 0.8 每一步单独提交
+ 
+@@ -1147,7 +1173,7 @@ update
+ 
+ ### 12.1 实际改动文件【已完成】
+ 
+-基线 `d73f6295`，全部改动在 `feature/rewrite-ui` 分支，共 7 个提交（§0.8.1）：
++基线 `d73f6295`，全部改动在 `main` 分支，共 7 个代码提交（§0.8.1）：
+ 
+ | 文件 | 作用 |
+ |---|---|
+@@ -1924,7 +1950,7 @@ git status
+ git fetch upstream
+ 
+ # 2. 个人分支建议 rebase，历史比 merge 干净
+-git checkout feature/rewrite-ui
++git checkout main
+ git rebase upstream/master
+ 
+ # 3. 解决冲突（热点见 §25.3），确认结果
+diff --git a/rime/README.md b/rime/README.md
+index 5cd0419..a90053d 100644
+--- a/rime/README.md
++++ b/rime/README.md
+@@ -35,7 +35,7 @@ pwsh -NoProfile -File .\install-rime-files.ps1 -Apply
+ 
+ ## 换机器恢复顺序
+ 
+-1. `git clone` 本仓库（`feature/rewrite-ui` 分支，`--recursive` 取子模块）
++1. `git clone` 本仓库（主线 `main`，加 `--recursive` 取子模块）
+ 2. 装好小狼毫、万象 Pro，准备好词库
+ 3. 在仓库根运行 `rime\install-rime-files.ps1 -Apply`
+ 4. 编译并安装补丁程序：`build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd`
+-- 
+2.53.0.windows.2
+

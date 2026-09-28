@@ -1,0 +1,1924 @@
+From f57c89cb78cc3ca021e18695218592af61517932 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:44:21 +0800
+Subject: [PATCH 11/18] docs: track agent.md in the repository and record
+ personal-use scope
+
+---
+ REWRITE-UI.md |   12 +-
+ agent.md      | 1880 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 1889 insertions(+), 3 deletions(-)
+ create mode 100644 agent.md
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 53861b3..ddec29a 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -166,9 +166,15 @@ upstream  https://github.com/rime/weasel.git      （官方）
+ ```
+ 
+ `feature/rewrite-ui` 已 push 到 fork，跟踪 `origin/feature/rewrite-ui`，
+-远端 SHA 与本地一致（`d356b4790a14d37be492e41bd4d4cc0a432e351e`），
+-领先 `upstream/master` 9 个提交。同步上游用 `git fetch upstream` 后
+-rebase 或 merge 到 `feature/rewrite-ui`。
++远端 SHA 与本地一致，领先 `upstream/master` 10 个提交。同步上游用
++`git fetch upstream` 后 rebase 或 merge 到 `feature/rewrite-ui`。
++
++**本包是个人自用，不向上游 `rime/weasel` 提 PR。** 这个分支混着软件渲染改动
++（issue #1913）、安装脚本 trace 和个人偏好，不适合整体提交上游；将来若要贡献
++某一部分，应另开干净分支单独整理。
++
++`agent.md`（本项目的完整开发记录与约定）也已纳入版本控制，位于仓库根目录，
++随本分支一起提交。
+ 
+ ## 已知遗留
+ 
+diff --git a/agent.md b/agent.md
+new file mode 100644
+index 0000000..132a92f
+--- /dev/null
++++ b/agent.md
+@@ -0,0 +1,1880 @@
++# Agent Guide — 小狼毫 / 万象 Pro 快速重写与 Rewrite UI
++
++> **状态（2026-09-28）：本项目已完成并通过真机验收。**
++>
++> 本文档同时是开发记录：§0–§24 保留原始设计、约定与踩坑记录，凡是已经落地、
++> 已被推翻或已变成遗留项的地方，都在小节内用 `【已完成】`／`【已推翻】`／
++> `【待办】` 标注。**当前实际状态、构建基线与验收结论以 `weasel/REWRITE-UI.md`
++> 为准**，不要把本文档中未标注的早期设想当成现状。
++>
++> 仍在维护的只有三处：
++>
++> ```text
++> 1. indexed_rewrite_pro.lua      %APPDATA%\Rime\lua\（核心编辑算法，唯一被加载）
++> 2. weasel/ 仓库 feature/rewrite-ui 分支（Weasel 侧 Rewrite UI 补丁）
++> 3. weasel/dist/Weasel-Rewrite-UI.zip（补丁包，由 package-rewrite.ps1 生成）
++> ```
++>
++> **用途：个人自用，不提上游 PR。** `feature/rewrite-ui` 长期留在自己的
++> fork（`mianxiu/weasel`）上；同步官方用 `upstream` remote。将来若要把某部分
++> 改动贡献给上游，再从干净分支单独整理，**不要直接拿这个分支开 PR**——
++> 它混着软件渲染改动、安装脚本 trace 和个人偏好配置。
++
++## 0. 仓库准备与开发流程
++
++本项目建议基于官方小狼毫 Weasel 仓库做长期维护，不建议直接在官方源码临时修改。
++
++### 0.1 先 Fork【已完成】
++
++官方仓库：
++
++```text
++https://github.com/rime/weasel
++```
++
++建议先在 GitHub 上 Fork 到自己的账号。
++
++目的：
++
++- 保存 Rewrite UI 的长期修改
++- 方便本地 Codex 持续开发
++- 能和官方上游比较差异
++- 方便回滚
++- 方便后续同步官方更新
++- 避免所有修改只存在本地
++
++### 0.2 克隆自己的 Fork
++
++Weasel 使用 submodule，必须递归克隆：
++
++```bash
++git clone --recursive https://github.com/<YOUR_GITHUB_USERNAME>/weasel.git
++cd weasel
++```
++
++如果已经普通 clone 但没有 submodule：
++
++```bash
++git submodule update --init --recursive
++```
++
++### 0.3 添加官方 upstream【已完成】
++
++自己的 Fork 作为：
++
++```text
++origin
++```
++
++官方仓库作为：
++
++```text
++upstream
++```
++
++执行：
++
++```bash
++git remote add upstream https://github.com/rime/weasel.git
++git remote -v
++```
++
++预期：
++
++```text
++origin    https://github.com/<YOUR_GITHUB_USERNAME>/weasel.git
++upstream  https://github.com/rime/weasel.git
++```
++
++### 0.4 不要直接在主分支开发
++
++创建独立功能分支：
++
++```bash
++git checkout -b feature/rewrite-ui
++```
++
++后续所有 Rewrite UI 改动都在：
++
++```text
++feature/rewrite-ui
++```
++
++上进行。
++
++不要直接在：
++
++```text
++master
++main
++```
++
++上修改。
++
++### 0.5 把本文件放到仓库根目录【已完成】
++
++最终结构类似：
++
++```text
++weasel/
++├─ agent.md
++├─ RimeWithWeasel/
++├─ WeaselUI/
++├─ WeaselServer/
++├─ output/
++├─ librime/
++└─ ...
++```
++
++Codex 开始工作前必须先读：
++
++```text
++agent.md
++```
++
++【已完成】已于 2026-09-28 复制到 `weasel/agent.md` 并纳入版本控制，
++随 `feature/rewrite-ui` 一起 push 到 fork。
++
++【注意份数】工作目录根部（`小狼毫万象补丁\agent.md`）仍留有一份内容相同的
++副本，它不是版本控制的一部分。**以后只改仓库里的 `weasel/agent.md`**，
++或者把根目录那份删掉，避免两份内容不一致。改动后用
++`Get-FileHash` 比对两者即可确认是否已经分叉。
++
++### 0.6 第一轮只做源码调查【已完成】
++
++> 这一轮已经在 2026-09-27～28 完成：源码调查、改造定位、实现与真机验收都已结束，
++> 结论见 §12（实际改造位置）与 §8（实际架构）。下面的建议对**后续接手的人**依然适用：
++> 先定位本地真实源码，再动手。
++
++第一轮任务只做源码调查。
++
++建议给 Codex 的第一条任务：
++
++```text
++Read agent.md completely first.
++
++Inspect the current local Weasel source and identify the exact implementation path for Rewrite UI.
++
++Find and report:
++
++1. How librime property notifications reach Weasel.
++2. Which files/classes/functions in RimeWithWeasel receive session/context/property updates.
++3. How WeaselUI stores preedit text and text attributes.
++4. Where WeaselPanel measures and paints preedit/highlight backgrounds.
++5. Where a RewriteState model should live.
++6. The minimum set of source files that need modification.
++
++Do not modify code yet.
++
++Do not guess APIs from memory or from old Weasel versions.
++Use the current local checkout as the source of truth.
++```
++
++目的：
++
++```text
++先定位真实源码
++→ 再设计
++→ 再修改
++```
++
++不要一开始让 Codex 大范围重写 Weasel。
++
++### 0.7 版本基线
++
++开始修改前记录当前版本：
++
++```bash
++git status
++git branch --show-current
++git rev-parse HEAD
++git submodule status
++```
++
++把 commit SHA 记在开发记录里。
++
++如果用户当前安装的小狼毫版本和仓库 master 差异较大，应优先确认：
++
++```text
++当前本机 Weasel 版本
++对应 Git tag / commit
++```
++
++再决定基于：
++
++```text
++当前稳定 tag
++```
++
++还是：
++
++```text
++最新 upstream 分支
++```
++
++开发。
++
++不要在不知道版本基线的情况下直接修改源码。
++
++### 0.7.1 本项目的实际基线【已完成】
++
++```text
++仓库        https://github.com/rime/weasel （origin 直接指向官方，尚未 Fork）
++分支        feature/rewrite-ui
++基线 commit d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
++librime     git 子模块 1c23358157934bd6e6d6981f0c0164f05393b497（1.13.1）
++实际链接    官方 librime 1.17.0 33e7814（含 librime-lua ec52e48）
++Boost       1.84.0（静态库）
++工具链      MSVC v143 14.44.35207 / Windows SDK 10.0
++文件版本    0.17.4.1（未做发行代码签名）
++```
++
++【已完成】§0.1／§0.3 要求的 Fork 与 remote 配置已于 2026-09-28 补做：
++
++```text
++origin    https://github.com/mianxiu/weasel.git   （自己的 fork）
++upstream  https://github.com/rime/weasel.git      （官方）
++```
++
++`master` 跟踪 `upstream/master`；`feature/rewrite-ui` 跟踪
++`origin/feature/rewrite-ui`，已 push 到 fork（远端 SHA 与本地一致：
++`d356b4790a14d37be492e41bd4d4cc0a432e351e`），领先 `upstream/master` 9 个提交。
++
++注意 `git remote rename origin upstream` 会把 `refs/remotes/origin/*`
++整体搬到 `refs/remotes/upstream/*`，`branch.master.remote` 也会自动跟着改，
++搬家后要重新 `git fetch origin` 才有新的 `origin/master`。
++
++### 0.8 每一步单独提交
++
++建议提交粒度：
++
++```text
++1. chore: establish rewrite ui debug logging
++2. feat: receive rewrite property updates
++3. feat: add RewriteState model
++4. feat: render rewrite syllable layout
++5. feat: add active syllable highlight
++6. feat: add superscript index badge
++7. feat: expose rewrite ui style config
++```
++
++不要把所有功能一次塞进一个巨大 commit。
++
++这样方便：
++
++- 回滚
++- bisect
++- 定位 UI 回归
++- 对比 upstream
++- 让 Codex继续维护
++
++### 0.8.1 实际提交记录【已完成】
++
++```text
++28e627e perf(WeaselUI): use software Direct2D render target for panel
++18942af feat(rewrite-ui): bridge indexed rewrite properties through IPC context
++d052fb4 feat(rewrite-ui): draw syllable cells, active highlight and index badge
++4d9e211 fix(WeaselSetup): trim command-line whitespace and add opt-in setup tracing
++fd33dc1 test(rewrite-ui): add state, IPC pipeline and librime property tests
++44e2972 chore(build): add rewrite build, package, activation and patch scripts
++1e2fd4e docs(rewrite-ui): document the rewrite UI patch and example config
++```
++
++说明两点：
++
++- `4d9e211` 把两件事合在一起，因为它们在 `Run()` 里落在同一代码块、无法干净拆分：
++  命令行首尾空白归一（修掉"参数尾部空格导致 `/s` 未识别、进了隐藏交互窗口"那个 bug）
++  和 `WEASEL_SETUP_LOG` 门控的 trace。trace 在不设该环境变量时零开销。
++- `test/activation-fixture/` **没有提交**：那是真实 `weasel.custom.yaml` 的副本
++  加两份运行备份，不是手写夹具，也没有脚本引用它，已加入 `.gitignore`。
++
++---
++
++
++## 1. 项目目标【已完成】
++
++这是一个针对 Windows 小狼毫 Weasel + 万象 Pro + 小鹤双拼的定制项目。
++
++目标是实现一种“未上屏编码快速重写”能力，并最终把编辑状态做成真正的 Weasel 原生 UI，而不是靠 Unicode 符号模拟。
++
++**结果：两个目标都已达成。** 编辑算法由 `indexed_rewrite_pro.lua` 负责，
++编辑状态的显示改由魔改后的 Weasel 原生绘制（圆角背景高亮 + 上标音节编号 +
++独立索引 badge），不再依赖任何 Unicode 符号模拟，也不再需要 Lua UI filter。
++
++当前核心操作模型：
++
++- `Tab + 字母`：从头覆盖当前未上屏编码。
++- `Tab + 数字 + 字母`：指定第 N 个音节并替换该音节。
++- `BackSpace`：撤销本次 replacement 或索引输入。
++- `Esc`：恢复进入编辑模式前的原始编码。
++- `Space / Enter / 标点`：保留当前修改并退出编辑模式，然后让 Rime 正常处理该键。
++
++示例：
++
++```text
++jxjirz
++Tab
++jm
++=> jmjirz
++```
++
++指定音节：
++
++```text
++jxjirzbj
++Tab
++3
++jm
++=> 第 3 音节替换为 jm
++```
++
++## 2. 用户环境
++
++- Windows
++- 小狼毫 Weasel
++- 万象 Pro
++- 小鹤双拼
++- `wanxiang_algebra:/pro/直接辅助`
++- Rime 用户目录通常为：
++
++```text
++%APPDATA%\Rime\
++```
++
++核心 schema 自定义文件：
++
++```text
++%APPDATA%\Rime\wanxiang_pro.custom.yaml
++```
++
++Lua 目录：
++
++```text
++%APPDATA%\Rime\lua\
++```
++
++## 3. 非常重要的用户偏好
++
++不要频繁更改文件名。
++
++以后更新同一个功能文件时：
++
++- 保持 `indexed_rewrite_pro.lua`
++- 直接替换内容
++- 不要再创建：
++  - `v2`
++  - `sync`
++  - `bridge`
++  - `final`
++  - `new`
++  - 等不同后缀版本
++
++除非确实是独立模块。
++
++用户希望最终维护的核心 Lua 尽量只有：
++
++```text
++indexed_rewrite_pro.lua
++```
++
++如果 Weasel 原生 UI 完成，则现有 UI filter 最好可以删除。
++
++## 4. 当前已经验证成功的部分
++
++### 4.1 快速重写核心逻辑已经成功
++
++最早稳定版本的 `indexed_rewrite_pro.lua` 已经验证：
++
++```text
++// + 字母
++```
++
++可以从头覆盖，例如：
++
++```text
++jxjirz//jm
++=> jmjirz
++```
++
++以及：
++
++```text
++// + 数字 + 字母
++```
++
++可以按音节索引替换，例如：
++
++```text
++jxjirzbj//3jm
++=> 第 3 音节替换为 jm
++```
++
++核心状态 property：
++
++```text
++_indexed_rewrite_stage
++_indexed_rewrite_original
++_indexed_rewrite_index
++_indexed_rewrite_ranges
++_indexed_rewrite_replacement
++```
++
++stage 包括：
++
++```text
++armed
++index
++head_replace
++index_replace
++```
++
++### 4.2 Tab 触发已经成功
++
++直接让 Lua 捕获物理 Tab 的方案不稳定。
++
++最终成功方案是：
++
++```text
++物理 Tab
++↓
++Rime key_binder send_sequence: "//"
++↓
++原本已经稳定的 indexed_rewrite_pro.lua
++```
++
++当前推荐 YAML：
++
++```yaml
++patch:
++  engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
++
++  key_binder/bindings/+:
++    - { when: has_menu, accept: "Tab", send_sequence: "//" }
++    - { when: composing, accept: "Tab", send_sequence: "//" }
++
++  speller/algebra:
++    __patch:
++      - wanxiang_algebra:/pro/小鹤双拼
++      - wanxiang_algebra:/pro/直接辅助
++
++  menu/page_size: 6
++```
++
++注意：
++
++`bindings/+` 在当前实际部署中已经验证可以让 Tab 走 `send_sequence: "//"`。
++
++不要重新折腾 F18 桥接，除非有新的强理由。
++
++### 4.3 当前 Tab 的行为
++
++Tab 已经可以进入编辑模式。
++
++即：
++
++```text
++jxjirz
++Tab
++```
++
++等价于原来的：
++
++```text
++jxjirz//
++```
++
++用户已经确认这一点成功。
++
++## 5. UI 状态【已解决】
++
++> 本节保留问题的原始描述，因为它是整个项目的起因；结论已经改成现状。
++
++过去使用 Lua filter 修改 candidate preedit，显示类似：
++
++```text
++▸ jx¹   › ji²   › rz³   › bj⁴
++```
++
++其中：
++
++- `›` = 普通音节
++- `▸` = 当前目标音节
++- `¹²³⁴` = 音节编号
++
++目标是：
++
++```text
++Tab
++=> ▸ jx¹   › ji²   › rz³   › bj⁴
++```
++
++然后按：
++
++```text
++3
++```
++
++理想 UI 应立即变成：
++
++```text
++› jx¹   › ji²   ▸ rz³   › bj⁴
++```
++
++但当时的问题是：
++
++**索引 property 已经变了，但 UI 不会立即刷新。**
++
++因为输入数字 `3` 只是被 processor 吃掉并写入：
++
++```text
++_indexed_rewrite_index=3
++```
++
++`context.input` 本身没有变化，因此 translation / filter / Weasel preedit 不一定重新计算。
++
++### 5.1 现在怎么解决的【已完成】
++
++这个问题已在 2026-09-28 解决，方案是**魔改 Weasel 侧**，而不是继续在 Lua 里
++制造刷新（§6 列的纯 Lua 路线全部无效）：
++
++- Weasel 每次按键处理结束后主动用 `get_property` 读这五个 property，
++  构造独立的 `RewriteState`，并原生绘制。
++- `Context::operator==` 把 rewrite 状态计入比较，所以 `preedit` 与 raw input
++  都不变时，UI 依然判定为“变了”并重绘。
++- 真机日志已证明：`_indexed_rewrite_index` 单独变化时通知照常发出、UI 照常更新
++  （证据见 §15 与 §17.1）。
++
++因此**旧 Lua UI filter 已从 schema 移除**：`indexed_rewrite_tab_ui_v2` 不再被加载，
++`%APPDATA%\Rime\lua\` 下那个文件可以删除（见 §21【待办】）。
++
++## 6. 已经验证失败或不可靠的路线
++
++这些路线不要重复尝试，除非先证明当前新版 librime / Weasel 行为已变化。
++
++> 【已完成】这些坑已经被绕开：最终方案完全不依赖下面任何一条，
++> 而是由 Weasel 侧读取 property 后自己重绘（§8）。§6.3 还留了一个遗留项。
++
++【已推翻】其中 §6.1 的结论是"**不要再在当前 processor 按键路径里调用它做 UI 刷新**"——
++这条仍然成立，但要注意它的下半句：现在刷新根本不由 Lua 负责，
++所以 Lua 里那段为刷新而写的代码已经没有必要。
++
++### 6.1 `refresh_non_confirmed_composition()`
++
++曾在 processor 内加入：
++
++```lua
++ctx:refresh_non_confirmed_composition()
++```
++
++结果：
++
++- 破坏输入状态
++- 用户出现“无法打字”
++
++结论：
++
++**不要再在当前 processor 按键路径里调用它做 UI 刷新。**
++
++### 6.2 caret 原地写回
++
++尝试：
++
++```lua
++local p = ctx.caret_pos
++ctx.caret_pos = p
++```
++
++希望触发 update。
++
++实际：
++
++- 没有让 UI 指示器刷新
++
++结论：
++
++当前环境下无效。
++
++### 6.3 `env.engine:compose(ctx)`
++
++尝试在数字索引变化时调用：
++
++```lua
++env.engine:compose(ctx)
++```
++
++实际：
++
++- 仍然没有让目标 UI 指示器移动
++
++结论：
++
++当前环境下不能解决 property-only UI 刷新。
++
++【待办】`indexed_rewrite_pro.lua` 里的 `sync_ui()` 至今仍包着 `pcall` 调用它
++（§21 说的"核心 Lua 不再改动"）。现在重绘完全由 Weasel 负责，这个调用是多余的；
++它不修改 `context.input`，实测也没有造成回归，属于 §19 Phase 7 的清理项。
++
++### 6.4 Lua 手工修改 composition 来制造原生 selection
++
++尝试通过 Lua 临时修改 composition segment，希望控制：
++
++```text
++preedit.sel_start
++preedit.sel_end
++```
++
++并让 Weasel 原生 `hilited_back_color` 局部填色。
++
++实际：
++
++- 不稳定
++- UI 没有正确刷新
++- 一度导致整个编辑功能失效
++
++结论：
++
++不要继续用 Lua 手工 surgery composition。
++
++### 6.5 通过 caret 改位置间接制造 Weasel selection
++
++也尝试过。
++
++实际：
++
++- 没有产生预期的局部背景高亮
++
++结论：
++
++不要继续。
++
++### 6.6 直接 Lua 捕获 Tab
++
++尝试 processor 直接判断：
++
++```lua
++key:repr() == "Tab"
++```
++
++以及 keycode / KeyEvent。
++
++实际部署不稳定。
++
++结论：
++
++保留当前已成功的：
++
++```yaml
++Tab -> send_sequence: "//"
++```
++
++### 6.7 F18 bridge
++
++曾尝试：
++
++```text
++Tab -> F18 -> Lua
++```
++
++涉及 key_binder 顺序、bindings 合并和 Pro schema 差异，变得很复杂。
++
++最终没有必要，因为 `send_sequence: "//"` 已成功。
++
++不要重新引入 F18，除非确有必要。
++
++## 7. 为什么最终选择魔改 Weasel【已完成】
++
++核心问题已经不是编辑算法。
++
++编辑算法已经成功。
++
++真正缺的是：
++
++> 当 `_indexed_rewrite_index`、`_indexed_rewrite_stage`、`_indexed_rewrite_replacement` 等 property 改变，但 `context.input` 不变时，Weasel 能立即获知并重绘自定义 Rewrite UI。
++
++纯 Lua filter 无法可靠做到这一点。
++
++所以最终设计应该是：
++
++```text
++Lua / Rime
++负责编辑状态与字符串替换
++
++Weasel
++负责编辑状态 UI
++```
++
++不要把 replacement 算法搬进 Weasel。
++
++【已完成】这条边界被严格遵守：Weasel 侧没有一行拼音解析、`replace_range`、
++小鹤双拼解析或 Esc 恢复逻辑，全部仍在 `indexed_rewrite_pro.lua` 里。
++Weasel 只做「收状态 → 布局 → 绘制」。
++
++## 8. 最终架构【已实现】
++
++实际实现与下面这份设计一致：
++
++```text
++Tab
++↓
++key_binder send_sequence: "//"
++↓
++indexed_rewrite_pro.lua
++↓
++更新：
++  _indexed_rewrite_stage
++  _indexed_rewrite_original
++  _indexed_rewrite_index
++  _indexed_rewrite_ranges
++  _indexed_rewrite_replacement
++↓
++Rime property notification
++↓
++修改版 Weasel
++↓
++Rewrite UI 状态更新
++↓
++立即重绘
++```
++
++Weasel 需要监听 / 获取这些 property，并维护独立的 Rewrite UI model。
++
++### 8.1 实际数据流【已完成】
++
++```text
++Lua processor 写 _indexed_rewrite_*
++        ↓
++RimeWithWeaselHandler::OnNotify
++        认出 _indexed_rewrite_* 前缀后立即 return：不污染通用通知状态，
++        按需写调试日志，不在这里取快照
++        ↓
++按键处理结束后 RimeWithWeaselHandler::_Respond
++        用 get_property 读 5 个属性 + get_input，追加 ctx.rewrite.* 到 IPC 响应
++        ↓
++ContextUpdater::Store            写入 Context::rewrite（6 个 key）
++        ↓
++Context::operator==              把 rewrite 计入比较
++                                 → preedit 不变也会判定为“变了”，触发 UI 更新
++        ↓
++Layout / StandardLayout::IsInlinePreedit()
++                                 有 rewrite 时让出原生 inline preedit 路径
++        ↓
++MeasureRewrite + WeaselPanel::_DrawRewrite
++                                 画音节、active 圆角背景、上标编号、index badge
++```
++
++两个关键决定：
++
++1. **通知只用来触发，值一律重新读。** property 通知确实带值（§20.1 已验证），
++   但实现**没有依赖通知体**：`_Respond` 在按键结束时用 `get_property` 取一次
++   完整快照。这样即使一个按键里 processor 连续写了多个属性，也只会取到最后一致的状态。
++2. **不改 `context.input`，不清空 composition。** §18 的红线全部守住。
++
++### 8.2 没有采用的方案
++
++- 没有把 replacement 算法搬进 Weasel（§13 的边界仍然成立）
++- 没有往 `preedit` 塞隐藏字符或用 Unicode 符号模拟
++- 没有为了刷新去改 `context.input` 或调用 `refresh_non_confirmed_composition()`
++- 没有引入 F18 之类的按键桥接（§6.6、§6.7）
++
++## 9. 最终 UI 需求【已实现】
++
++> 9.1–9.6 全部落地；9.7（编辑模式轻标识）按原计划未做，属可选项。
++> 各项的验收结果见 §17.1。
++
++### 9.1 音节显示
++
++进入编辑模式后，将 raw code 按 ranges 分段：
++
++例如：
++
++```text
++jxjirzbj
++```
++
++ranges：
++
++```text
++0-2,2-4,4-6,6-8
++```
++
++UI：
++
++```text
++jx¹   ji²   rz³   bj⁴
++```
++
++音节编号为上标：
++
++```text
++¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹
++```
++
++支持多位编号时：
++
++```text
++¹⁰
++¹¹
++¹²
++```
++
++### 9.2 当前目标音节
++
++当前编辑音节必须有真正的背景色。
++
++例如按：
++
++```text
++Tab
++```
++
++默认 target=1：
++
++```text
++[jx¹]   ji²   rz³   bj⁴
++```
++
++方括号只是说明效果，实际不要显示括号。
++
++应使用真正的：
++
++- 背景填色
++- 圆角
++- padding
++- 文本颜色
++
++按：
++
++```text
++3
++```
++
++立即变成：
++
++```text
++jx¹   ji²   [rz³]   bj⁴
++```
++
++### 9.3 replacement 实时显示
++
++继续输入：
++
++```text
++jm
++```
++
++显示：
++
++```text
++jx¹   ji²   [jm³]   bj⁴
++```
++
++UI 中目标音节内容应使用当前 replacement。
++
++### 9.4 “选择数字 badge”
++
++这是新增的重要需求。
++
++用户在编辑模式里输入的选择数字，例如：
++
++```text
++3
++```
++
++目前数字被 processor 吃掉，所以正常 preedit 里看不到。
++
++最终 Weasel UI 需要在音节列表后方额外显示一个独立 badge：
++
++```text
++jx¹   ji²   [rz³]   bj⁴    ³
++```
++
++最后的：
++
++```text
++³
++```
++
++是一个：
++
++- 上标数字
++- 独立圆角背景色
++- 比 active syllable 背景更弱
++- 用来反馈“用户当前选择的是第 3 音节”
++
++它不是拼音输入内容。
++
++不要写入：
++
++```text
++context.input
++```
++
++而是从：
++
++```text
++_indexed_rewrite_index
++```
++
++派生 UI。
++
++### 9.5 多位索引 badge
++
++如果未来支持：
++
++```text
++Tab 12
++```
++
++显示：
++
++```text
++¹²
++```
++
++即：
++
++```text
++...    ¹²
++```
++
++作为一个 badge。
++
++Backspace 时：
++
++```text
++¹²
++↓
++¹
++↓
++消失
++```
++
++### 9.6 badge 保留策略
++
++进入 replacement 后继续保留：
++
++```text
++jx¹   ji²   [jm³]   bj⁴    ³
++```
++
++直到：
++
++- Esc
++- Space
++- Enter
++- 标点
++- 其他退出编辑模式的操作
++
++### 9.7 编辑模式标识（可选）
++
++可以增加非常轻的小标识，例如：
++
++```text
++改
++```
++
++或一个图标。
++
++但不是第一优先级。
++
++第一优先级：
++
++1. 音节编号
++2. active syllable 真背景高亮
++3. index badge
++4. property 更新立即刷新
++
++## 10. UI 风格要求
++
++> 【已完成】最终实现是原生绘制：`WeaselPanel::_DrawRewrite()` 用
++> `_HighlightText()` 画真正的圆角背景，用 `DirectWrite` 的 preedit 文本格式画字。
++> 下面这些符号模拟方案**一个都没有进入最终实现**，只在早期调试中出现过。
++
++不要使用这些作为最终方案：
++
++```text
++【rz】
++r̲z̲
++▸ rz
++● rz
++```
++
++这些可以作为调试 fallback，但最终希望是真正原生绘制。
++
++推荐视觉：
++
++普通音节：
++
++- 无背景
++- 正常文字色
++- 编号弱化
++
++当前音节：
++
++- 浅色背景
++- 圆角
++- 适度 horizontal padding
++- 文字颜色可独立设置
++
++index badge：
++
++- 更小
++- 中性 / 弱背景
++- 上标数字
++- 圆角
++- 不抢 active syllable 焦点
++
++## 11. Weasel 样式配置目标【部分实现】
++
++> 实际只实现了两个开关：`rewrite_ui/enabled` 与 `rewrite_ui/debug`。
++> 颜色、圆角、padding、间距全部**复用当前主题**，没有新增 `rewrite_ui/*` 颜色键。
++> 下面那份"理想新增配置"是尚未实现的后续可选扩展。
++
++最好不要把颜色写死在 C++。
++
++希望可以在：
++
++```text
++weasel.custom.yaml
++```
++
++或现有 style/color scheme 机制中配置。
++
++理想新增配置：
++
++```yaml
++rewrite_ui:
++  enabled: true
++
++  show_syllable_index: true
++
++  active_back_color: 0x...
++  active_text_color: 0x...
++  active_corner_radius: 5
++  active_padding_x: 5
++  active_padding_y: 2
++
++  badge_back_color: 0x...
++  badge_text_color: 0x...
++  badge_corner_radius: 4
++  badge_padding_x: 4
++  badge_padding_y: 1
++
++  syllable_spacing: 8
++  badge_spacing: 8
++```
++
++实现时应尽量复用 Weasel 现有：
++
++```text
++hilited_back_color
++hilited_text_color
++corner_radius
++hilite_padding
++```
++
++如果新建配置成本较高，第一版可以直接复用现有高亮主题参数。
++
++### 11.1 实际配置面【已完成】
++
++```yaml
++patch:
++  rewrite_ui/enabled: true    # 总开关，默认关闭；false 时行为与上游完全一致
++  rewrite_ui/debug: false     # 只控制调试日志，排查完必须改回 false
++```
++
++取值来源（全部来自现有主题，未新增键）：
++
++| UI 元素 | 取值 |
++|---|---|
++| active 音节背景 | `hilited_back_color` |
++| active 音节文字 | `hilited_text_color` |
++| 普通音节文字 | `text_color` |
++| 圆角 | `round_corner`（经 DPI 缩放） |
++| 内边距 | `hilite_padding_x` / `hilite_padding_y`（最小 1） |
++| 音节间距 | `hilite_spacing`（最小 2） |
++| index badge 背景 | active 背景的 **1/3 透明度**，其余通道不变 |
++
++打包时随附的 `weasel/rewrite-ui.custom.example.yaml` 就是这份配置的示例。
++
++> **【重要】改这些键必须重新部署。** 服务端读的是部署产物
++> `%APPDATA%\Rime\build\weasel.yaml`：
++>
++> ```text
++> %APPDATA%\Rime\weasel.yaml        ← 发行版安装的默认副本，没有 rewrite_ui/*（会误导人）
++> %APPDATA%\Rime\weasel.custom.yaml ← 你写的 patch，尚未编译
++> %APPDATA%\Rime\build\weasel.yaml  ← 服务端实际读的编译产物（有 rewrite_ui/*）
++> ```
++>
++> 所以顺序是：改 `weasel.custom.yaml` → `WeaselDeployer.exe /deploy`
++> → 重启 `WeaselServer.exe`（`Initialize()` 只在服务启动时读一次配置）。
++>
++> 2026-09-28 实测踩过这个坑：custom 里已经改成 `debug: false`，但
++> `build\weasel.yaml` 里还是 `true`，重启服务后日志继续增长；
++> 部署之后才变成 `false`。
++
++## 12. 实际改造位置【已完成】
++
++不要假设旧版本路径完全一致。本节原来是"先搜索这些关键词"的待办清单，
++现在已经执行完毕，改为记录实际改造位置。
++
++原始搜索清单（已执行）：
++
++```text
++RimeWithWeasel
++WeaselPanel
++TextAttribute
++HIGHLIGHTED
++hilited_back_color
++hilited_text_color
++composition
++notification
++property
++update
++```
++
++### 12.1 实际改动文件【已完成】
++
++基线 `d73f6295`，全部改动在 `feature/rewrite-ui` 分支，共 7 个提交（§0.8.1）：
++
++| 文件 | 作用 |
++|---|---|
++| `include/RewriteState.h`（新增） | RewriteState 模型：校验并解析 `ranges`/`index`，产出带 `active`/`badge` 标记的 Unit 列表与上标数字 |
++| `include/WeaselIPCData.h` | `Context` 增加 `rewrite` 成员；`empty()`/`operator==`/`operator!` 计入 rewrite；新增 `HasPanelPreedit()` |
++| `WeaselIPC/ContextUpdater.cpp` | 解析 `ctx.rewrite.*` 六个 key 写入 `Context::rewrite` |
++| `include/RimeWithWeasel.h` | 新增 `m_rewrite_enabled` / `m_rewrite_debug` |
++| `RimeWithWeasel/RimeWithWeasel.cpp` | `Initialize()` 读两个开关；`OnNotify` 过滤并记录 rewrite 属性；`_Respond` 读取 property 并下发 `ctx.rewrite.*` |
++| `WeaselUI/RewriteLayout.h`（新增） | `MeasureRewrite()`：把 RewriteState 量成 cells，含换行与 DPI 缩放 |
++| `WeaselUI/WeaselPanel.cpp` / `.h` | `_DrawRewrite()` 绘制；preedit 分支改用 `HasPanelPreedit()` |
++| `WeaselUI/Layout.cpp` | rewrite 生效时把**布局副本**的 `inline_preedit` 关掉（不影响 TSF 行内组合） |
++| `WeaselUI/StandardLayout.cpp` | `GetPreeditSize()` 走 `MeasureRewrite`；`IsInlinePreedit()` 返回 false |
++| `WeaselUI/{Horizontal,Vertical,VHorizontal}Layout.cpp` | 用 `HasPanelPreedit()` 取代 `!preedit.str.empty()` |
++| `WeaselUI/DirectWriteResources.cpp` | D2D render target 改 `SOFTWARE`（rime/weasel#1913，与 Rewrite UI 无关的独立改动） |
++| `WeaselSetup/*`、`test/*` | 命令行空白修复与 trace；三个测试程序与夹具 |
++
++### 12.2 调查阶段六个问题的答案【已完成】
++
++1. **property 通知如何到达 Weasel** —— `RimeWithWeaselHandler::OnNotify`，
++   `message_type == "property"`，`message_value` 是 `名称=值`（§20.1 已验证）。
++2. **哪些函数接收 session/context/property 更新** —— `OnNotify` 与 `_Respond`，
++   都在 `RimeWithWeasel/RimeWithWeasel.cpp`。
++3. **WeaselUI 如何存 preedit 与 text attributes** —— `weasel::Text` 加
++   `std::vector<TextAttribute>`（`include/WeaselIPCData.h`）。Rewrite UI
++   **没有复用这套结构**，而是用独立的 `RewriteState`，避免污染正常 preedit。
++4. **WeaselPanel 在哪测量/绘制 preedit 与高亮背景** ——
++   `StandardLayout::GetPreeditSize()`、`WeaselPanel::_DrawPreedit()`、
++   `_DrawPreeditBack()`、`_HighlightText()`。
++5. **RewriteState 应该放哪** —— `include/RewriteState.h`，由 `Context` 内嵌持有。
++6. **最少需要改哪些文件** —— 桥接层 5 个文件加 1 个新头文件；UI 绘制另计，
++   见 §12.1 的表。
++
++原先"优先考虑"的路线（桥接层收 property → Context 增加 rewrite state →
++Panel 独立布局/绘制）**就是最终采用的方案**；"往 preedit 塞隐藏字符"没有被采用。
++
++## 13. Lua 与 Weasel 的职责边界【已遵守】
++
++> 最终实现严格落在这条边界内：Weasel 侧没有任何拼音/双拼/替换算法，
++> Lua 侧也不负责任何绘制。核对结论见 §7 末尾与 §12.1。
++
++### Lua 负责
++
++- 进入/退出编辑模式
++- 保存 original
++- 解析 / 记录 syllable ranges
++- index 选择
++- replacement 输入
++- 替换 `context.input`
++- Backspace
++- Esc restore
++- 状态 property
++
++### Weasel 负责
++
++- property 状态变化后的即时 UI 刷新
++- 音节 layout
++- superscript label
++- active syllable background
++- index badge
++- colors
++- padding
++- corner radius
++- spacing
++
++不要在 Weasel 实现：
++
++- 拼音替换算法
++- `replace_range`
++- Xiaohe 双拼解析
++- Esc 恢复字符串
++- replacement state machine
++
++## 14. ranges
++
++processor 当前通过：
++
++```text
++_indexed_rewrite_ranges
++```
++
++传递 ranges。
++
++格式类似：
++
++```text
++0-2,2-4,4-6,6-8
++```
++
++使用 0-based `[start,end)`。
++
++Weasel UI 直接解析这个 property 即可。
++
++不要自己假设永远 2 字符一个音节。
++
++原因：
++
++- 小鹤普通情况下通常 2 ASCII keys
++- 但万象 Pro 直接辅助、声调或其他扩展可能让 span 不止 2 个字符
++- Lua 已经尝试从 candidate spans 获取真实 range
++- fallback 才是 2-char pairs
++
++所以 Weasel 必须信任 `_indexed_rewrite_ranges`，不要重新推断。
++
++【已完成】实现完全按这条做：`RewriteState::Units()` 只解析 `_indexed_rewrite_ranges`，
++不假设音节是 2 个字符。同时它对不可信输入做了防御性校验，任一不满足就整体放弃
++绘制（而不是画出错位的东西）：
++
++- 非编辑 stage、`original` 为空或超过 4096 字符
++- `original` / `replacement` / `input` 含 ASCII 可见范围之外的字符
++  （协议是原始键盘编码，拒绝用 UTF-16 偏移去切多字节内容）
++- range 不是严格的 `a-b`、`a >= b`、起点倒退、终点超出 `original` 长度、区间数超过 256
++- index 含非数字、前导/尾随杂字符或超过 4096
++
++这些边界在 `test/rewrite_state_test.cpp` 里逐条断言。
++
++## 15. 当前 property 语义
++
++### `_indexed_rewrite_stage`
++
++可能：
++
++```text
++""
++armed
++index
++head_replace
++index_replace
++```
++
++空字符串：
++
++- 非编辑模式
++- UI 不显示 Rewrite UI
++
++### `_indexed_rewrite_original`
++
++进入编辑模式时的原始 raw input。
++
++例如：
++
++```text
++jxjirzbj
++```
++
++### `_indexed_rewrite_index`
++
++当前选择的音节数字字符串。
++
++例如：
++
++```text
++3
++12
++```
++
++armed 阶段可能为空。
++
++UI 约定：
++
++- armed + index 为空时 active target 默认 1
++- badge 在 index 为空时可以不显示
++
++### `_indexed_rewrite_ranges`
++
++例如：
++
++```text
++0-2,2-4,4-6,6-8
++```
++
++### `_indexed_rewrite_replacement`
++
++当前 replacement。
++
++例如：
++
++```text
++j
++jm
++```
++
++### 15.1 真机日志样本【已完成】
++
++2026-09-28，真实万象 Pro 配置，单个 session 内一次完整流程
++（每行前缀是 `GetTickCount64` 毫秒）：
++
++```text
++4828421 _indexed_rewrite_stage=armed
++4828421 _indexed_rewrite_original=jxjirzbj
++4828421 _indexed_rewrite_ranges=0-2,2-4,4-6,6-8
++4833015 _indexed_rewrite_index=3
++4833015 _indexed_rewrite_stage=index
++4868625 _indexed_rewrite_replacement=j
++4868625 _indexed_rewrite_stage=index_replace
++4876968 _indexed_rewrite_replacement=jm
++4880328 _indexed_rewrite_replacement=j
++4882828 _indexed_rewrite_stage=
++4882828 _indexed_rewrite_original=
++4882828 _indexed_rewrite_index=
++4882828 _indexed_rewrite_ranges=
++4882828 _indexed_rewrite_replacement=
++```
++
++要点：
++
++- `4833015` 只有 `index` 与 `stage` 变化，`original`／`ranges`／`replacement`
++  都没有重新通知，`preedit` 与 raw input 也没变 —— **UI 仍然更新了**。
++  这就是 §5.1 说的 property-only 刷新，是整个项目立项的原因。
++- `4882828` 退出编辑模式时五个属性在同一个 tick 全部清空。
++- 属性变化的通知是**逐条**发的，不是一个按键一次汇总；所以实现不依赖通知体，
++  而是在按键结束时统一取快照（§8.1）。
++
++## 16. UI 内容如何取值【已实现】
++
++### armed
++
++用：
++
++```text
++original + ranges
++```
++
++target：
++
++```text
++1
++```
++
++badge：
++
++不显示。
++
++### index
++
++用：
++
++```text
++original + ranges
++```
++
++target：
++
++```text
++_indexed_rewrite_index
++```
++
++badge：
++
++显示 `_indexed_rewrite_index` 的 superscript。
++
++### index_replace
++
++非 target 音节：
++
++从 `original` 按 ranges 取。
++
++target：
++
++显示：
++
++```text
++_indexed_rewrite_replacement
++```
++
++badge：
++
++继续显示 index。
++
++### head_replace
++
++当前 `context.input` 已经在逐字符更新。
++
++UI 可以用：
++
++```text
++current raw input + original ranges
++```
++
++active syllable 根据 replacement 长度落在哪个 range 判断。
++
++badge：
++
++一般不显示，因为用户没有显式 index 命令。
++
++【说明】`head_replace` 是唯一**尚未真机验证**的取值路径。实现的判定方式是：
++以 `ctx.rewrite.input`（当前 raw input）为数据源按原始 ranges 切片，target 取
++"replacement 长度落在哪个 range" 的第一个匹配项，最后一个音节额外拼接超出部分。
++首次使用时请重点看这条路径（见 §17.2）。
++
++## 17. 最终验收标准及结果
++
++### 基础输入必须保持正常
++
++没有进入编辑模式时：
++
++- 普通中文输入正常
++- 小鹤双拼正常
++- 万象直接辅助正常
++- `/` 原有功能正常
++- 其他 key_binder 不应被破坏
++
++### Tab 入口
++
++输入：
++
++```text
++jxjirz
++```
++
++按：
++
++```text
++Tab
++```
++
++必须进入编辑模式。
++
++### Tab + 字母
++
++```text
++jxjirz
++Tab
++jm
++```
++
++结果：
++
++```text
++jmjirz
++```
++
++### Tab + 数字
++
++```text
++jxjirzbj
++Tab
++3
++```
++
++UI 必须立即移动 active highlight 到第 3 音节。
++
++**这里不允许等待后续字母输入才刷新。**
++
++### index badge
++
++同一状态立即显示：
++
++```text
++³
++```
++
++作为独立背景 badge。
++
++### Tab + 数字 + replacement
++
++```text
++jxjirzbj
++Tab
++3
++jm
++```
++
++UI：
++
++```text
++jx¹   ji²   [jm³]   bj⁴    ³
++```
++
++实际 raw code 应对应第 3 音节替换。
++
++### Backspace
++
++索引：
++
++```text
++12
++Backspace
++=> 1
++```
++
++UI 和 badge 立即同步。
++
++replacement：
++
++```text
++jm
++Backspace
++=> j
++```
++
++UI 立即同步。
++
++### Esc
++
++无论处在哪个 rewrite stage：
++
++- 恢复 `_indexed_rewrite_original`
++- 清除 Rewrite UI
++- 恢复普通候选 UI
++
++### 提交
++
++Space / Enter / 标点：
++
++- 保留修改后的 raw input
++- 退出 Rewrite UI
++- 后续正常走 Rime 提交逻辑
++
++### 17.1 验收结果【已完成】
++
++2026-09-28 在真实万象 Pro + 小鹤双拼 + 直接辅助配置上，一次会话内跑通：
++
++| 验收项 | 结果 | 依据 |
++|---|---|---|
++| 普通输入正常 | ✅ | 候选与直接辅助输入未受影响 |
++| Tab 入口 | ✅ | `jxjirzbj` + Tab 进入编辑模式 |
++| Tab + 数字即时高亮 | ✅ | 按 `3` 高亮立刻移到第 3 音节，无需等后续字母 |
++| index badge | ✅ | 同一状态显示独立的 `³` |
++| 多位索引 | ✅ | `32`、`321`，退格回 `32` → `3` → 空（回到 `armed`，badge 消失） |
++| Tab + 数字 + replacement | ✅ | `j` → `jm` → 退格回 `j` 实时更新 |
++| Backspace | ✅ | 索引与 replacement 两个方向都正确 |
++| Esc | ✅ | 恢复 `_indexed_rewrite_original`，编辑 UI 清除 |
++| 属性单独变化触发重绘 | ✅ | 日志证明 `index` 单独变化即触发 UI 更新（§15.1） |
++| 安装完整性 | ✅ | 安装目录与 System32/SysWOW64 程序文件哈希均与本包 `SHA256SUMS.txt` 一致 |
++
++### 17.2 尚未覆盖的三项
++
++不影响已有结论，但如需完整确认要补测（补测方法同 17.1：开 `rewrite_ui/debug`
++后复现，再读 `%TEMP%\rime.weasel\rewrite-ui.log`）：
++
++1. **多位索引 badge 的 `¹²` 是否肉眼可见** —— 状态机与 Units 已由测试覆盖
++   （`test/rewrite_state_test.cpp` 断言 `¹²`），缺的是肉眼确认。
++2. **`Space` / `Enter` / 标点提交后的上屏结果** —— §17 要求"保留当前修改并退出
++   编辑模式，然后让 Rime 正常处理该键"。
++3. **`head_replace`（Tab 后直接打字母）的真机表现** —— 见 §16 末尾说明。
++
++## 18. 不允许的回归【本次未出现】
++
++> 2026-09-28 的真机验收中，下面每一条都没有出现。
++
++绝对不要再次出现：
++
++- 无法正常打字
++- Tab 完全失效
++- Esc 无法恢复
++- candidate list 消失
++- 单 `/` 被吞掉
++- 万象 Pro 直接辅助失效
++- 为了 UI 刷新修改 `context.input`
++- 为了 UI 刷新清空 composition
++- UI 状态进入实际拼音编码
++- index badge 被写入 `context.input`
++
++## 19. 开发策略
++
++建议按这个顺序：
++
++### Phase 1
++
++只做 property notification -> Weasel repaint。
++
++不要先做漂亮 UI。
++
++验收：
++
++```text
++按 3 后，Weasel 能收到 index=3 并立即重绘一个 debug 文本。
++```
++
++例如 panel 角落显示：
++
++```text
++REWRITE index=3
++```
++
++这是最重要的第一步。
++
++### Phase 2
++
++解析：
++
++```text
++ranges
++original
++stage
++replacement
++```
++
++构建 RewriteState。
++
++### Phase 3
++
++绘制最简单的：
++
++```text
++jx¹ ji² rz³ bj⁴
++```
++
++### Phase 4
++
++active syllable background。
++
++### Phase 5
++
++index badge：
++
++```text
++³
++```
++
++### Phase 6
++
++配置颜色、圆角、spacing。
++
++### Phase 7
++
++删除 Lua preedit UI filter，只保留核心 processor。
++
++### 19.1 完成情况【已完成】
++
++| Phase | 内容 | 状态 |
++|---|---|---|
++| 1 | property notification → Weasel repaint | ✅ 已完成并真机验证 |
++| 2 | 解析 ranges/original/stage/replacement，构建 RewriteState | ✅ `include/RewriteState.h` |
++| 3 | 画 `jx¹ ji² rz³ bj⁴` | ✅ |
++| 4 | active syllable 背景 | ✅ |
++| 5 | index badge | ✅（含多位数字） |
++| 6 | 颜色、圆角、spacing 配置 | ⚠️ 只做了复用主题，未新增 `rewrite_ui/*` 颜色键（§11.1） |
++| 7 | 删除 Lua preedit UI filter | ⚠️ filter 已从 schema 移除，但磁盘上的 `indexed_rewrite_tab_ui_v2.lua` 仍在，核心 Lua 里的 `sync_ui()` 也还留着（§21【待办】） |
++
++## 20. 调试要求【已验证】
++
++不要靠猜。
++
++如果 property notification 不工作：
++
++1. 在 Weasel 日志中记录 property update。
++2. 明确打印：
++   - property name
++   - property value
++   - session id
++3. 确认：
++   - `Tab`
++   - `3`
++   - `jm`
++   - `Backspace`
++   - `Esc`
++   每一步收到哪些通知。
++
++如果 Weasel 根本收不到 property value：
++
++检查 librime API：
++
++- property update notification 是否只带 name
++- 是否需要通过 session/context API再读取 value
++
++不要假设通知直接带 value。
++
++### 20.1 实际结论【已完成】
++
++- **property 通知确实带值。** 隔离 librime 测试与真机日志都确认
++  `message_value` 是 `名称=值`，不是只有名字；§20 担心的"通知只带 name、
++  需要另读 value"没有发生。
++- **但实现没有依赖通知体。** `_Respond` 在按键结束时用 `get_property`
++  重新读一次，保证一个按键里多次写属性只取一份完整快照（§8.1）。
++- **调试日志**：路径 `%TEMP%\rime.weasel\rewrite-ui.log`，
++  格式 `<GetTickCount64> session=<id> <名称>=<值>`，由 `rewrite_ui/debug` 控制。
++  写日志在 `OnNotify` 里，失败被 `try/catch` 吞掉，不影响按键路径。
++- **收尾要求**：日志会把正在输入的编码写进 `%TEMP%`，
++  排查结束后必须把 `rewrite_ui/debug` 改回 `false` 并**重启服务**。
++  这一点容易漏，因为 `Initialize()` 只在 `WeaselServer.exe` 启动时读一次配置，
++  改完 custom 文件不重启是不生效的。2026-09-28 已经照此关闭。
++- **改配置必须重新部署 + 重启服务。** 服务端读的是编译产物
++  `%APPDATA%\Rime\build\weasel.yaml`，不是同目录的 `weasel.yaml`
++  （发行版默认副本，没有 `rewrite_ui/*`），也不是 `weasel.custom.yaml`。
++  只改 custom 文件而不部署，旧值会继续生效。
++  2026-09-28 实测验证过这一点：custom 改成 `false` 后重启服务，日志仍在增长；
++  跑完 `/deploy` 后 `build\weasel.yaml` 才变成 `debug: false`，日志随之停止。
++
++## 21. 当前推荐保留文件名【已达成】
++
++始终保持：
++
++```text
++indexed_rewrite_pro.lua
++```
++
++如果仍处在过渡期，可以有：
++
++```text
++indexed_rewrite_tab_ui_v2.lua
++```
++
++但一旦 Weasel Rewrite UI 完成：
++
++删除 UI filter 依赖。
++
++最终理想：
++
++```text
++%APPDATA%\Rime\lua\indexed_rewrite_pro.lua
++```
++
++一个核心 Lua 即可。
++
++【待办】现状与上面"最终理想"只差两步，都属于清理，不影响功能：
++
++1. `%APPDATA%\Rime\lua\indexed_rewrite_tab_ui_v2.lua` 文件仍在磁盘上，
++   但已不被任何 schema 引用（`enable-rewrite-ui.ps1` 会从
++   `wanxiang_pro.custom.yaml` 里删掉对应 filter 行），可以直接删除。
++2. `indexed_rewrite_pro.lua` 里的 `sync_ui()` 还在 `pcall` 里调用
++   `env.engine:compose(ctx)`（§6.3）。现在重绘由 Weasel 负责，这段是多余的。
++
++改这两处之前请注意 §3 的用户偏好：**不要改文件名、不要新建 v2/sync/bridge 版本**。
++
++## 22. 当前稳定 YAML 基线【已生效】
++
++在开始改 Weasel 前，先保留这份已验证可工作的输入路径：
++
++```yaml
++patch:
++  engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
++
++  key_binder/bindings/+:
++    - { when: has_menu, accept: "Tab", send_sequence: "//" }
++    - { when: composing, accept: "Tab", send_sequence: "//" }
++
++  speller/algebra:
++    __patch:
++      - wanxiang_algebra:/pro/小鹤双拼
++      - wanxiang_algebra:/pro/直接辅助
++
++  menu/page_size: 6
++```
++
++过渡期曾经需要这一行，现已删除：
++
++```yaml
++# 已删除，不要恢复
++# engine/filters/@before last: lua_filter@*indexed_rewrite_tab_ui_v2
++```
++
++应急回退时如果确实要临时恢复这一行，必须**同时**把 `rewrite_ui/enabled`
++设为 `false`，否则编号会被 Lua filter 和 Weasel 各画一遍。
++
++## 23. 最终产品定义【已达成】
++
++最终效果应该像一个真正的“编码编辑器”，而不是临时 Lua trick。
++
++示例：
++
++```text
++普通输入：
++jxjirzbj
++
++Tab：
++[jx¹]   ji²   rz³   bj⁴
++
++Tab 3：
++jx¹   ji²   [rz³]   bj⁴    ³
++
++Tab 3 j：
++jx¹   ji²   [j³]    bj⁴    ³
++
++Tab 3 jm：
++jx¹   ji²   [jm³]   bj⁴    ³
++```
++
++其中：
++
++- `[ ]` 代表真正的圆角背景色
++- 实际不显示括号
++- `³` 是独立的 superscript badge
++- badge 有自己的弱背景色
++- target 切换必须即时刷新
++- replacement 必须即时刷新
++- UI 不得污染真实编码
++
++### 23.1 实际达成情况【已完成】
++
++上面这个"最终产品"的样子已经实现：`[ ]` 是真的圆角背景（不是括号），
++`³` 是独立的弱背景 badge，target 切换与 replacement 都是即时刷新，
++编码内容没有被 UI 污染。真机验收见 §17.1。
++
++唯一与本节示例的差别：示例里的 `[jx¹]` 那种把编号一起放进高亮框的写法，
++实际实现是**整个音节单元格**（含上标编号）一起填背景，效果一致。
++
++## 24. 对 Codex 的执行要求
++
++1. 先阅读本文件。
++2. 先检查当前本地 Weasel commit 和源码结构。
++3. 不要假设网上旧版本路径与本地完全一致。
++4. 修改前先定位当前：
++   - property notification
++   - Context bridge
++   - Panel rendering
++5. 优先做最小可验证 patch。
++6. 每一步都能编译。
++7. 不要一次重写整个 Weasel UI。
++8. 保持 upstream 行为，Rewrite UI 必须是 opt-in。
++9. 不在非编辑模式影响正常 UI。
++10. 不要改 `indexed_rewrite_pro.lua` 文件名。
++11. 不要重复已经明确失败的纯 Lua 刷新路线。
++12. 遇到不确定的 librime/Weasel API，先读本地源码再实现，不要猜。
++
++> 上面 12 条在本项目的调查与实现阶段都已执行：先读本地 checkout 才动手，
++> 遇到不确定的 API（例如 property 通知是否带值、`config_open` 是否合并
++> `.custom.yaml`）都用隔离测试或真机日志验证过，没有靠记忆猜。
++
++### 24.1 维护阶段的要求【当前适用】
++
++项目已进入维护阶段。后续任何改动请遵守：
++
++1. **先读 `weasel/REWRITE-UI.md` 的"验证情况与范围"**，确认要改的行为是否已被覆盖。
++2. **不要改 `indexed_rewrite_pro.lua` 的文件名**，也不要新建 `v2`／`sync`／`bridge`
++   之类后缀版本（§3 的用户偏好）。
++3. **保持 opt-in**：`rewrite_ui/enabled: false` 时，Weasel 的行为必须与上游完全一致。
++   改动 UI 代码后请用这个开关自己回归一次普通输入。
++4. **重新出包必须走 `weasel/package-rewrite.ps1`**。它会同时刷新包内 `README.md`、
++   `rewrite-source.zip` 和 `SHA256SUMS.txt`；出包后核对二进制哈希没有意外变化。
++5. **改了 Weasel 侧二进制就要重新安装并重跑验收**：用 `Apply-Patch.cmd` 覆盖安装，
++   然后重跑 §17.1 的验收表。只替换 `WeaselServer.exe` 是不够的——TSF 客户端
++   （`System32\weasel.dll`、`SysWOW64\weasel.dll`）也必须在同一版本上。
++6. **不要在没有备份的情况下动 `%APPDATA%\Rime`**。`enable-rewrite-ui.ps1` 默认
++   只做预览，加 `-Apply` 才写盘，并且会留 `.rewrite-backup-<时间戳>` 备份；
++   要关调试日志用 `-DisableDebug`。
++7. **`rewrite_ui/debug` 用完必须关**，并且改完要**重新部署 + 重启
++   `WeaselServer.exe`** 才生效（§11.1、§20.1）。只改 custom 文件不部署是无效的。
++8. **不要引入 §6 里已经验证失败的路线**，也不要为了刷新去改 `context.input`
++   或清空 composition（§18 红线）。
++
++### 24.2 已知遗留
++
++按优先级排列，全部是清理项，不影响当前功能：
++
++| 项 | 说明 |
++|---|---|
++| 关闭调试日志 | 已于 2026-09-28 关闭；如果重新开启排查，记得再关一次 |
++| 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被引用，文件仍在 `%APPDATA%\Rime\lua\`（§21） |
++| 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)`（§6.3） |
++| 补测 §17.2 的三项 | 多位索引 badge 肉眼确认、提交键行为、`head_replace` |
++| `rewrite_ui/*` 颜色配置 | 目前只复用主题，§11 的彩色配置未实现 |
+-- 
+2.53.0.windows.2
+

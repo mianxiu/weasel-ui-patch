@@ -1,0 +1,425 @@
+From 44e29729ccd60c7ba53a8f4081e2219f9f801b4b Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:40 +0800
+Subject: [PATCH 06/18] chore(build): add rewrite build, package, activation
+ and patch scripts
+
+---
+ .gitignore             |   5 +-
+ Apply-Patch.cmd        |   9 ++
+ Apply-Patch.ps1        | 183 +++++++++++++++++++++++++++++++++++++++++
+ build-rewrite.cmd      |   9 ++
+ diagnose-install.ps1   |  10 +++
+ enable-rewrite-ui.ps1  |  44 ++++++++++
+ package-rewrite.ps1    |  46 +++++++++++
+ retry-registration.ps1 |  23 ++++++
+ rewrite-build.txt      |   5 ++
+ 9 files changed, 333 insertions(+), 1 deletion(-)
+ create mode 100644 Apply-Patch.cmd
+ create mode 100644 Apply-Patch.ps1
+ create mode 100644 build-rewrite.cmd
+ create mode 100644 diagnose-install.ps1
+ create mode 100644 enable-rewrite-ui.ps1
+ create mode 100644 package-rewrite.ps1
+ create mode 100644 retry-registration.ps1
+ create mode 100644 rewrite-build.txt
+
+diff --git a/.gitignore b/.gitignore
+index e46b924..11ccd6b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,4 +1,7 @@
+ .cache
++/test/rime-fixture/user.yaml
++/test/activation-fixture/
++/dist/
+ .clangd
+ .xmake
+ build
+@@ -55,4 +58,4 @@ arm64x_wrapper/*.o
+ arm64x_wrapper/*.dll
+ arm64x_wrapper/*.ime
+ arm64x_wrapper/*.lib
+-arm64x_wrapper/*.exp
+\ No newline at end of file
++arm64x_wrapper/*.exp
+diff --git a/Apply-Patch.cmd b/Apply-Patch.cmd
+new file mode 100644
+index 0000000..8d21351
+--- /dev/null
++++ b/Apply-Patch.cmd
+@@ -0,0 +1,9 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Patch.ps1"
++set "patch_result=%errorlevel%"
++echo.
++if not "%patch_result%"=="0" echo Patch failed. Read the message above; do not delete the backup.
++pause
++exit /b %patch_result%
+diff --git a/Apply-Patch.ps1 b/Apply-Patch.ps1
+new file mode 100644
+index 0000000..7c75488
+--- /dev/null
++++ b/Apply-Patch.ps1
+@@ -0,0 +1,183 @@
++[CmdletBinding()]
++param([string]$Target, [switch]$CheckOnly, [string]$UserSid)
++$ErrorActionPreference = 'Stop'
++Set-StrictMode -Version 2
++
++function Read-WeaselRoot {
++  foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
++    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
++    try {
++      $key = $base.OpenSubKey('Software\Rime\Weasel')
++      if ($key) {
++        try { $value = $key.GetValue('WeaselRoot'); if ($value) { return [string]$value } }
++        finally { $key.Dispose() }
++      }
++    } finally { $base.Dispose() }
++  }
++  throw 'Existing Weasel installation not found. Use -Target with the installed Weasel directory.'
++}
++function Copy-Verified([string]$Source, [string]$Destination) {
++  Copy-Item -LiteralPath $Source -Destination $Destination -Force
++  if ((Get-FileHash -LiteralPath $Source).Hash -ne (Get-FileHash -LiteralPath $Destination).Hash) {
++    throw "Copy verification failed: $Destination"
++  }
++}
++function Start-WeaselCommand([string]$FilePath, [string]$Argument) {
++  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
++  $startInfo.FileName = $FilePath
++  $startInfo.Arguments = $Argument
++  $startInfo.WorkingDirectory = Split-Path -Parent $FilePath
++  $startInfo.UseShellExecute = $false
++  return [System.Diagnostics.Process]::Start($startInfo)
++}
++function Register-Weasel([string]$Root, [string]$ProfileArgument) {
++  $process = Start-WeaselCommand (Join-Path $Root 'WeaselSetup.exe') $ProfileArgument
++  while (!$process.WaitForExit(10000)) {
++    Write-Host "Waiting for Windows input-method registration (PID $($process.Id))... Do not run another installer."
++  }
++  if ($process.ExitCode -ne 0) { throw "WeaselSetup failed: $($process.ExitCode)" }
++}
++
++function Stop-WeaselForPatch([string]$ServerPath) {
++  Write-Host 'Stopping Weasel (up to 10 seconds)...'
++  # Start-Process -Wait can wait for descendants, not just the /q helper.
++  $helper = Start-WeaselCommand $ServerPath '/q'
++  if (!$helper.WaitForExit(10000)) {
++    # Only terminate the helper created by this script, never a process tree.
++    $helper.Kill()
++    if (!$helper.WaitForExit(5000)) { throw 'Shutdown helper could not be stopped. No binaries were replaced.' }
++  }
++  $remaining = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
++  foreach ($server in $remaining) {
++    if (!$server.Path -or $server.Path -ine $ServerPath) {
++      throw 'A different or inaccessible Weasel process is running. No binaries were replaced.'
++    }
++  }
++  if ($remaining.Count) {
++    Write-Host 'Weasel did not exit normally. Save/finish any current input first.' -ForegroundColor Yellow
++    $answer = Read-Host 'Force-stop this installation? Unsaved input/learning may be lost. Type YES to continue'
++    if ($answer -cne 'YES') { throw 'Cancelled. No binaries were replaced. Exit Weasel and retry.' }
++    foreach ($server in $remaining) {
++      if (!$server.HasExited) { $server.Kill() }
++      if (!$server.WaitForExit(5000)) { throw 'Weasel could not be stopped. No binaries were replaced.' }
++    }
++  }
++  if (@(Get-Process WeaselServer -ErrorAction SilentlyContinue).Count) {
++    throw 'Weasel restarted. Close applications using the input method, then retry. No binaries were replaced.'
++  }
++  Write-Host 'Weasel stopped.'
++}
++
++try {
++  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
++  if ($UserSid -and $UserSid -ne $identity.User.Value) {
++    throw 'Elevation changed the Windows user. Sign in as the installing user and run again.'
++  }
++  $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
++  if ($arch -eq 'ARM64') { throw 'This package supports x64/x86 Windows only.' }
++  if (!$Target) { $Target = Read-WeaselRoot }
++  $Target = (Resolve-Path -LiteralPath $Target).Path.TrimEnd('\')
++  $package = (Resolve-Path -LiteralPath $PSScriptRoot).Path.TrimEnd('\')
++  if ($Target -eq $package -or $Target.StartsWith($package + '\', [StringComparison]::OrdinalIgnoreCase) -or
++      $package.StartsWith($Target + '\', [StringComparison]::OrdinalIgnoreCase)) {
++    throw 'Extract the patch outside the installed Weasel directory before running it.'
++  }
++  if (!(Test-Path -LiteralPath (Join-Path $Target 'data') -PathType Container)) {
++    throw 'Target is not an existing Weasel installation (data directory missing).'
++  }
++  $mapping = [ordered]@{
++    'WeaselServer.exe' = 'WeaselServer.exe'; 'WeaselDeployer.exe' = 'WeaselDeployer.exe'
++    'WeaselSetup.exe' = 'WeaselSetup.exe'; 'weasel.dll' = 'weasel.dll'
++    'rime.dll' = 'rime.dll'; 'WinSparkle.dll' = 'WinSparkle.dll'
++  }
++  if ([Environment]::Is64BitOperatingSystem) { $mapping['weaselx64.dll'] = 'weaselx64.dll' }
++  else {
++    foreach ($name in @('WeaselServer.exe','WeaselDeployer.exe','rime.dll','WinSparkle.dll')) { $mapping[$name] = 'Win32\' + $name }
++  }
++  $hashes = @{}
++  foreach ($line in (Get-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt'))) {
++    if ($line -match '^([a-fA-F0-9]{64})\s+(.+)$') { $hashes[$Matches[2].Replace('/', '\')] = $Matches[1] }
++  }
++  foreach ($name in $mapping.Keys) {
++    if (!(Test-Path -LiteralPath (Join-Path $Target $name) -PathType Leaf)) {
++      throw "Required original file missing: $name. Use manual replacement for this installation."
++    }
++    $relative = $mapping[$name]
++    $source = Join-Path $package $relative
++    if (!$hashes.ContainsKey($relative) -or (Get-FileHash -LiteralPath $source).Hash -ne $hashes[$relative]) {
++      throw "Package hash check failed: $relative"
++    }
++  }
++  $profile = Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction SilentlyContinue
++  $profileName = 'hans'
++  if ($profile -and $profile.PSObject.Properties['Profile'] -and $profile.Profile) { $profileName = $profile.Profile }
++  elseif ($profile -and $profile.PSObject.Properties['Hant'] -and $profile.Hant) { $profileName = 'hant' }
++  $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
++  if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
++  Write-Host "Target: $Target"
++  Write-Host "Build: rewrite-ui-software-render-20260928; profile: $profileName"
++  Write-Host 'Patch installer: revision 3 (command-line whitespace fix)'
++  Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
++  if ($CheckOnly) { Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
++
++  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
++  if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
++    $scriptPath = Join-Path $package 'Apply-Patch.ps1'
++    $elevationArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Target "{1}" -UserSid "{2}"' -f $scriptPath, $Target, $identity.User.Value
++    $child = Start-Process powershell.exe -Verb RunAs -ArgumentList $elevationArgs -PassThru -Wait
++    exit $child.ExitCode
++  }
++
++  # Refuse a mixed installation instead of terminating unrelated applications.
++  $serverPath = Join-Path $Target 'WeaselServer.exe'
++  $servers = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
++  foreach ($server in $servers) {
++    if (!$server.Path -or $server.Path -ine $serverPath) {
++      throw 'Another Weasel installation is running. Exit it before applying this patch.'
++    }
++  }
++  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
++  $backup = Join-Path $Target ('rewrite-backup-' + $stamp + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
++  New-Item -ItemType Directory -Path $backup | Out-Null
++  foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $Target $name) (Join-Path $backup $name) }
++  if (Test-Path -LiteralPath (Join-Path $Target 'rewrite-build.txt')) {
++    Copy-Verified (Join-Path $Target 'rewrite-build.txt') (Join-Path $backup 'rewrite-build.txt')
++  }
++  @("Original directory: $Target", "Profile: $profileName", "Date: $stamp",
++    'Restore all saved binaries to the original directory and run the saved WeaselSetup with the same profile argument.',
++    "Registration argument: $($arguments[$profileName])", 'Reboot after restoring. User configuration was not modified.') |
++    Set-Content -LiteralPath (Join-Path $backup 'RESTORE.txt') -Encoding UTF8
++  Write-Host "Backup: $backup"
++  $changed = $false
++  try {
++    if ($servers.Count) {
++      Stop-WeaselForPatch $serverPath
++    }
++    Write-Host 'Replacing and verifying program files...'
++    $changed = $true
++    foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $package $mapping[$name]) (Join-Path $Target $name) }
++    Write-Host 'Registering input method...'
++    Register-Weasel $Target $arguments[$profileName]
++    Copy-Verified (Join-Path $package 'rewrite-build.txt') (Join-Path $Target 'rewrite-build.txt')
++    Write-Host 'SUCCESS. Restart Windows before testing; existing applications still hold old DLLs.' -ForegroundColor Green
++    Write-Host 'Installed identifier: rewrite-build.txt. Rewrite UI remains opt-in in weasel.custom.yaml.'
++  } catch {
++    $failure = $_
++    if ($changed) {
++      try {
++        foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $backup $name) (Join-Path $Target $name) }
++        Register-Weasel $Target $arguments[$profileName]
++        Write-Host 'Original binaries restored. Reboot Windows before using Weasel.'
++      } catch {
++        Write-Host "Automatic recovery failed. Restore files from: $backup" -ForegroundColor Red
++        Write-Host $_
++      }
++    }
++    throw $failure
++  }
++  Read-Host 'Press Enter to close' | Out-Null
++} catch {
++  Write-Host "ERROR: $_" -ForegroundColor Red
++  if (!$CheckOnly) { Read-Host 'Press Enter to close' | Out-Null }
++  exit 1
++}
+diff --git a/build-rewrite.cmd b/build-rewrite.cmd
+new file mode 100644
+index 0000000..39f9043
+--- /dev/null
++++ b/build-rewrite.cmd
+@@ -0,0 +1,9 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++if not defined VCToolsInstallDir call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat
++if errorlevel 1 exit /b 1
++msbuild weasel.sln /nr:false /m:4 /t:WeaselServer,WeaselTSF,WeaselDeployer /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /v:minimal /fl /flp:logfile=build-rewrite-x64.log
++if errorlevel 1 exit /b 1
++msbuild weasel.sln /nr:false /m:4 /t:WeaselServer,WeaselTSF,WeaselDeployer,WeaselSetup /p:Configuration=Release /p:Platform=Win32 /p:WindowsTargetPlatformVersion=10.0 /v:minimal /fl /flp:logfile=build-rewrite-x86.log
++exit /b %errorlevel%
+diff --git a/diagnose-install.ps1 b/diagnose-install.ps1
+new file mode 100644
+index 0000000..2424ebb
+--- /dev/null
++++ b/diagnose-install.ps1
+@@ -0,0 +1,10 @@
++$ErrorActionPreference = 'Stop'
++Start-Transcript -Path (Join-Path $PSScriptRoot 'diagnose-install.log') -Force
++try {
++  whoami /groups
++  Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('WeaselSetup.exe','regsvr32.exe','WeaselServer.exe','powershell.exe') } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | Format-List
++  Get-Process WeaselSetup -ErrorAction SilentlyContinue | ForEach-Object {
++    $_ | Select-Object Id,Path,StartTime,CPU,MainWindowTitle | Format-List
++    $_.Threads | Select-Object Id,ThreadState,WaitReason | Format-Table
++  }
++} finally { Stop-Transcript }
+diff --git a/enable-rewrite-ui.ps1 b/enable-rewrite-ui.ps1
+new file mode 100644
+index 0000000..26d6cef
+--- /dev/null
++++ b/enable-rewrite-ui.ps1
+@@ -0,0 +1,44 @@
++[CmdletBinding()]
++param(
++  [string]$UserDataRoot = (Join-Path $env:APPDATA 'Rime'),
++  [switch]$Apply,
++  [switch]$DisableDebug
++)
++$ErrorActionPreference = 'Stop'
++# Transform complete lines only; generated build files belong to librime.
++$uiPath = Join-Path $UserDataRoot 'weasel.custom.yaml'
++$schemaPath = Join-Path $UserDataRoot 'wanxiang_pro.custom.yaml'
++$ui = [IO.File]::ReadAllLines($uiPath)
++$schema = [IO.File]::ReadAllLines($schemaPath)
++if (@($ui | Where-Object { $_ -ceq 'patch:' }).Count -ne 1) {
++  throw 'Expected exactly one top-level patch map in weasel.custom.yaml.'
++}
++if ($ui -match '^[ \t]+rewrite_ui:') { throw 'Nested rewrite_ui map requires manual reconciliation.' }
++$debugValue = if ($DisableDebug) { 'false' } else { 'true' }
++$newUi = @(
++  foreach ($line in $ui) {
++    if ($line -match '^  ["'']?rewrite_ui/(enabled|debug)["'']?:') { continue }
++    $line
++    if ($line -ceq 'patch:') {
++      '  rewrite_ui/enabled: true'
++      "  rewrite_ui/debug: $debugValue"
++    }
++  }
++)
++$legacy = '^  engine/filters/@before last:[ \t]*lua_filter@\*indexed_rewrite_tab_ui_v2[ \t]*$'
++$newSchema = @($schema | Where-Object { $_ -notmatch $legacy })
++if (-not ($newSchema -cmatch '^  engine/processors/@before 0: lua_processor@\*indexed_rewrite_pro$') -or
++    -not ($newSchema -cmatch '^  key_binder/bindings/\+:$') -or
++    -not ($newSchema -cmatch '^  speller/algebra:$')) {
++  throw 'Expected intact rewrite processor, Tab bindings and algebra patches.'
++}
++Write-Output 'Validated: only two UI switches and the legacy filter line change.'
++if (!$Apply) { Write-Output 'Preview only. No files changed.'; return }
++$stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
++Copy-Item -LiteralPath $uiPath -Destination "$uiPath.rewrite-backup-$stamp"
++Copy-Item -LiteralPath $schemaPath -Destination "$schemaPath.rewrite-backup-$stamp"
++$utf8 = New-Object Text.UTF8Encoding($false)
++[IO.File]::WriteAllLines($uiPath, [string[]]$newUi, $utf8)
++[IO.File]::WriteAllLines($schemaPath, [string[]]$newSchema, $utf8)
++Write-Output "Source configuration updated. Backup suffix: rewrite-backup-$stamp"
++Write-Output 'Run WeaselDeployer.exe /deploy and verify generated configuration before testing.'
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+new file mode 100644
+index 0000000..af06568
+--- /dev/null
++++ b/package-rewrite.ps1
+@@ -0,0 +1,46 @@
++$ErrorActionPreference = 'Stop'
++Set-Location $PSScriptRoot
++$destination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI'
++New-Item -ItemType Directory -Force $destination, "$destination/Win32", "$destination/licenses" | Out-Null
++$rootFiles = @('WeaselServer.exe', 'WeaselDeployer.exe', 'WeaselSetup.exe',
++               'weasel.dll', 'weaselx64.dll', 'rime.dll', 'WinSparkle.dll')
++foreach ($name in $rootFiles) { Copy-Item "output/$name" "$destination/$name" -Force }
++foreach ($name in @('WeaselServer.exe', 'WeaselDeployer.exe', 'rime.dll', 'WinSparkle.dll')) {
++  Copy-Item "output/Win32/$name" "$destination/Win32/$name" -Force
++}
++Copy-Item REWRITE-UI.md "$destination/README.md" -Force
++Copy-Item rewrite-ui.custom.example.yaml $destination -Force
++Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,rewrite-build.txt $destination -Force
++Copy-Item LICENSE.txt "$destination/licenses/Weasel-GPL-3.0.txt" -Force
++Copy-Item librime/LICENSE "$destination/licenses/librime-BSD.txt" -Force
++Copy-Item deps/boost_1_84_0/LICENSE_1_0.txt "$destination/licenses/Boost.txt" -Force
++Copy-Item deps/rime-x64/version-info.txt "$destination/librime-version-info.txt" -Force
++
++# Package the actual working source, including files not yet committed.
++Add-Type -AssemblyName System.IO.Compression.FileSystem
++$sourceZip = Join-Path $destination 'rewrite-source.zip'
++$sourceStream = [IO.File]::Open($sourceZip, [IO.FileMode]::Create)
++$sourceArchive = [IO.Compression.ZipArchive]::new($sourceStream, [IO.Compression.ZipArchiveMode]::Create)
++try {
++  $files = @(git ls-files) + @(
++    'include/RewriteState.h', 'WeaselUI/RewriteLayout.h', 'WeaselSetup/SetupTrace.h', 'build-rewrite.cmd',
++    'weasel.props', 'REWRITE-UI.md', 'rewrite-ui.custom.example.yaml',
++    'package-rewrite.ps1', 'Apply-Patch.cmd', 'Apply-Patch.ps1', 'rewrite-build.txt', 'test/patch_shutdown_test.ps1', 'test/rewrite_state_test.cpp',
++    'test/rewrite_pipeline_test.cpp', 'test/rewrite_rime_test.cpp',
++    'test/rime-fixture/default.yaml', 'test/rime-fixture/rewrite_test.schema.yaml')
++  foreach ($file in ($files | Sort-Object -Unique)) {
++    if ($file -match '^(output|lib|lib64)/' -or !(Test-Path -LiteralPath $file -PathType Leaf)) { continue }
++    [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
++      $sourceArchive, (Join-Path $PSScriptRoot $file), $file.Replace('\', '/')) | Out-Null
++  }
++} finally { $sourceArchive.Dispose(); $sourceStream.Dispose() }
++
++$hashes = Get-ChildItem $destination -Recurse -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
++  ForEach-Object {
++    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
++    $relative = [IO.Path]::GetRelativePath($destination, $_.FullName)
++    "$hash  $relative"
++  }
++$hashes | Set-Content "$destination/SHA256SUMS.txt" -Encoding utf8
++Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI.zip' -Force
++Get-Item 'dist/Weasel-Rewrite-UI.zip' | Select-Object FullName, Length
+diff --git a/retry-registration.ps1 b/retry-registration.ps1
+new file mode 100644
+index 0000000..b3fc75c
+--- /dev/null
++++ b/retry-registration.ps1
+@@ -0,0 +1,23 @@
++$ErrorActionPreference = 'Stop'
++Start-Transcript -Path (Join-Path $PSScriptRoot 'retry-registration.log') -Force
++try {
++  $root = 'C:\Program Files\Rime\weasel-0.17.4'
++  $old = Get-Process -Id 60476 -ErrorAction SilentlyContinue
++  if ($old) {
++    if ($old.Path -ine (Join-Path $root 'WeaselSetup.exe')) { throw 'Unexpected old process path' }
++    $old.Kill()
++    if (!$old.WaitForExit(5000)) { throw 'Old setup still running' }
++  }
++  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'output/WeaselSetup.exe') -Destination (Join-Path $root 'WeaselSetup.exe') -Force
++  $env:WEASEL_SETUP_LOG = Join-Path $PSScriptRoot 'setup-stage.log'
++  $setup = Start-Process -FilePath (Join-Path $root 'WeaselSetup.exe') -ArgumentList '/s' -WindowStyle Hidden -PassThru
++  Write-Host "Setup PID: $($setup.Id)"
++  if (!$setup.WaitForExit(45000)) { throw 'Registration still running; inspect setup-stage.log before proceeding.' }
++  Write-Host "Setup exit: $($setup.ExitCode)"
++  if ($setup.ExitCode -ne 0) { throw 'Registration failed' }
++  foreach ($pair in @(@('weaselx64.dll','C:\Windows\System32\weasel.dll'),@('weasel.dll','C:\Windows\SysWOW64\weasel.dll'))) {
++    if ((Get-FileHash (Join-Path $root $pair[0])).Hash -ne (Get-FileHash $pair[1]).Hash) { throw "System DLL mismatch: $($pair[1])" }
++  }
++  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'rewrite-build.txt') -Destination $root -Force
++  Write-Host 'SUCCESS: setup exited 0 and both system DLL hashes match.'
++} finally { Stop-Transcript }
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+new file mode 100644
+index 0000000..0a31eee
+--- /dev/null
++++ b/rewrite-build.txt
+@@ -0,0 +1,5 @@
++Build-ID: rewrite-ui-software-render-20260928
++Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
++Features: Rewrite UI + D2D1_RENDER_TARGET_TYPE_SOFTWARE (issue #1913)
++Targets: Windows x64 / x86; ARM64 not supported
++This file identifies the installed package. Check SHA256SUMS.txt to verify binaries.
+-- 
+2.53.0.windows.2
+

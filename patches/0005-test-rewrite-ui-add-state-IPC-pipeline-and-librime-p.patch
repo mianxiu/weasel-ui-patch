@@ -1,0 +1,305 @@
+From fd33dc154769ac59e680e537f0bf026a81c2fbe3 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:40 +0800
+Subject: [PATCH 05/18] test(rewrite-ui): add state, IPC pipeline and librime
+ property tests
+
+---
+ test/patch_shutdown_test.ps1               | 37 ++++++++++
+ test/rewrite_pipeline_test.cpp             | 85 ++++++++++++++++++++++
+ test/rewrite_rime_test.cpp                 | 54 ++++++++++++++
+ test/rewrite_state_test.cpp                | 56 ++++++++++++++
+ test/rime-fixture/default.yaml             |  3 +
+ test/rime-fixture/rewrite_test.schema.yaml | 10 +++
+ 6 files changed, 245 insertions(+)
+ create mode 100644 test/patch_shutdown_test.ps1
+ create mode 100644 test/rewrite_pipeline_test.cpp
+ create mode 100644 test/rewrite_rime_test.cpp
+ create mode 100644 test/rewrite_state_test.cpp
+ create mode 100644 test/rime-fixture/default.yaml
+ create mode 100644 test/rime-fixture/rewrite_test.schema.yaml
+
+diff --git a/test/patch_shutdown_test.ps1 b/test/patch_shutdown_test.ps1
+new file mode 100644
+index 0000000..8431ec5
+--- /dev/null
++++ b/test/patch_shutdown_test.ps1
+@@ -0,0 +1,37 @@
++$ErrorActionPreference = 'Stop'
++$tokens = $null; $errors = $null
++$ast = [Management.Automation.Language.Parser]::ParseFile(
++  (Join-Path $PSScriptRoot '../Apply-Patch.ps1'), [ref]$tokens, [ref]$errors)
++if ($errors.Count) { throw ($errors | Out-String) }
++$function = $ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Stop-WeaselForPatch'}, $true)
++Invoke-Expression $function.Extent.Text
++function New-FakeProcess([string]$Path, [bool]$Hung) {
++  $p = [pscustomobject]@{Path=$Path; Hung=$Hung; HasExited=$false; Killed=$false}
++  $p | Add-Member ScriptMethod WaitForExit {param($milliseconds) if ($milliseconds -gt 10000) { throw 'Unbounded wait' }; return (!$this.Hung -or $this.HasExited)}
++  $p | Add-Member ScriptMethod Kill {$this.Killed=$true; $this.HasExited=$true}
++  return $p
++}
++function Start-WeaselCommand {
++  param($FilePath,$Argument)
++  if ($Argument -cne '/q') { throw 'Incorrect shutdown argument' }
++  return $script:helper
++}
++function Get-Process {param($Name,$ErrorAction) $script:remaining | Where-Object { !$_.HasExited }}
++function Read-Host {param($Prompt) return $script:answer}
++$path = 'C:\test\WeaselServer.exe'
++foreach ($case in @('normal','hung-helper','refuse','force','foreign')) {
++  $script:helper = New-FakeProcess $path ($case -eq 'hung-helper')
++  $script:remaining = @()
++  $script:answer = 'NO'
++  if ($case -in @('refuse','force','foreign')) {
++    $script:remaining = @(New-FakeProcess $(if ($case -eq 'foreign') {'C:\other\WeaselServer.exe'} else {$path}) $true)
++  }
++  if ($case -eq 'force') { $script:answer = 'YES' }
++  $failed = $false
++  try { Stop-WeaselForPatch $path } catch { $failed = $true }
++  if ($failed -ne ($case -in @('refuse','foreign'))) { throw "Unexpected result: $case" }
++  if ($case -eq 'hung-helper' -and !$script:helper.Killed) { throw 'Hung helper not cleaned up' }
++  if ($case -eq 'force' -and !$script:remaining[0].Killed) { throw 'Confirmed process not stopped' }
++  if ($case -in @('refuse','foreign') -and $script:remaining[0].Killed) { throw 'Unapproved process stopped' }
++  Write-Host "PASS: $case"
++}
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+new file mode 100644
+index 0000000..0d486f2
+--- /dev/null
++++ b/test/rewrite_pipeline_test.cpp
+@@ -0,0 +1,85 @@
++#include "../WeaselUI/stdafx.h"
++#include <ResponseParser.h>
++#include <WeaselUI.h>
++#include "../WeaselUI/VerticalLayout.h"
++#include "../WeaselUI/HorizontalLayout.h"
++#include "../WeaselUI/VHorizontalLayout.h"
++#include "../WeaselUI/RewriteLayout.h"
++#include <cassert>
++#include <iostream>
++
++CAppModule _Module;
++
++weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
++                         const std::wstring& replacement = L"") {
++  weasel::Context ctx;
++  weasel::ResponseParser parser(nullptr, &ctx);
++  parser.Feed(L"action=ctx");
++  parser.Feed(L"ctx.preedit=jx ji rz bj");
++  parser.Feed(L"ctx.rewrite.stage=" + stage);
++  parser.Feed(L"ctx.rewrite.original=jxjirzbj");
++  parser.Feed(L"ctx.rewrite.ranges=0-2,2-4,4-6,6-8");
++  parser.Feed(L"ctx.rewrite.input=jxjirzbj");
++  parser.Feed(L"ctx.rewrite.index=" + index);
++  parser.Feed(L"ctx.rewrite.replacement=" + replacement);
++  return ctx;
++}
++
++int main() {
++  auto armed = snapshot(L"armed", L"");
++  auto indexed = snapshot(L"index", L"3");
++  assert(armed.preedit == indexed.preedit && armed != indexed);
++  assert(indexed.rewrite.Units()[2].active);
++  auto replaced = snapshot(L"index_replace", L"3", L"jm");
++  assert(replaced.preedit == armed.preedit);
++  assert(replaced.rewrite.Units()[2].text == L"jm³");
++  assert(snapshot(L"index", L"12").rewrite.Units().back().text == L"¹²");
++  assert(snapshot(L"index", L"1").rewrite.Units().back().text == L"¹");
++  auto exited = snapshot(L"", L"");
++  assert(!exited.rewrite.active());
++  weasel::UI ui;
++  weasel::Status status;
++  status.composing = true;
++  ui.Update(armed, status);
++  ui.Update(indexed, status);
++  assert(ui.ctx().rewrite.index == L"3");
++  ui.Update(exited, status);
++  assert(!ui.ctx().rewrite.active());
++
++  weasel::UIStyle style;
++  style.font_face = style.label_font_face = style.comment_font_face = L"Microsoft YaHei";
++  style.font_point = 16;
++  style.label_font_point = style.comment_font_point = 12;
++  style.hilite_padding_x = 5; style.hilite_padding_y = 2;
++  style.hilite_spacing = 8; style.spacing = 8;
++  style.margin_x = style.margin_y = 10;
++  style.inline_preedit = true;
++  style.client_caps = weasel::INLINE_PREEDIT_CAPABLE;
++  HDC dc = CreateCompatibleDC(nullptr);
++  for (UINT dpi : {96u, 144u, 192u}) {
++    for (int mode = 0; mode < 3; ++mode) {
++      style.layout_type = static_cast<weasel::UIStyle::LayoutType>(mode);
++      style.max_width = 180;
++      style.max_height = 180;
++      auto dwr = std::make_shared<weasel::DirectWriteResources>(style, dpi);
++      std::unique_ptr<weasel::Layout> layout;
++      if (mode == 0) layout.reset(new weasel::VerticalLayout(style, indexed, status, dwr));
++      if (mode == 1) layout.reset(new weasel::HorizontalLayout(style, indexed, status, dwr));
++      if (mode == 2) layout.reset(new weasel::VHorizontalLayout(style, indexed, status, dwr));
++      layout->DoLayout(dc, dwr);
++      assert(!layout->IsInlinePreedit());
++      auto measured = weasel::MeasureRewrite(*layout, indexed.rewrite, dwr);
++      assert(measured.cells.size() == 5);
++      assert(layout->GetPreeditRect().Width() >= measured.size.cx);
++      assert(layout->GetPreeditRect().Height() >= measured.size.cy);
++      for (size_t i = 0; i < measured.cells.size(); ++i) {
++        for (size_t j = i + 1; j < measured.cells.size(); ++j) {
++          RECT overlap;
++          assert(!IntersectRect(&overlap, &measured.cells[i].back, &measured.cells[j].back));
++        }
++      }
++    }
++  }
++  DeleteDC(dc);
++  std::cout << "IPC, property-only UI update, exit, layout and DPI tests passed\n";
++}
+diff --git a/test/rewrite_rime_test.cpp b/test/rewrite_rime_test.cpp
+new file mode 100644
+index 0000000..7535104
+--- /dev/null
++++ b/test/rewrite_rime_test.cpp
+@@ -0,0 +1,54 @@
++#include <rime_api.h>
++#include <cassert>
++#include <cstring>
++#include <filesystem>
++#include <iostream>
++#include <string>
++
++static std::string notification;
++static RimeSessionId notified_session;
++static void notify(void*, RimeSessionId session, const char* type, const char* value) {
++  if (!std::strcmp(type, "property")) {
++    notification = value;
++    notified_session = session;
++  }
++}
++int main() {
++  auto api = rime_get_api();
++  auto dir = std::filesystem::absolute("test/rime-fixture").u8string();
++  auto logs = std::filesystem::absolute("deps/rime-test-logs").u8string();
++  std::filesystem::create_directories(logs);
++  RIME_STRUCT(RimeTraits, traits);
++  traits.shared_data_dir = dir.c_str();
++  traits.user_data_dir = dir.c_str();
++  traits.prebuilt_data_dir = dir.c_str();
++  traits.log_dir = logs.c_str();
++  traits.app_name = "rime.rewrite-test";
++  api->setup(&traits);
++  api->set_notification_handler(notify, nullptr);
++  api->initialize(&traits);
++  auto session = api->create_session();
++  assert(session);
++  assert(api->select_schema(session, "rewrite_test"));
++  assert(api->set_input(session, "jxjirzbj"));
++  RIME_STRUCT(RimeContext, before);
++  assert(api->get_context(session, &before));
++  const std::string preedit = before.composition.preedit ? before.composition.preedit : "";
++  api->free_context(&before);
++  api->set_property(session, "_indexed_rewrite_index", "3");
++  assert(notified_session == session && notification == "_indexed_rewrite_index=3");
++  assert(std::string(api->get_input(session)) == "jxjirzbj");
++  RIME_STRUCT(RimeContext, after);
++  assert(api->get_context(session, &after));
++  assert(preedit == (after.composition.preedit ? after.composition.preedit : ""));
++  api->free_context(&after);
++  char value[16] = {};
++  assert(api->get_property(session, "_indexed_rewrite_index", value, sizeof(value)));
++  assert(std::string(value) == "3");
++  api->set_property(session, "_indexed_rewrite_index", "");
++  assert(notification == "_indexed_rewrite_index=");
++  assert(api->find_module("lua"));
++  api->destroy_session(session);
++  api->finalize();
++  std::cout << "Bundled librime property notification, unchanged input/preedit, clear and Lua module tests passed\n";
++}
+diff --git a/test/rewrite_state_test.cpp b/test/rewrite_state_test.cpp
+new file mode 100644
+index 0000000..c9fc6c0
+--- /dev/null
++++ b/test/rewrite_state_test.cpp
+@@ -0,0 +1,56 @@
++#include "RewriteState.h"
++#include <cassert>
++#include <iostream>
++
++int main() {
++  weasel::RewriteState r;
++  assert(!r.active());
++  r.stage = L"armed";
++  r.original = r.input = L"jxjirzbj";
++  r.ranges = L"0-2,2-4,4-6,6-8";
++  auto u = r.Units();
++  assert(u.size() == 4 && u[0].active && u[0].text == L"jx¹");
++  const auto original = r;
++  r.stage = L"index";
++  r.index = L"3";
++  u = r.Units();
++  assert(!(r == original) && r.input == original.input);
++  assert(u.size() == 5 && u[2].active && !u[0].active);
++  assert(u[4].badge && u[4].text == L"³");
++  r.stage = L"index_replace";
++  r.replacement = L"jm";
++  u = r.Units();
++  assert(u[2].text == L"jm³" && u[4].text == L"³");
++  r.replacement = L"j";
++  assert(r.Units()[2].text == L"j³");
++  r.stage = L"index";
++  r.index = L"12";
++  assert(r.Units().back().text == L"¹²");
++  for (auto cell : r.Units()) assert(!cell.active);
++  r.index = L"1";
++  assert(r.Units()[0].active && r.Units().back().text == L"¹");
++  r.index.clear();
++  assert(r.Units().size() == 4);
++  r.stage = L"head_replace";
++  r.replacement = L"jmj";
++  r.input = L"jmjirzbj";
++  assert(r.Units()[0].text == L"jm¹" && r.Units()[1].active);
++  r = original;
++  r.ranges = L"0-3,3-8";
++  assert(r.Units().size() == 2 && r.Units()[0].text == L"jxj¹");
++  for (auto bad : {L"", L"0-2,", L"0-99", L"2-1", L"0-3,2-4", L"0-x",
++                   L"99999999999999-2"}) {
++    r.ranges = bad;
++    assert(!r.active());
++  }
++  r = original;
++  r.index = L"99999999999999999999";
++  assert(!r.active());
++  r = original;
++  r.original = L"中文";
++  assert(!r.active());
++  r = original;
++  r.clear();
++  assert(!r.active() && r.original.empty());
++  std::cout << "RewriteState tests passed\n";
++}
+diff --git a/test/rime-fixture/default.yaml b/test/rime-fixture/default.yaml
+new file mode 100644
+index 0000000..18df403
+--- /dev/null
++++ b/test/rime-fixture/default.yaml
+@@ -0,0 +1,3 @@
++config_version: '1'
++schema_list:
++  - schema: rewrite_test
+diff --git a/test/rime-fixture/rewrite_test.schema.yaml b/test/rime-fixture/rewrite_test.schema.yaml
+new file mode 100644
+index 0000000..ae26490
+--- /dev/null
++++ b/test/rime-fixture/rewrite_test.schema.yaml
+@@ -0,0 +1,10 @@
++schema:
++  schema_id: rewrite_test
++  name: Rewrite API test
++  version: '1'
++engine:
++  processors: [speller, express_editor]
++  segmentors: [abc_segmentor, fallback_segmentor]
++  translators: [echo_translator]
++speller:
++  alphabet: abcdefghijklmnopqrstuvwxyz
+-- 
+2.53.0.windows.2
+

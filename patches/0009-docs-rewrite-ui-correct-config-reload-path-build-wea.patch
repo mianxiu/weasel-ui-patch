@@ -1,0 +1,74 @@
+From d356b4790a14d37be492e41bd4d4cc0a432e351e Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:37:31 +0800
+Subject: [PATCH 09/18] docs(rewrite-ui): correct config reload path
+ (build/weasel.yaml needs a redeploy)
+
+---
+ REWRITE-UI.md                  | 24 ++++++++++++++++--------
+ rewrite-ui.custom.example.yaml | 12 +++++++-----
+ 2 files changed, 23 insertions(+), 13 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 6b52cfb..4c7a50b 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -82,17 +82,25 @@ TSF 客户端，64 位 Windows 同样需要二者。`WeaselSetup.exe` 是上游
+    `lua_filter@*indexed_rewrite_tab_ui_v2` 条目，避免重复编号。
+ 6. 重新部署、注销并重新登录 Windows，使应用加载新 DLL，再启动小狼毫。
+ 
+-如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true`，然后**重启
+-`WeaselServer.exe`**；日志位于 `%TEMP%\rime.weasel\rewrite-ui.log`，格式为
++如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true`，然后
++**重新部署（`WeaselDeployer.exe /deploy`）并重启 `WeaselServer.exe`**；
++日志位于 `%TEMP%\rime.weasel\rewrite-ui.log`，格式为
+ `<运行毫秒> session=<会话 ID> <属性名>=<属性值>`，包含正在输入的编码。
+ 
+-这两个开关**不需要重新部署**：`weasel.yaml` 里并没有 `rewrite_ui/*`，
+-服务端在加载配置时会合并 `weasel.custom.yaml` 的 `patch:`，所以改完只需重启
+-服务。`Initialize()` 只在服务启动时读一次配置，不重启是不生效的。
+-日志可能包含正在输入的编码，排查结束后务必改回 `false` 并再次重启。
+-日志写入失败不影响输入。
++这两个开关**必须重新部署才生效**。服务端读的是部署产物
++`%APPDATA%\Rime\build\weasel.yaml`，不是同目录的 `weasel.yaml`
++（后者是随发行版安装的默认副本，里面根本没有 `rewrite_ui/*`），
++也不是 `weasel.custom.yaml`。只改 `weasel.custom.yaml` 而不部署，
++`build\weasel.yaml` 仍保留旧值——2026-09-28 实测过这一幕：
++custom 里已改成 `false`，但 `build\weasel.yaml` 里还是 `true`，
++重启服务后日志继续增长。
+ 
+-关闭 UI：将 `rewrite_ui/enabled` 设为 `false`，重启服务即可（同理无需重新部署）。
++顺序是：改 `weasel.custom.yaml` → 部署 → 重启服务。
++`Initialize()` 只在服务启动时读一次配置，所以部署完还必须重启。
++日志可能包含正在输入的编码，排查结束后务必改回 `false`，
++再部署 + 重启一次。日志写入失败不影响输入。
++
++关闭 UI：将 `rewrite_ui/enabled` 设为 `false`，同样需要部署 + 重启服务。
+ 完整回退：恢复备份的程序文件、配置及旧 filter，使用原版本的注册工具重注册
+ 原 DLL，然后注销重新登录。
+ 
+diff --git a/rewrite-ui.custom.example.yaml b/rewrite-ui.custom.example.yaml
+index 3a56128..d03e3f0 100644
+--- a/rewrite-ui.custom.example.yaml
++++ b/rewrite-ui.custom.example.yaml
+@@ -8,10 +8,12 @@ patch:
+ # style/layout/corner_radius, hilite_padding_x/y and hilite_spacing.
+ # The index badge uses one third of the highlight background opacity.
+ #
+-# After editing these keys, restart WeaselServer.exe. A full redeploy is NOT
+-# needed: weasel.yaml contains no rewrite_ui/* keys, and the server merges the
+-# patch map from weasel.custom.yaml when it loads the config at startup.
++# After editing these keys you MUST redeploy (WeaselDeployer.exe /deploy) and
++# then restart WeaselServer.exe. The server reads the compiled config at
++# %APPDATA%\Rime\build\weasel.yaml, not weasel.yaml (the installed default
++# copy, which has no rewrite_ui/* keys) and not this custom file. Editing the
++# custom file alone leaves the old values in build\weasel.yaml in effect.
+ #
+ # rewrite_ui/debug: true writes the codes being typed to
+-# %TEMP%\rime.weasel\rewrite-ui.log. Turn it back off and restart the server
+-# when the investigation is finished.
++# %TEMP%\rime.weasel\rewrite-ui.log. Turn it back off, redeploy and restart
++# the server when the investigation is finished.
+-- 
+2.53.0.windows.2
+

@@ -1,0 +1,274 @@
+From 18942af36cb963de6c1fa0f34877e69befffc2b5 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:39 +0800
+Subject: [PATCH 02/18] feat(rewrite-ui): bridge indexed rewrite properties
+ through IPC context
+
+---
+ RimeWithWeasel/RimeWithWeasel.cpp | 48 +++++++++++++++++
+ WeaselIPC/ContextUpdater.cpp      | 13 +++++
+ include/RewriteState.h            | 86 +++++++++++++++++++++++++++++++
+ include/RimeWithWeasel.h          |  2 +
+ include/WeaselIPCData.h           | 10 ++--
+ 5 files changed, 156 insertions(+), 3 deletions(-)
+ create mode 100644 include/RewriteState.h
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 709cd7e..fdd82a8 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -6,6 +6,7 @@
+ #include <WeaselUtility.h>
+ 
+ #include <filesystem>
++#include <fstream>
+ #include <map>
+ #include <array>
+ #include <vector>
+@@ -118,7 +119,14 @@ void RimeWithWeaselHandler::Initialize() {
+   }
+ 
+   RimeConfig config = {NULL};
++  m_rewrite_enabled = false;
++  m_rewrite_debug = false;
+   if (rime_api->config_open("weasel", &config)) {
++    Bool rewrite_enabled = False, rewrite_debug = False;
++    rime_api->config_get_bool(&config, "rewrite_ui/enabled", &rewrite_enabled);
++    rime_api->config_get_bool(&config, "rewrite_ui/debug", &rewrite_debug);
++    m_rewrite_enabled = !!rewrite_enabled;
++    m_rewrite_debug = !!rewrite_debug;
+     if (m_ui) {
+       _UpdateUIStyle(&config, m_ui, true);
+       _UpdateShowNotifications(&config, true);
+@@ -389,6 +397,22 @@ void RimeWithWeaselHandler::OnNotify(void* context_object,
+       reinterpret_cast<RimeWithWeaselHandler*>(context_object);
+   if (!self || !message_type || !message_value)
+     return;
++  if (!strcmp(message_type, "property") &&
++      !strncmp(message_value, "_indexed_rewrite_", 17)) {
++    if (self->m_rewrite_enabled && self->m_rewrite_debug) {
++      LOG(INFO) << "REWRITE session=" << session_id << " " << message_value;
++      std::lock_guard<std::mutex> lock(m_notifier_mutex);
++      try {
++        std::ofstream log(WeaselLogPath() / L"rewrite-ui.log", std::ios::app);
++        log << GetTickCount64() << " session=" << session_id << " " << message_value << '\n';
++      } catch (const std::exception&) {
++        // Optional diagnostics must not interrupt the processor's key path.
++      }
++    }
++    // Read the completed snapshot in _Respond after process_key returns.
++    // A processor can write several properties synchronously for one key.
++    return;
++  }
+   std::lock_guard<std::mutex> lock(m_notifier_mutex);
+   m_message_type = message_type;
+   m_message_value = message_value;
+@@ -896,6 +920,30 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
+     rime_api->free_context(&ctx);
+   }
+ 
++  // configuration information
++  if (m_rewrite_enabled && is_composing) {
++    std::wstring rewrite_body;
++    // Keep raw state separate from ctx.preedit, which TSF inserts inline.
++    // A bounded buffer with an extra sentinel detects truncated properties.
++    const char* names[] = {"stage", "original", "index", "ranges", "replacement"};
++    for (auto name : names) {
++      std::array<char, 8193> value{};
++      std::string key = std::string("_indexed_rewrite_") + name;
++      bool found = rime_api->get_property(session_id, key.c_str(), value.data(), value.size() - 1);
++      if (found && std::strlen(value.data()) >= value.size() - 1) found = false;
++      rewrite_body.append(L"ctx.rewrite.").append(u8tow(name)).append(L"=")
++          .append(found ? escape_string(u8tow(value.data())) : L"").append(L"\n");
++    }
++    const char* raw = RIME_API_AVAILABLE(rime_api, get_input) ? rime_api->get_input(session_id) : nullptr;
++    bool raw_fits = !raw || strnlen(raw, 8193) <= 8192;
++    rewrite_body.append(L"ctx.rewrite.input=")
++        .append(raw && raw_fits ? escape_string(u8tow(raw)) : L"").append(L"\n");
++    // The pipe buffer is 64 KiB. Leave room for style/config and keep normal
++    // candidate responses intact if a processor publishes an oversized state.
++    if (raw_fits && body.size() + rewrite_body.size() < 24000)
++      body.append(rewrite_body);
++  }
++
+   // configuration information
+   actions.push_back("config");
+   body.append(L"config.inline_preedit=")
+diff --git a/WeaselIPC/ContextUpdater.cpp b/WeaselIPC/ContextUpdater.cpp
+index 8d8c2f0..b61b915 100644
+--- a/WeaselIPC/ContextUpdater.cpp
++++ b/WeaselIPC/ContextUpdater.cpp
+@@ -23,6 +23,19 @@ void ContextUpdater::Store(Deserializer::KeyType const& k,
+   if (!m_pTarget->p_context || k.size() < 2)
+     return;
+ 
++  if (k[1] == L"rewrite" && k.size() == 3) {
++    auto& r = m_pTarget->p_context->rewrite;
++    auto v = unescape_string(value);
++    if (v.size() > 8192) { r.clear(); return; }
++    if (k[2] == L"stage") r.stage = v;
++    else if (k[2] == L"original") r.original = v;
++    else if (k[2] == L"index") r.index = v;
++    else if (k[2] == L"ranges") r.ranges = v;
++    else if (k[2] == L"replacement") r.replacement = v;
++    else if (k[2] == L"input") r.input = v;
++    return;
++  }
++
+   if (k[1] == L"preedit") {
+     _StoreText(m_pTarget->p_context->preedit, k, value);
+     return;
+diff --git a/include/RewriteState.h b/include/RewriteState.h
+new file mode 100644
+index 0000000..9b9b9bd
+--- /dev/null
++++ b/include/RewriteState.h
+@@ -0,0 +1,86 @@
++#pragma once
++#include <string>
++#include <vector>
++#include <utility>
++
++namespace weasel {
++// UI-only snapshot. Ranges are ASCII raw-input byte offsets, never preedit offsets.
++struct RewriteState {
++  std::wstring stage, original, index, ranges, replacement, input;
++  struct Unit {
++    std::wstring text;
++    bool active = false;
++    bool badge = false;
++  };
++  bool operator==(const RewriteState& r) const {
++    return stage == r.stage && original == r.original && index == r.index &&
++           ranges == r.ranges && replacement == r.replacement && input == r.input;
++  }
++  void clear() { *this = RewriteState(); }
++  static std::wstring Superscript(const std::wstring& digits) {
++    const wchar_t* glyphs = L"⁰¹²³⁴⁵⁶⁷⁸⁹";
++    std::wstring out;
++    for (auto c : digits) {
++      if (c < L'0' || c > L'9') return L"";
++      out += glyphs[c - L'0'];
++    }
++    return out;
++  }
++  static bool Number(const std::wstring& s, size_t& p, size_t& n) {
++    size_t begin = p;
++    n = 0;
++    while (p < s.size() && s[p] >= L'0' && s[p] <= L'9') {
++      if (n > 4096) return false;
++      n = n * 10 + s[p++] - L'0';
++    }
++    return p > begin && n <= 4096;
++  }
++  std::vector<Unit> Units() const {
++    if (stage != L"armed" && stage != L"index" &&
++        stage != L"head_replace" && stage != L"index_replace") return {};
++    if (original.empty() || original.size() > 4096) return {};
++    // The protocol is raw keyboard codes. Reject non-ASCII rather than slice
++    // UTF-16 using offsets that the Lua processor expressed in bytes.
++    for (const auto* s : {&original, &replacement, &input})
++      for (auto c : *s) if (c < 0x20 || c > 0x7e) return {};
++    std::vector<std::pair<size_t, size_t>> spans;
++    size_t p = 0, last = 0;
++    while (p < ranges.size()) {
++      size_t a, b;
++      if (!Number(ranges, p, a) || p == ranges.size() || ranges[p++] != L'-' ||
++          !Number(ranges, p, b) || a < last || a >= b || b > original.size()) return {};
++      spans.emplace_back(a, b);
++      last = b;
++      if (spans.size() > 256) return {};
++      if (p == ranges.size()) break;
++      if (ranges[p++] != L',' || p == ranges.size()) return {};
++    }
++    if (spans.empty()) return {};
++    size_t target = 1;
++    if (!index.empty()) {
++      p = 0;
++      if (!Number(index, p, target) || p != index.size()) return {};
++    }
++    if (stage == L"head_replace") {
++      target = spans.size();
++      for (size_t i = 0; i < spans.size(); ++i)
++        if (replacement.size() <= spans[i].second) { target = i + 1; break; }
++    }
++    const auto& source = stage == L"head_replace" ? input : original;
++    std::vector<Unit> out;
++    for (size_t i = 0; i < spans.size(); ++i) {
++      const auto a = spans[i].first, b = spans[i].second;
++      std::wstring text;
++      if (stage == L"index_replace" && i + 1 == target) text = replacement;
++      else if (a < source.size()) text = source.substr(a, b - a);
++      if (stage == L"head_replace" && i + 1 == spans.size() && source.size() > b)
++        text += source.substr(b);
++      text += Superscript(std::to_wstring(i + 1));
++      out.push_back({text, i + 1 == target, false});
++    }
++    if (!index.empty()) out.push_back({Superscript(index), false, true});
++    return out;
++  }
++  bool active() const { return !Units().empty(); }
++};
++}  // namespace weasel
+diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
+index ab20d8d..3084eef 100644
+--- a/include/RimeWithWeasel.h
++++ b/include/RimeWithWeasel.h
+@@ -118,6 +118,8 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   SessionStatusMap m_session_status_map;
+   bool m_current_dark_mode;
+   bool m_global_ascii_mode;
++  bool m_rewrite_enabled = false;
++  bool m_rewrite_debug = false;
+   int m_show_notifications_time;
+   DWORD m_pid;
+ };
+diff --git a/include/WeaselIPCData.h b/include/WeaselIPCData.h
+index 09f22f9..063a1b4 100644
+--- a/include/WeaselIPCData.h
++++ b/include/WeaselIPCData.h
+@@ -2,6 +2,7 @@
+ 
+ #include <string>
+ #include <vector>
++#include "RewriteState.h"
+ #include <boost/serialization/vector.hpp>
+ #include <boost/serialization/string.hpp>
+ 
+@@ -120,14 +121,16 @@ struct CandidateInfo {
+ 
+ struct Context {
+   Context() {}
++  bool HasPanelPreedit() const { return !preedit.empty() || rewrite.active(); }
+   void clear() {
+     preedit.clear();
+     aux.clear();
+     cinfo.clear();
++    rewrite.clear();
+   }
+-  bool empty() const { return preedit.empty() && aux.empty() && cinfo.empty(); }
++  bool empty() const { return preedit.empty() && aux.empty() && cinfo.empty() && !rewrite.active(); }
+   bool operator==(const Context& ctx) {
+-    if (preedit == ctx.preedit && aux == ctx.aux && cinfo == ctx.cinfo)
++    if (preedit == ctx.preedit && aux == ctx.aux && cinfo == ctx.cinfo && rewrite == ctx.rewrite)
+       return true;
+     return false;
+   }
+@@ -135,12 +138,13 @@ struct Context {
+ 
+   bool operator!() {
+     if (preedit.str.empty() && aux.str.empty() && cinfo.candies.empty() &&
+-        cinfo.labels.empty() && cinfo.comments.empty())
++        cinfo.labels.empty() && cinfo.comments.empty() && !rewrite.active())
+       return true;
+     else
+       return false;
+   }
+   Text preedit;
++  RewriteState rewrite;
+   Text aux;
+   CandidateInfo cinfo;
+ };
+-- 
+2.53.0.windows.2
+

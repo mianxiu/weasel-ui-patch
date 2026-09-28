@@ -1,0 +1,148 @@
+From 4d9e2116c6c1208c1ff41ea2afb72adc06118140 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:40 +0800
+Subject: [PATCH 04/18] fix(WeaselSetup): trim command-line whitespace and add
+ opt-in setup tracing
+
+---
+ WeaselSetup/SetupTrace.h    | 13 +++++++++++++
+ WeaselSetup/WeaselSetup.cpp | 17 +++++++++++++++++
+ WeaselSetup/imesetup.cpp    |  6 ++++++
+ 3 files changed, 36 insertions(+)
+ create mode 100644 WeaselSetup/SetupTrace.h
+
+diff --git a/WeaselSetup/SetupTrace.h b/WeaselSetup/SetupTrace.h
+new file mode 100644
+index 0000000..860e6fb
+--- /dev/null
++++ b/WeaselSetup/SetupTrace.h
+@@ -0,0 +1,13 @@
++#pragma once
++#include <windows.h>
++inline void SetupTrace(const char* message) {
++  wchar_t path[MAX_PATH];
++  if (!GetEnvironmentVariableW(L"WEASEL_SETUP_LOG", path, MAX_PATH)) return;
++  HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++  if (file == INVALID_HANDLE_VALUE) return;
++  DWORD written;
++  WriteFile(file, message, static_cast<DWORD>(lstrlenA(message)), &written, nullptr);
++  WriteFile(file, "\r\n", 2, &written, nullptr);
++  CloseHandle(file);
++}
+diff --git a/WeaselSetup/WeaselSetup.cpp b/WeaselSetup/WeaselSetup.cpp
+index cdaeb27..fbde329 100644
+--- a/WeaselSetup/WeaselSetup.cpp
++++ b/WeaselSetup/WeaselSetup.cpp
+@@ -4,6 +4,7 @@
+ #include "stdafx.h"
+ 
+ #include "resource.h"
++#include "SetupTrace.h"
+ #include "WeaselUtility.h"
+ #include <thread>
+ 
+@@ -21,9 +22,11 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
+                      HINSTANCE /*hPrevInstance*/,
+                      LPTSTR lpstrCmdLine,
+                      int /*nCmdShow*/) {
++  SetupTrace("entry: CoInitialize");
+   HRESULT hRes = ::CoInitialize(NULL);
+   ATLASSERT(SUCCEEDED(hRes));
+ 
++  SetupTrace("AtlInitCommonControls");
+   AtlInitCommonControls(
+       ICC_BAR_CLASSES);  // add flags to support other controls
+ 
+@@ -34,7 +37,9 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
+   SetThreadUILanguage(langId);
+   SetThreadLocale(langId);
+ 
++  SetupTrace("Run");
+   int nRet = Run(lpstrCmdLine);
++  SetupTrace("Run returned");
+ 
+   _Module.Term();
+   ::CoUninitialize();
+@@ -163,6 +168,16 @@ LPCTSTR GetParamByPrefix(LPCTSTR lpCmdLine, LPCTSTR prefix) {
+ }
+ 
+ static int Run(LPTSTR lpCmdLine) {
++  // Windows launchers can append whitespace to the raw command line.
++  std::wstring normalized = lpCmdLine;
++  const auto last = normalized.find_last_not_of(L" \t\r\n");
++  normalized.erase(last == std::wstring::npos ? 0 : last + 1);
++  const auto first = normalized.find_first_not_of(L" \t\r\n");
++  if (first != std::wstring::npos) normalized.erase(0, first);
++  lpCmdLine = normalized.data();
++  char command[1024] = {};
++  WideCharToMultiByte(CP_UTF8, 0, lpCmdLine, -1, command, sizeof(command), nullptr, nullptr);
++  SetupTrace(command);
+   constexpr bool silent = true;
+   // parameter /? or /help to show commandline args
+   if (!wcscmp(L"/?", lpCmdLine) || !wcscmp(L"/help", lpCmdLine)) {
+@@ -247,8 +262,10 @@ static int Run(LPTSTR lpCmdLine) {
+   }
+ 
+   if (!IsProcAdmin()) {
++    SetupTrace("not admin: elevate");
+     return RestartAsAdmin(lpCmdLine);
+   }
++  SetupTrace("admin confirmed");
+ 
+   bool hans = !wcscmp(L"/s", lpCmdLine);
+   if (hans)
+diff --git a/WeaselSetup/imesetup.cpp b/WeaselSetup/imesetup.cpp
+index a4ed501..1ad3b90 100644
+--- a/WeaselSetup/imesetup.cpp
++++ b/WeaselSetup/imesetup.cpp
+@@ -1,5 +1,6 @@
+ ﻿#include "stdafx.h"
+ #include <string>
++#include "SetupTrace.h"
+ #include <vector>
+ #include <msctf.h>
+ #include <strsafe.h>
+@@ -30,6 +31,7 @@ typedef HRESULT(WINAPI* PTF_INSTALLLAYOUTORTIP)(LPCWSTR psz, DWORD dwFlags);
+   L"Reporting\\LocalDumps\\WeaselServer.exe"
+ 
+ BOOL copy_file(const std::wstring& src, const std::wstring& dest) {
++  SetupTrace("copy_file");
+   BOOL ret = CopyFile(src.c_str(), dest.c_str(), FALSE);
+   if (!ret) {
+     for (int i = 0; i < 10; ++i) {
+@@ -296,6 +298,7 @@ int uninstall_ime_file(const std::wstring& ext,
+ // `register_ime` (IMM/.ime) support removed — TSF-only build
+ 
+ void enable_profile(BOOL fEnable, const std::wstring& profile) {
++  SetupTrace("enable_profile");
+   HRESULT hr;
+   ITfInputProcessorProfiles* pProfiles = NULL;
+ 
+@@ -361,6 +364,7 @@ int register_text_service(const std::wstring& tsf_path,
+   shExInfo.nShow = SW_SHOW;
+   shExInfo.hInstApp = 0;
+   if (ShellExecuteExW(&shExInfo)) {
++    SetupTrace("waiting for regsvr32");
+     WaitForSingleObject(shExInfo.hProcess, INFINITE);
+     CloseHandle(shExInfo.hProcess);
+   } else {
+@@ -380,6 +384,7 @@ int register_text_service(const std::wstring& tsf_path,
+ }
+ 
+ int install(const std::wstring& profile, bool silent) {
++  SetupTrace("install");
+   std::wstring ime_src_path;
+   int retval = 0;
+ 
+@@ -432,6 +437,7 @@ int install(const std::wstring& profile, bool silent) {
+   // example in ref page not right with "*PTF_ INSTALLLAYOUTORTIP"
+   // space inside should be removed
+   HMODULE hInputDLL = LoadLibrary(TEXT("input.dll"));
++  SetupTrace("InstallLayoutOrTip");
+   if (hInputDLL) {
+     PTF_INSTALLLAYOUTORTIP pfnInstallLayoutOrTip;
+     pfnInstallLayoutOrTip =
+-- 
+2.53.0.windows.2
+

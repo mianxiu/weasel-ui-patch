@@ -1,0 +1,710 @@
+From 5e51b86a21dbb3d69ec162e33e6b315224c1c580 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 22:17:16 +0800
+Subject: [PATCH 18/18] docs: restructure documentation for patch-only
+ maintenance
+
+---
+ README.md      | 113 ++++++++++++++++++-----
+ REWRITE-UI.md  |  77 ++++++++++------
+ agent.md       | 243 ++++++++++++++++++++++++++++++++-----------------
+ rime/README.md |  23 +++--
+ 4 files changed, 312 insertions(+), 144 deletions(-)
+
+diff --git a/README.md b/README.md
+index eb47873..bc5ac91 100644
+--- a/README.md
++++ b/README.md
+@@ -3,10 +3,15 @@
+ 基于 [rime/weasel](https://github.com/rime/weasel) 的个人定制，为 Windows
+ 小狼毫增加「未上屏编码快速重写」的**原生 UI**。
+ 
+-> **个人自用项目，不向上游提交 PR。** 这是独立仓库，主线分支 `main`（15 个提交
+-> 直接叠在 `d73f6295` 之上）。上游镜像另存为 `upstream-master` 分支，用于对比：
+-> [`compare/upstream-master...main`](https://github.com/mianxiu/weasel-ui-patch/compare/upstream-master...main)。
+-> 将来若要把某部分贡献上游，应另开干净分支单独整理。
++> **个人自用，不向上游提 PR。采用「补丁式维护」。**
++>
++> 正式产物是**补丁系列**，托管在
++> [mianxiu/weasel-ui-patch](https://github.com/mianxiu/weasel-ui-patch)：
++> 只有 17 个补丁加几个脚本，**约 300 KB，不含上游源码**。
++>
++> **你现在看到的这棵树是重建出来的工作副本** —— 由补丁仓库里的 `setup.ps1`
++> 执行「clone 官方 weasel + `git am` 打上 17 个补丁」得到。因此它同时拥有
++> 上游的完整历史和本项目的全部改动，`git rebase upstream/master` 照常可用。
+ 
+ ## 这是什么
+ 
+@@ -60,17 +65,40 @@ Lua processor 写 _indexed_rewrite_*
+ Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没有往 `preedit`
+ 塞隐藏字符，更没有为了刷新去改 `context.input`。
+ 
+-## 仓库结构
++## 补丁式维护
++
++```text
++GitHub  mianxiu/weasel-ui-patch       ← 只有补丁，约 300 KB
++        ├─ patches/0001..0017.patch     完整改动集（含本树里所有新增文件）
++        ├─ BASE-COMMIT.txt              补丁基于哪个上游提交
++        ├─ setup.ps1                    重建工作副本
++        └─ resync.ps1                   同步上游并重新导出补丁
++
++本地    weasel/                        ← 你正在看的这棵树，可随时重建
++        └─ setup.ps1 生成：clone 官方 weasel → git am 补丁 → 初始化 submodule
++```
++
++几个要点：
++
++- **上游源码不进你的仓库。** 它是公开永久的，需要时从官方 clone（实测 1.4 秒）。
++- **`patches/` 是唯一权威。** 这棵树里的一切 —— `rime/`、构建脚本、文档、测试 ——
++  都来自补丁。整棵树删掉，`setup.ps1` 一分钟内重建。
++- **`rebase` 能力不丢。** `git am` 产生的提交真实地坐在上游历史之上，
++  共同祖先还在，所以同步上游和以前完全一样。
++- **不要把本树推到任何远端。** 它是一次性产物；需要备份的只有补丁仓库。
++  本树的 `origin` remote 已被移除，就是为了防止误推 19 MB 历史。
++
++## 工作副本内容
+ 
+ | 路径 | 说明 |
+ |---|---|
+ | [`rime/`](rime/README.md) | **运行期文件**：核心 Lua、`wanxiang_pro.custom.yaml`、`rewrite_ui` 开关，含一键装回脚本 `install-rime-files.ps1` |
+ | [`REWRITE-UI.md`](REWRITE-UI.md) | 补丁说明：安装、验证情况、构建基线、已知遗留 |
+-| [`agent.md`](agent.md) | 完整开发记录与约定：设计、踩坑、验收结论、维护要求、上游更新后如何重建 |
++| [`agent.md`](agent.md) | 完整开发记录与约定：设计、踩坑、验收结论、维护要求、上游同步流程 |
+ | `RimeWithWeasel/`、`WeaselIPC/`、`WeaselUI/` | Rewrite UI 改动所在 |
+ | `include/RewriteState.h`、`WeaselUI/RewriteLayout.h` | 新增的模型与布局头文件 |
+ | `test/rewrite_state_test.cpp` 等 | 状态机、IPC 管线、librime property 测试与夹具 |
+-| `build-rewrite.cmd`、`package-rewrite.ps1` | 构建与出包 |
++| `build-rewrite.cmd`、`package-rewrite.ps1` | 构建与出包（**必须在这棵树里跑**） |
+ | `Apply-Patch.cmd` / `Apply-Patch.ps1` | 在已装小狼毫上覆盖安装（含备份与回退） |
+ | `enable-rewrite-ui.ps1` | 开关 `rewrite_ui/*`；默认只预览，加 `-Apply` 才写盘 |
+ 
+@@ -78,8 +106,8 @@ Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没
+ 
+ 完整步骤见 [`REWRITE-UI.md`](REWRITE-UI.md)，要点：
+ 
+-1. 需要已有小狼毫和万象 Pro（本仓库不含万象词库与方案数据）。
+-2. 把本仓库自带的运行期文件装进 Rime 用户目录：
++1. 需要已有小狼毫和万象 Pro（本项目不含万象词库与方案数据）。
++2. 把工作副本自带的运行期文件装进 Rime 用户目录：
+ 
+    ```powershell
+    pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+@@ -117,7 +145,11 @@ Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没
+ MSVC v143（14.44.35207）+ Windows SDK 10.0、Boost 1.84.0 静态库、
+ 官方 librime 1.17.0（含 librime-lua）。运行 `build-rewrite.cmd` 构建
+ x64/x86 两套，`package-rewrite.ps1` 出包并刷新 `SHA256SUMS.txt`。
+-基线 commit、子模块版本与依赖下载地址见 `REWRITE-UI.md`。
++
++`setup.ps1` 重建出来的树已经包含源码和 `librime` submodule，但**构建还缺两样
++不进 git 的东西**：`deps/`（Boost 静态库、librime 头文件与导入库）和
++`weasel.props`（从 `weasel.props.template` 复制后填本机值）。
++准备方法见 [`REWRITE-UI.md`](REWRITE-UI.md) 与 [`agent.md`](agent.md) §25.1。
+ 
+ ## 许可与致谢
+ 
+@@ -130,26 +162,57 @@ x64/x86 两套，`package-rewrite.ps1` 出包并刷新 `SHA256SUMS.txt`。
+ librime、marisa-trie、OpenCC、plum、WinSparkle、yaml-cpp、7-Zip（完整清单
+ 与许可条款见上游 README）。
+ 
+-输入方案数据（万象 Pro、小鹤双拼等）不属于本仓库，也不随本仓库分发；
+-仓库里的 `rime/` 只包含本补丁自己需要的 Lua 与配置片段。
++输入方案数据（万象 Pro、小鹤双拼等）不属于本项目，也不随补丁分发；
++`rime/` 里只包含本补丁自己需要的 Lua 与配置片段。
++
++## 在新电脑上部署
++
++```powershell
++# 1. 取补丁仓库（约 300 KB）
++git clone https://github.com/mianxiu/weasel-ui-patch.git
++cd weasel-ui-patch
+ 
+-## 从零恢复
++# 2. 重建工作副本：clone 官方 weasel → 检出基线 → git am 打上 17 个补丁
++#    → 初始化 librime submodule（构建需要它的头文件）
++pwsh -NoProfile -File .\setup.ps1
++#    生成 ..\weasel\，含全部改动，可直接编译
+ 
+-换机器或重装时的完整顺序：
++# 3. 装好小狼毫与万象 Pro，准备好词库
+ 
+-1. `git clone --recursive` 本仓库（主线 `main`）
+-2. 装好小狼毫与万象 Pro，准备好词库
+-3. `rime\install-rime-files.ps1 -Apply` —— 装回 Lua 与配置
+-4. `build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd` —— 编译并安装程序
+-5. `WeaselDeployer.exe /deploy`，然后重启 `WeaselServer.exe`
+-6. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
+-7. 按上面的验收项回归
++# 4. 把 Rime 侧文件装进用户目录（脚本在重建出来的树里）
++pwsh -NoProfile -File ..\weasel\rime\install-rime-files.ps1 -Apply
+ 
+-只调 `rewrite_ui/*` 开关时不需要第 4、6 步，但第 5 步不能省。
++# 5. 编译并安装程序（必须切到 weasel\ 里，不能在补丁仓库里跑）
++cd ..\weasel
++.\build-rewrite.cmd
++pwsh -NoProfile -File .\package-rewrite.ps1
++.\Apply-Patch.cmd
++
++# 6. 让配置生效
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselDeployer.exe' /deploy
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe' /quit
++Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
++
++# 7. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
++# 8. 按「验证情况」一节回归
++```
++
++只调 `rewrite_ui/*` 开关时不需要第 5、7 步，但第 6 步不能省。
+ 
+ **注意 `indexed_rewrite_pro.lua` 有两份**：`%APPDATA%\Rime\lua\` 里那份是真正
+ 被加载的，`rime/lua/` 那份是版本控制副本。改了任意一份都要同步另一份，
+-否则换机器恢复出来的是旧算法。
++否则新电脑恢复出来的是旧算法。
++
++## 上游更新后
++
++```powershell
++cd weasel-ui-patch
++pwsh -NoProfile -File .\resync.ps1
++```
++
++它做四件事：`git fetch upstream` → 在 `..\weasel\` 里 `git rebase upstream/master`
++→ 重新导出 `patches/` → 更新 `BASE-COMMIT.txt`。
+ 
+-上游更新后如何重建（`rebase` 流程、冲突热点、三个坑）见
+-[`agent.md`](agent.md) §25 与 [`REWRITE-UI.md`](REWRITE-UI.md)。
++**冲突要你手工解决**（和以前一样）：脚本遇到冲突会停下并提示，
++处理完 `git add` + `git rebase --continue`，然后再跑一次 `resync.ps1 -Export`。
++冲突热点清单见 [`agent.md`](agent.md) §25.3。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 438c159..ec3d204 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -149,10 +149,23 @@ custom 里已改成 `false`，但 `build\weasel.yaml` 里还是 `true`，
+ 依赖来源：https://github.com/rime/librime/releases/tag/1.17.0
+ 及 https://archives.boost.io/release/1.84.0/source/boost_1_84_0.zip 。
+ 
+-## 源码提交
++## 补丁来源与维护方式
+ 
+-改动全部位于 `main` 分支，基线为
+-`d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，共 7 个提交：
++本项目采用**补丁式维护**：正式产物是补丁系列，托管在
++[mianxiu/weasel-ui-patch](https://github.com/mianxiu/weasel-ui-patch)，
++**约 300 KB，不含上游源码**。
++
++```text
++GitHub  mianxiu/weasel-ui-patch
++        ├─ patches/0001..0017.patch   完整改动集
++        ├─ BASE-COMMIT.txt            补丁基于哪个上游提交
++        ├─ setup.ps1                  重建工作副本
++        └─ resync.ps1                 同步上游并重新导出补丁
++
++本地    weasel/                       由 setup.ps1 重建的工作副本
++```
++
++补丁基于上游提交 `d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，共 17 个提交：
+ 
+ ```text
+ 28e627e perf(WeaselUI): use software Direct2D render target for panel
+@@ -162,35 +175,37 @@ d052fb4 feat(rewrite-ui): draw syllable cells, active highlight and index badge
+ fd33dc1 test(rewrite-ui): add state, IPC pipeline and librime property tests
+ 44e2972 chore(build): add rewrite build, package, activation and patch scripts
+ 1e2fd4e docs(rewrite-ui): document the rewrite UI patch and example config
++…（其余为文档与 rime/ 运行期文件）
+ ```
+ 
+ 其中 `4d9e211` 同时包含命令行首尾空白归一（修掉参数尾部空格导致 `/s` 未识别、
+ 进入隐藏交互窗口的问题）和 `WEASEL_SETUP_LOG` 门控的安装 trace；两者落在同一个
+ 代码块内，无法干净拆分。trace 不设置该环境变量时零开销。
+ 
+-remote 配置（2026-09-28 最终状态）：
++**重建与同步**：
+ 
+-```text
+-origin        https://github.com/mianxiu/weasel-ui-patch.git  （独立仓库，主线 main）
+-upstream      https://github.com/rime/weasel.git              （官方）
+-```
++```powershell
++# 新电脑 / 树被删掉之后
++git clone https://github.com/mianxiu/weasel-ui-patch.git
++cd weasel-ui-patch
++pwsh -NoProfile -File .\setup.ps1
+ 
+-主分支 `main` 跟踪 `origin/main`，远端 SHA 与本地一致，领先 `upstream/master`
+-16 个提交。同步上游用 `git fetch upstream` 后 rebase 或 merge 到 `main`。
++# 上游发新版之后
++pwsh -NoProfile -File .\resync.ps1
++```
+ 
+-远端还有一个 `upstream-master` 分支（就是 `d73f6295` 的上游镜像），
+-专门用于 GitHub 上的对比视图：
+-`compare/upstream-master...main`。
++**工作副本不推到任何远端**（它的 `origin` 已被移除），因为：
++上游源码是公开永久的、随时能重新 clone；补丁是唯一需要备份的东西，
++而它已经在补丁仓库里了。这样也避免了误把 19 MB 上游历史推回远端。
+ 
+ 早期用过的 fork `mianxiu/weasel` 已退役（本地 remote 已移除，GitHub 仓库
+-在网页上删除）——退役前确认过它没有任何新仓库没有的提交。
++在网页上删除）；上一版「独立仓库存完整树」的做法也已改为补丁式。
+ 
+-**本包是个人自用，不向上游 `rime/weasel` 提 PR。** 这个分支混着软件渲染改动
++**本包是个人自用，不向上游 `rime/weasel` 提 PR。** 补丁里混着软件渲染改动
+ （issue #1913）、安装脚本 trace 和个人偏好，不适合整体提交上游；将来若要贡献
+-某一部分，应另开干净分支单独整理。
++某一部分，应从工作副本里另开干净分支单独整理。
+ 
+-`agent.md`（本项目的完整开发记录与约定）也已纳入版本控制，位于仓库根目录，
+-随本分支一起提交。
++`agent.md`（本项目的完整开发记录与约定）位于工作副本根目录，随补丁一起下发。
+ 
+ ## 已知遗留
+ 
+@@ -208,8 +223,8 @@ upstream      https://github.com/rime/weasel.git              （官方）
+ 
+ ## Rime 侧文件在哪里【重要】
+ 
+-Weasel 侧的程序文件全部来自本仓库；整套系统还需要三个 **Rime 用户目录文件**，
+-它们已纳入仓库的 `rime/` 目录（并随本包的 `rewrite-source.zip` 分发）：
++Weasel 侧的程序文件全部来自补丁；整套系统还需要三个 **Rime 用户目录文件**，
++它们在工作副本的 `rime/` 目录里（并随本包的 `rewrite-source.zip` 分发）：
+ 
+ | 仓库路径 | 目标位置 | 作用 |
+ |---|---|---|
+@@ -239,13 +254,22 @@ pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+ 
+ ## 上游更新后如何重建
+ 
+-简要版（完整操作手册、冲突热点与踩坑见 `agent.md` §25）：
++用补丁仓库里的脚本（完整操作手册、冲突热点与踩坑见 `agent.md` §25）：
++
++```powershell
++cd weasel-ui-patch
++pwsh -NoProfile -File .\resync.ps1     # fetch + rebase + 重新导出补丁
++```
++
++`resync.ps1` 做四件事：`git fetch upstream` → 在 `..\weasel\` 里
++`git rebase upstream/master` → 重新导出 `patches/` → 更新 `BASE-COMMIT.txt`。
++遇到冲突它会停下并提示，你处理完 `git rebase --continue` 后再跑一次
++`resync.ps1 -Export`。
++
++同步完之后要重新编译并安装（**在工作副本里跑，不是补丁仓库里**）：
+ 
+ ```powershell
+-cd weasel
+-git fetch upstream
+-git checkout main
+-git rebase upstream/master          # 冲突热点：RimeWithWeasel.cpp、WeaselPanel.cpp、README.md
++cd ..\weasel
+ Test-Path weasel.props              # 被 git 忽略，rebase 不会提示版本号变更
+ .\build-rewrite.cmd                 # 构建 x64 + x86
+ pwsh -NoProfile -File .\package-rewrite.ps1
+@@ -259,7 +283,8 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 
+ 重建所需但**不被 git 跟踪**的依赖：`weasel.props`、`deps/boost_1_84_0`、
+ `deps/rime-x64`、`deps/rime-x86`（`deps/` 下没有任何文件被跟踪），
+-以及 `C:\BuildTools` 下的 MSVC v143。
++以及 `C:\BuildTools` 下的 MSVC v143。`librime` submodule 由 `setup.ps1`
++自动初始化（构建需要它的头文件）。
+ 
+ 只调 `rewrite_ui/*` 开关时不需要重建，但仍然要**重新部署 + 重启服务**：
+ 服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`。
+diff --git a/agent.md b/agent.md
+index 95e7e98..0a2fa92 100644
+--- a/agent.md
++++ b/agent.md
+@@ -7,27 +7,36 @@
+ > `【待办】` 标注。**当前实际状态、构建基线与验收结论以 `weasel/REWRITE-UI.md`
+ > 为准**，不要把本文档中未标注的早期设想当成现状。
+ >
+-> 仍在维护的只有四处：
++> **维护方式（2026-09-28 起）：补丁式。**
+ >
+ > ```text
+-> 1. rime/lua/indexed_rewrite_pro.lua     核心编辑算法（%APPDATA%\Rime 的版本控制副本）
+-> 2. rime/                                另外两个运行期文件 + 一键装回脚本
+-> 3. main 分支                             Weasel 侧 Rewrite UI 补丁
++> 正式产物  https://github.com/mianxiu/weasel-ui-patch
++>           patches/0001..0017.patch + BASE-COMMIT.txt + setup.ps1 + resync.ps1
++>           约 300 KB，不含上游源码
++>
++> 工作副本  你现在看到的这棵树，由 setup.ps1「clone 官方 + git am 补丁」重建
++>           它同时拥有上游完整历史与本项目全部改动，rebase 照常可用
++> ```
++>
++> 仍在维护的东西：
++>
++> ```text
++> 1. patches/                             唯一权威；树里的一切都由它生成
++> 2. rime/lua/indexed_rewrite_pro.lua     核心编辑算法（%APPDATA%\Rime 的版本控制副本）
++> 3. rime/                                另外两个运行期文件 + 一键装回脚本
+ > 4. weasel/dist/Weasel-Rewrite-UI.zip    补丁包，由 package-rewrite.ps1 生成
+ > ```
+ >
+ > 注意 `indexed_rewrite_pro.lua` 有**两个副本**：`%APPDATA%\Rime\lua\` 里那份是
+-> 真正被加载的，仓库里 `rime/lua/` 那份是版本控制副本。改完要通过
++> 真正被加载的，工作副本里 `rime/lua/` 那份是版本控制副本。改完要通过
+ > `rime/install-rime-files.ps1 -Apply` 装回去，见 §25.6。
+ >
+-> **用途：个人自用，不提上游 PR。** 代码托管在**独立仓库**
+-> `https://github.com/mianxiu/weasel-ui-patch`（2026-09-28 从 fork 迁出），
+-> 主线就是 `main`；同步官方用 `upstream` remote。将来若要把某部分改动
+-> 贡献给上游，再从干净分支单独整理，**不要直接拿 `main` 开 PR**——
++> **用途：个人自用，不提上游 PR。** 将来若要把某部分改动贡献给上游，
++> 从工作副本另开干净分支单独整理，**不要直接拿补丁开 PR** ——
+ > 它混着软件渲染改动、安装脚本 trace 和个人偏好配置。
+ >
+-> 仓库根 `README.md` 就是本项目说明（简中技术向），默认分支是 `main`，
+-> 所以 GitHub 首页直接显示它——**不需要再去改任何默认分支设置**。
++> **工作副本不推到任何远端**（`origin` 已移除）。上游源码公开永久、随时能
++> 重新 clone；唯一需要备份的是补丁，而它已经在补丁仓库里。见 §0.7.2。
+ 
+ ## 0. 仓库准备与开发流程
+ 
+@@ -102,9 +111,9 @@ upstream  https://github.com/rime/weasel.git
+ ### 0.4 不要直接在主分支开发
+ 
+ > 【已调整】这一条针对的是**官方仓库**：不要在 `rime/weasel` 的 `master` 上直接改。
+-> 本项目现在是独立仓库 `mianxiu/weasel-ui-patch`，它的 `main` **就是**本补丁的主线
+-> （上游镜像另存为 `master` 与远端的 `upstream-master`），所以日常改动直接提交到
+-> `main` 即可。下面的原始约定保留为历史记录。
++> 本项目采用补丁式维护：日常在**工作副本**（`..\weasel\`）的 `main` 上直接改并提交，
++> 然后 `resync.ps1 -Export` 重新导出补丁。工作副本没有远端，不存在"推到主分支"
++> 的问题。下面的原始约定保留为历史记录。
+ 
+ 创建独立功能分支：
+ 
+@@ -150,13 +159,13 @@ Codex 开始工作前必须先读：
+ agent.md
+ ```
+ 
+-【已完成】已于 2026-09-28 复制到 `weasel/agent.md` 并纳入版本控制，
+-随主线 `main` 一起 push 到 `mianxiu/weasel-ui-patch`。
++【已完成】已于 2026-09-28 放入工作副本根部（`weasel/agent.md`），
++现在随补丁一起下发 —— 用 `setup.ps1` 重建出来的树里就有它。
+ 
+-【单一来源】原来放在工作目录根部（`小狼毫万象补丁\agent.md`）的那份重复副本
+-**已删除**，避免两份内容分叉。现在 `weasel/agent.md`（即仓库根的 `agent.md`）
+-是唯一正本；工作目录根部只剩 `weasel/` 与 `.build-tools/`，不再有散落的文档。
+-需要临时取回旧副本可用 `git show HEAD:agent.md`。
++【单一来源】工作目录根部（`小狼毫万象补丁\agent.md`）那份重复副本**已删除**。
++现在 `weasel/agent.md` 是唯一正本；补丁仓库里只有 `patches/` 和脚本，
++不放文档副本（要看文档先跑 `setup.ps1` 重建，或者直接从补丁里读）。
++需要临时取回历史版本可用 `git show HEAD:agent.md`。
+ 
+ ### 0.6 第一轮只做源码调查【已完成】
+ 
+@@ -237,8 +246,8 @@ git submodule status
+ ### 0.7.1 本项目的实际基线【已完成】
+ 
+ ```text
+-仓库        https://github.com/mianxiu/weasel-ui-patch （独立仓库，非 fork）
+-主线分支    main
++补丁仓库    https://github.com/mianxiu/weasel-ui-patch （只有补丁，约 300 KB）
++工作副本    本地 weasel/（由 setup.ps1 重建，无远端）
+ 基线 commit d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ librime     git 子模块 1c23358157934bd6e6d6981f0c0164f05393b497（1.13.1）
+ 实际链接    官方 librime 1.17.0 33e7814（含 librime-lua ec52e48）
+@@ -249,45 +258,48 @@ Boost       1.84.0（静态库）
+ 
+ ### 0.7.2 remote 布局【已完成】
+ 
+-2026-09-28 的最终状态（经历过 fork 阶段，现已迁到独立仓库）：
++2026-09-28 的最终状态（经历 fork → 独立仓库存完整树 → 补丁式，三次演进）：
+ 
+ ```text
+-origin        https://github.com/mianxiu/weasel-ui-patch.git  （独立仓库，主线 main）
+-upstream      https://github.com/rime/weasel.git              （官方）
+-```
++补丁仓库  https://github.com/mianxiu/weasel-ui-patch.git
++          只有 patches/ + BASE-COMMIT.txt + setup.ps1 + resync.ps1 + README.md
++          约 300 KB
+ 
+-旧 fork `mianxiu/weasel` 已退役：本地 remote `fork-backup` 已移除。
+-退役前核对过它只有 3 个引用（`HEAD` + `feature/rewrite-ui` `ea4e622` +
+-`master` `d73f629`），且这两个提交都已经是 `main` 的祖先，
+-**没有任何新仓库没有的内容**，所以删除不丢东西。
++工作副本  本地 weasel/（本目录）
++          remote 只有 upstream → https://github.com/rime/weasel.git
++          origin 已移除 —— 它是一次性产物，不该被推送
++```
+ 
+-> GitHub 上的仓库本身要在网页删除（`Settings → Danger Zone →
+-> Delete this repository`，需手动输入仓库名确认）；`git` 没有这个能力，
+-> 删除 API 又需要带 `delete_repo` 权限的令牌。
++| 位置 | 内容 | 谁需要备份 |
++|---|---|---|
++| 补丁仓库（GitHub） | 17 个补丁 + 脚本 | ✅ 唯一需要备份的东西 |
++| 工作副本（本地） | 上游完整历史 + 17 个提交构成的完整源码树 | ❌ 可随时用 `setup.ps1` 重建 |
++| `deps/`、`weasel.props`（本地） | Boost 静态库、librime 导入库、本机构建参数 | ⚠️ 不进 git，换机器要重新准备（§25.1） |
+ 
+-分支对应：
++**为什么工作副本不需要远端**：上游源码是公开永久的（随时 clone 回来），
++补丁是唯一不可再生内容，而它已经在补丁仓库里了。移除 `origin` 还能防止
++误把 19 MB 上游历史推回远端。
+ 
+-| 本地 | 远端 | 说明 |
+-|---|---|---|
+-| `main` | `origin/main` | 主线，16 个提交在 `upstream/master` 之上 |
+-| `master` | `upstream/master` | 上游镜像（本地便利分支，不推） |
+-| — | `origin/upstream-master` | 推到远端的上游镜像，**专门用于 GitHub 的 compare 视图** |
++同步上游的两条命令（§25.2 有完整手册）：
+ 
+-`origin/upstream-master` 与 `main` 同仓库，所以
+-`github.com/mianxiu/weasel-ui-patch/compare/upstream-master...main`
+-就能看到"我相对上游改了什么"，和 fork 时期的对比视图等价。
++```powershell
++cd weasel-ui-patch
++pwsh -NoProfile -File .\resync.ps1     # fetch + rebase + 重新导出补丁
++```
+ 
+ 【历史】§0.1／§0.3 要求的 Fork 与 remote 配置曾在 2026-09-28 20:40 补做
+ （`origin`＝fork、`upstream`＝官方）；由于确定不会向上游提 PR，fork 相对于
+-独立仓库已无独有优势，当日 21:22 迁出到独立仓库，随后退役。
++独立仓库已无独有优势，当日 21:22 迁出到独立仓库，随后退役；
++同日又因「不想让远端存 19 MB 上游源码」改为补丁式。
++三个阶段的取舍记录见 §25.7。
+ 
+ 【踩坑】`git remote rename origin upstream` 会把 `refs/remotes/origin/*`
+ 整体搬到 `refs/remotes/upstream/*`，`branch.master.remote` 也会自动跟着改，
+ 搬家后必须重新 `git fetch` 才有新的 remote-tracking ref。
+ 
+-【踩坑】迁到新仓库时，如果新仓库是"带 README 初始化"建的，会有一个
+-自动生成的 `main`（Initial commit）。我们的做法是 force-push 覆盖它：
+-`git push --force origin <你的分支>:main`，这样默认分支无需改动就是正确的。
++【踩坑】如果远端仓库是"带 README 初始化"建的，会有一个自动生成的
++`main`（Initial commit）。要么 force-push 覆盖它
++（`git push --force origin <你的分支>:main`），要么在网页上改默认分支。
+ 
+ ### 0.8 每一步单独提交
+ 
+@@ -1914,6 +1926,16 @@ jx¹   ji²   [jm³]   bj⁴    ³
+    `WeaselServer.exe`** 才生效（§11.1、§20.1）。只改 custom 文件不部署是无效的。
+ 8. **不要引入 §6 里已经验证失败的路线**，也不要为了刷新去改 `context.input`
+    或清空 composition（§18 红线）。
++9. **改了工作副本就要重新导出补丁**，否则补丁仓库落后于你手上的代码：
++
++   ```powershell
++   cd ..\weasel-ui-patch
++   pwsh -NoProfile -File .\resync.ps1 -Export    # 只重新导出，不动上游
++   git commit -am 'patches: <说明>' ; git push
++   ```
++
++   **工作副本本身没有远端**（`origin` 已移除），所以忘了导出 = 改动只存在于本机，
++   一旦这棵树被删就找不回来了。这是补丁式维护唯一新增的纪律。
+ 
+ ### 24.2 已知遗留
+ 
+@@ -1930,11 +1952,35 @@ jx¹   ji²   [jm³]   bj⁴    ³
+ 
+ ---
+ 
+-## 25. 上游更新后的重建流程【操作手册】
++## 25. 上游同步与重建手册【操作手册】
++
++### 25.0 两个入口脚本
++
++补丁仓库 `mianxiu/weasel-ui-patch` 里有两个脚本，日常只需要它们：
++
++| 脚本 | 用途 | 何时用 |
++|---|---|---|
++| `setup.ps1` | 重建工作副本：clone 官方 weasel → 检出 `BASE-COMMIT.txt` 里的基线 → `git am patches/*.patch` → 初始化 `librime` submodule | 新电脑、工作副本被删、想验证补丁能干净应用 |
++| `resync.ps1` | 同步上游：`git fetch upstream` → 在 `..\weasel\` 里 `git rebase upstream/master` → 重新导出 `patches/` → 更新 `BASE-COMMIT.txt` | 上游发新版之后 |
++
++两者都以**补丁仓库的父目录**为默认工作区（即 `..\weasel\`），
++这样补丁仓库里不会嵌套一个 19 MB 的 git 仓库。
++
++```powershell
++# 新电脑
++git clone https://github.com/mianxiu/weasel-ui-patch.git
++cd weasel-ui-patch
++pwsh -NoProfile -File .\setup.ps1
++
++# 上游发新版
++pwsh -NoProfile -File .\resync.ps1
++```
+ 
+ ### 25.1 重建需要什么
+ 
+-源码仓库本身不含以下内容（`.gitignore` 第 38、56 行），重建前必须确认它们还在：
++`setup.ps1` 会解决源码层面的东西（含 `librime` submodule，
++`RimeWithWeasel.vcxproj` 引用它的 `include` 目录）。
++但**编译还缺两样不进 git 的东西**：
+ 
+ | 依赖 | 位置 | 说明 |
+ |---|---|---|
+@@ -1946,50 +1992,48 @@ jx¹   ji²   [jm³]   bj⁴    ³
+ `deps/` 下**没有任何文件被 git 跟踪**（实测 `git ls-files deps` 为 0 个），
+ 换机器或清理过目录后要重新准备。
+ 
+-### 25.2 完整步骤
++### 25.2 上游发新版之后的完整步骤
+ 
+ ```powershell
+-cd C:\Users\mianx\Desktop\小狼毫万象补丁\weasel
+-
+-# 0. 工作区必须干净，否则先 commit 或 stash
+-git status
+-
+-# 1. 取上游
+-git fetch upstream
+-
+-# 2. 个人分支建议 rebase，历史比 merge 干净
+-git checkout main
+-git rebase upstream/master
+-
+-# 3. 解决冲突（热点见 §25.3），确认结果
+-git status
+-git log --oneline -5
+-
+-# 4. 检查 weasel.props 是否还在；并核对上游有没有改 weasel.props.template
+-Test-Path weasel.props
++# ── 第一步：同步源码并重新导出补丁（在补丁仓库里跑）──
++cd C:\Users\mianx\Desktop\小狼毫万象补丁\weasel-ui-patch
++pwsh -NoProfile -File .\resync.ps1
++#   它内部做：git fetch upstream → 在 ..\weasel\ 里 git rebase upstream/master
++#             → git format-patch 重新生成 patches/ → 更新 BASE-COMMIT.txt
++#   遇冲突会停下并提示；处理完 git rebase --continue，再跑 .\resync.ps1 -Export
++git add -A ; git commit -m 'patches: rebase onto upstream <新版>' ; git push
++
++# ── 第二步：重新编译并安装（在工作副本里跑，不能在补丁仓库里跑）──
++cd ..\weasel
++git status                          # 必须是干净的
++Test-Path weasel.props              # 别丢了；并核对上游有没有改 weasel.props.template
+ git diff upstream/master -- weasel.props.template
+-
+-# 5. 构建 x64 + x86（日志写到 build-rewrite-x64.log / -x86.log）
+-.\build-rewrite.cmd
+-
+-# 6. 出包：刷新包内 README.md、rewrite-source.zip、SHA256SUMS.txt
++.\build-rewrite.cmd                 # 构建 x64 + x86
+ pwsh -NoProfile -File .\package-rewrite.ps1
++.\Apply-Patch.cmd                   # 覆盖安装，需管理员权限
+ 
+-# 7. 覆盖安装（需要管理员权限，会自动备份并在失败时回滚）
+-.\Apply-Patch.cmd
+-#   或显式指定安装目录：
+-#   .\Apply-Patch.ps1 -Target 'C:\Program Files\Rime\weasel-0.17.4'
+-
+-# 8. 让配置生效：重新部署 + 重启服务
++# ── 第三步：让配置生效 ──
+ & 'C:\Program Files\Rime\weasel-0.17.4\WeaselDeployer.exe' /deploy
+ & 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe' /quit
+ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 
+-# 9. 真机验收（§17.1）
++# ── 第四步：真机验收（§17.1）──
+ #    jxjirzbj → Tab → 3 → j → m → Backspace → Esc
+ ```
+ 
+-第 7 步之后需要**注销并重新登录 Windows**，宿主进程才会加载新的 TSF DLL。
++第二步之后需要**注销并重新登录 Windows**，宿主进程才会加载新的 TSF DLL。
++
++### 25.2.1 想手动做（不用脚本）
++
++```powershell
++cd ..\weasel                              # 工作副本
++git fetch upstream
++git rebase upstream/master                # 冲突热点见 §25.3
++cd ..\weasel-ui-patch                     # 回补丁仓库重新导出
++Remove-Item patches\*.patch
++git -C ..\weasel format-patch (Get-Content BASE-COMMIT.txt)..HEAD -o patches
++#   并把 BASE-COMMIT.txt 更新为新的上游尖端
++```
+ 
+ ### 25.3 冲突热点
+ 
+@@ -2034,12 +2078,12 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ ```
+ 
+-### 25.6 运行期文件与仓库副本【已纳入版本控制】
++### 25.6 运行期文件与工作副本副本【已纳入补丁】
+ 
+-Weasel 侧的二进制来自本仓库，但整套系统还需要三个 **Rime 用户目录文件**。
++Weasel 侧的二进制来自补丁，但整套系统还需要三个 **Rime 用户目录文件**。
+ 它们原先只存在于本机 `%APPDATA%\Rime`，已于 2026-09-28 纳入仓库：
+ 
+-| 仓库路径 | 目标位置 | 作用 | 丢失后果 |
++| 工作副本路径 | 目标位置 | 作用 | 丢失后果 |
+ |---|---|---|---|
+ | `rime/lua/indexed_rewrite_pro.lua` | `%APPDATA%\Rime\lua\` | 核心编辑算法 | `Tab` 完全失效 |
+ | `rime/wanxiang_pro.custom.yaml` | `%APPDATA%\Rime\` | `Tab → send_sequence: "//"` 绑定、注册 processor | `Tab` 进不去编辑模式 |
+@@ -2085,3 +2129,36 @@ pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+ ```
+ 
+ `REWRITE-UI.md` 和 `rime/README.md` 里也有同样的说明。
++
++### 25.7 三次结构演进与取舍记录
++
++这个项目在 2026-09-28 一天内换了三次仓库结构，记下来免得以后重复纠结：
++
++| 阶段 | 结构 | 为什么放弃 |
++|---|---|---|
++| ① 本地 clone（`origin`＝官方） | 直接改官方 clone | 没法 push，改动只在本机 |
++| ② Fork `mianxiu/weasel` | GitHub 上复制一份 | 公开仓库的 fork **不能设为 private**；默认分支改成 feature 分支后首页会出现危险的「Sync fork → Discard commits」；fork 只是"服务端的一份 clone"，不提供任何合并能力 |
++| ③ 独立仓库 `mianxiu/weasel-ui-patch`（完整树） | 自己的仓库里存上游源码 + 自己的提交 | 远端要存 19 MB 别人的源码 |
++| ④ **补丁式（现状）** | 远端只放 `patches/` + 脚本（约 300 KB），工作副本本地重建 | — |
++
++④ 之所以可行，是因为一个关键事实：
++
++> **rebase 需要的是「本地有一棵带共同祖先的树」，不是「远端要有」。**
++> 那棵树随时能从官方 clone 出来（实测 1.4 秒），而且是公开永久的，
++> 不需要你替它备份。`git am` 打上补丁后，你的改动就是真实坐在上游历史之上的
++> git 提交，共同祖先就在那里 —— `git rebase upstream/master` 照常可用。
++
++顺带记录几个实测数字，以后不用再纠结：
++
++| 项目 | 实测 |
++|---|---|
++| 完整 clone（1122 个提交） | 19.1 MB / 1.4 秒 |
++| 浅 clone（`--depth 1`） | 5.5 MB / 0.8 秒，但**没有共同祖先**，rebase 会变成满屏 add/add 冲突 |
++| 一次增量更新 | 上游 10 个提交 ≈ 85 KB；按近一年 45 个提交算，一年约 0.4 MB |
++| `git fetch`（已最新） | 0.2 秒 |
++| patch-only 远端体积 | 约 300 KB（17 个补丁 + 脚本） |
++
++以及一个容易说错的点：**冲突处理上 patch 与 rebase 的差别没有想象中大。**
++两者在"上游改到补丁附近"时都要人工介入；区别只是 rebase 把冲突标记写在文件里
++（两边都看得见），patch 只给你一个 `.rej` 片段要自己找位置贴回去。
++真正的差别是 patch 方案每次上游同步后要**多一步重新导出补丁**（约一分钟）。
+diff --git a/rime/README.md b/rime/README.md
+index a90053d..cf010f6 100644
+--- a/rime/README.md
++++ b/rime/README.md
+@@ -1,7 +1,8 @@
+ # Rime 用户目录文件（不带词库）
+ 
+ 这个目录放的是本补丁**必需的、原先只存在于 `%APPDATA%\Rime` 的运行期文件**。
+-没有它们，只 clone 本仓库是跑不起来的。
++本项目采用补丁式维护，这些文件随补丁一起下发；只 clone 补丁仓库（约 300 KB）
++是跑不起来的，要先跑补丁仓库里的 `setup.ps1` 重建出工作副本。
+ 
+ | 文件 | 目标位置 | 作用 |
+ |---|---|---|
+@@ -35,12 +36,14 @@ pwsh -NoProfile -File .\install-rime-files.ps1 -Apply
+ 
+ ## 换机器恢复顺序
+ 
+-1. `git clone` 本仓库（主线 `main`，加 `--recursive` 取子模块）
+-2. 装好小狼毫、万象 Pro，准备好词库
+-3. 在仓库根运行 `rime\install-rime-files.ps1 -Apply`
+-4. 编译并安装补丁程序：`build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd`
+-5. `WeaselDeployer.exe /deploy`，然后重启 `WeaselServer.exe`
+-6. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
+-7. 按 `REWRITE-UI.md` 的验收项回归：`jxjirzbj` → `Tab` → `3` → `j` → `m` → `Backspace` → `Esc`
+-
+-只调 `rewrite_ui/*` 开关时不需要第 4、6 步，但第 5 步不能省。
++1. `git clone https://github.com/mianxiu/weasel-ui-patch.git`（约 300 KB）
++2. 在补丁仓库里跑 `setup.ps1` —— 它会 clone 官方 weasel、检出基线、
++   打上 17 个补丁、初始化 `librime` submodule，生成 `..\weasel\` 工作副本
++3. 装好小狼毫、万象 Pro，准备好词库
++4. 在工作副本里运行 `rime\install-rime-files.ps1 -Apply`
++5. 编译并安装补丁程序：`build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd`
++6. `WeaselDeployer.exe /deploy`，然后重启 `WeaselServer.exe`
++7. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
++8. 按 `REWRITE-UI.md` 的验收项回归：`jxjirzbj` → `Tab` → `3` → `j` → `m` → `Backspace` → `Esc`
++
++只调 `rewrite_ui/*` 开关时不需要第 5、7 步，但第 6 步不能省。
+-- 
+2.53.0.windows.2
+

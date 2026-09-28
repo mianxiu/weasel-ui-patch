@@ -1,0 +1,115 @@
+From ea4e6224dc76d632eab97c2bf2f29db5d90f8097 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:59:51 +0800
+Subject: [PATCH 15/18] docs: record removal of the obsolete lua preedit UI
+ filter
+
+---
+ REWRITE-UI.md  |  4 ++--
+ agent.md       | 21 ++++++++++++---------
+ rime/README.md |  3 ++-
+ 3 files changed, 16 insertions(+), 12 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 3605027..6ed0120 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -190,7 +190,7 @@ upstream  https://github.com/rime/weasel.git      （官方）
+ 
+ | 项 | 说明 |
+ |---|---|
+-| 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被任何 schema 引用，文件仍在 `%APPDATA%\Rime\lua\`；仓库里也故意没有收录它 |
++| ~~删除 `indexed_rewrite_tab_ui_v2.lua`~~ | 【已完成】2026-09-28 已从 `%APPDATA%\Rime\lua\` 删除（送入回收站）。删前确认无任何配置引用，仓库也故意没收录 |
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)` 调用，重绘现在由 Weasel 负责 |
+ | 补测三项验收 | 多位索引 badge 肉眼确认、`Space`/`Enter`/标点提交、`head_replace` |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题参数，未新增独立颜色键 |
+@@ -222,7 +222,7 @@ pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+ （必要时加 `-Force`）。
+ 
+ **本包不包含**万象 Pro 词库与方案数据，也不包含已被原生绘制取代的
+-`indexed_rewrite_tab_ui_v2.lua`。
++`indexed_rewrite_tab_ui_v2.lua`（该文件已于 2026-09-28 从用户目录删除）。
+ 
+ 注意两处细节：
+ 
+diff --git a/agent.md b/agent.md
+index 28d36c4..101c671 100644
+--- a/agent.md
++++ b/agent.md
+@@ -556,7 +556,7 @@ _indexed_rewrite_index=3
+   （证据见 §15 与 §17.1）。
+ 
+ 因此**旧 Lua UI filter 已从 schema 移除**：`indexed_rewrite_tab_ui_v2` 不再被加载，
+-`%APPDATA%\Rime\lua\` 下那个文件可以删除（见 §21【待办】）。
++`%APPDATA%\Rime\lua\` 下的那个文件也已在 2026-09-28 删除（见 §21）。
+ 
+ ## 6. 已经验证失败或不可靠的路线
+ 
+@@ -1676,7 +1676,7 @@ index badge：
+ | 4 | active syllable 背景 | ✅ |
+ | 5 | index badge | ✅（含多位数字） |
+ | 6 | 颜色、圆角、spacing 配置 | ⚠️ 只做了复用主题，未新增 `rewrite_ui/*` 颜色键（§11.1） |
+-| 7 | 删除 Lua preedit UI filter | ⚠️ filter 已从 schema 移除，但磁盘上的 `indexed_rewrite_tab_ui_v2.lua` 仍在，核心 Lua 里的 `sync_ui()` 也还留着（§21【待办】） |
++| 7 | 删除 Lua preedit UI filter | ⚠️ filter 已从 schema 移除，磁盘上的 `indexed_rewrite_tab_ui_v2.lua` 也已删除；只剩核心 Lua 里的 `sync_ui()`（§21【待办】） |
+ 
+ ## 20. 调试要求【已验证】
+ 
+@@ -1753,15 +1753,17 @@ indexed_rewrite_tab_ui_v2.lua
+ 
+ 一个核心 Lua 即可。
+ 
+-【待办】现状与上面"最终理想"只差两步，都属于清理，不影响功能：
++【待办】现状与上面"最终理想"只差一步，属于清理，不影响功能：
+ 
+-1. `%APPDATA%\Rime\lua\indexed_rewrite_tab_ui_v2.lua` 文件仍在磁盘上，
+-   但已不被任何 schema 引用（`enable-rewrite-ui.ps1` 会从
+-   `wanxiang_pro.custom.yaml` 里删掉对应 filter 行），可以直接删除。
++1. ~~删除 `%APPDATA%\Rime\lua\indexed_rewrite_tab_ui_v2.lua`~~
++   **【已完成】2026-09-28 已删除**。删前全量搜索确认：用户目录下所有
++   `*.yaml`（含权威配置 `build\weasel.yaml`）与 `*.lua` 中，只有该文件
++   自己的文件头注释提到过自己，没有任何 schema 或配置引用它；
++   文件已送入回收站，需要时可以捞回。
+ 2. `indexed_rewrite_pro.lua` 里的 `sync_ui()` 还在 `pcall` 里调用
+    `env.engine:compose(ctx)`（§6.3）。现在重绘由 Weasel 负责，这段是多余的。
+ 
+-改这两处之前请注意 §3 的用户偏好：**不要改文件名、不要新建 v2/sync/bridge 版本**。
++改第 2 处之前请注意 §3 的用户偏好：**不要改文件名、不要新建 v2/sync/bridge 版本**。
+ 
+ ## 22. 当前稳定 YAML 基线【已生效】
+ 
+@@ -1886,7 +1888,7 @@ jx¹   ji²   [jm³]   bj⁴    ³
+ | 项 | 说明 |
+ |---|---|
+ | 关闭调试日志 | 已于 2026-09-28 关闭；如果重新开启排查，记得再关一次 |
+-| 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被引用，文件仍在 `%APPDATA%\Rime\lua\`（§21） |
++| ~~删除 `indexed_rewrite_tab_ui_v2.lua`~~ | 【已完成】2026-09-28 已删除（送入回收站）。删前确认无任何配置引用，仓库也故意没收录（§21） |
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)`（§6.3） |
+ | 补测 §17.2 的三项 | 多位索引 badge 肉眼确认、提交键行为、`head_replace` |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题，§11 的彩色配置未实现 |
+@@ -2010,7 +2012,8 @@ Weasel 侧的二进制来自本仓库，但整套系统还需要三个 **Rime 
+ | `rime/weasel.custom.yaml` | `%APPDATA%\Rime\` | `rewrite_ui/*` 开关（**脱敏版**，不含个人主题与 `app_options`） | Rewrite UI 默认关闭 |
+ 
+ **没有**纳入的：万象 Pro 词库与方案数据、`wanxiang_algebra.yaml`，
+-以及已被 Weasel 原生绘制取代的 `indexed_rewrite_tab_ui_v2.lua`（可以直接删除）。
++以及已被 Weasel 原生绘制取代的 `indexed_rewrite_tab_ui_v2.lua`（已于
++2026-09-28 从 `%APPDATA%\Rime\lua\` 删除）。
+ 
+ #### 装回去
+ 
+diff --git a/rime/README.md b/rime/README.md
+index de43118..5cd0419 100644
+--- a/rime/README.md
++++ b/rime/README.md
+@@ -10,7 +10,8 @@
+ | `weasel.custom.yaml` | `%APPDATA%\Rime\` | `rewrite_ui/*` 开关（脱敏版，只有开关没有主题） |
+ 
+ **不含**：万象 Pro 词库与方案数据、`wanxiang_algebra.yaml`、
+-`indexed_rewrite_tab_ui_v2.lua`（已被 Weasel 原生绘制取代，不再需要）。
++`indexed_rewrite_tab_ui_v2.lua`（已被 Weasel 原生绘制取代，已于 2026-09-28
++从用户目录删除，不再需要）。
+ 
+ ## 安装
+ 
+-- 
+2.53.0.windows.2
+

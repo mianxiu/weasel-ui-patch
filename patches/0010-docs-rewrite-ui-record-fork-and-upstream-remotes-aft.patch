@@ -1,0 +1,45 @@
+From 40268412b84c010dd4af5edb30e17347f0586e05 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:42:04 +0800
+Subject: [PATCH 10/18] docs(rewrite-ui): record fork and upstream remotes
+ after pushing the branch
+
+---
+ REWRITE-UI.md | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 4c7a50b..53861b3 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -158,8 +158,17 @@ fd33dc1 test(rewrite-ui): add state, IPC pipeline and librime property tests
+ 进入隐藏交互窗口的问题）和 `WEASEL_SETUP_LOG` 门控的安装 trace；两者落在同一个
+ 代码块内，无法干净拆分。trace 不设置该环境变量时零开销。
+ 
+-`git remote` 目前只有 `origin`，直接指向官方 `rime/weasel`，**尚未 Fork、
+-也没有 `upstream`**；同步上游前需要先补做。
++remote 配置（2026-09-28 补做）：
++
++```text
++origin    https://github.com/mianxiu/weasel.git   （fork）
++upstream  https://github.com/rime/weasel.git      （官方）
++```
++
++`feature/rewrite-ui` 已 push 到 fork，跟踪 `origin/feature/rewrite-ui`，
++远端 SHA 与本地一致（`d356b4790a14d37be492e41bd4d4cc0a432e351e`），
++领先 `upstream/master` 9 个提交。同步上游用 `git fetch upstream` 后
++rebase 或 merge 到 `feature/rewrite-ui`。
+ 
+ ## 已知遗留
+ 
+@@ -168,7 +177,6 @@ fd33dc1 test(rewrite-ui): add state, IPC pipeline and librime property tests
+ | 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被任何 schema 引用，文件仍在 `%APPDATA%\Rime\lua\` |
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)` 调用，重绘现在由 Weasel 负责 |
+ | 补测三项验收 | 多位索引 badge 肉眼确认、`Space`/`Enter`/标点提交、`head_replace` |
+-| 补做 Fork 与 `upstream` | 见上 |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题参数，未新增独立颜色键 |
+ 
+ 重新出包请运行 `package-rewrite.ps1`；它会同时刷新本文件（作为包内 `README.md`）、
+-- 
+2.53.0.windows.2
+

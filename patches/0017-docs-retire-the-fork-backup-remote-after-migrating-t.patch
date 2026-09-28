@@ -1,0 +1,77 @@
+From 5039d2320c343b66b58c4cf9aed34f3069bf26f8 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 21:27:12 +0800
+Subject: [PATCH 17/18] docs: retire the fork backup remote after migrating to
+ the standalone repo
+
+---
+ REWRITE-UI.md |  6 ++++--
+ agent.md      | 14 +++++++++++---
+ 2 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index ace1cf5..438c159 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -173,16 +173,18 @@ remote 配置（2026-09-28 最终状态）：
+ ```text
+ origin        https://github.com/mianxiu/weasel-ui-patch.git  （独立仓库，主线 main）
+ upstream      https://github.com/rime/weasel.git              （官方）
+-fork-backup   https://github.com/mianxiu/weasel.git           （早期 fork，留作备份）
+ ```
+ 
+ 主分支 `main` 跟踪 `origin/main`，远端 SHA 与本地一致，领先 `upstream/master`
+-15 个提交。同步上游用 `git fetch upstream` 后 rebase 或 merge 到 `main`。
++16 个提交。同步上游用 `git fetch upstream` 后 rebase 或 merge 到 `main`。
+ 
+ 远端还有一个 `upstream-master` 分支（就是 `d73f6295` 的上游镜像），
+ 专门用于 GitHub 上的对比视图：
+ `compare/upstream-master...main`。
+ 
++早期用过的 fork `mianxiu/weasel` 已退役（本地 remote 已移除，GitHub 仓库
++在网页上删除）——退役前确认过它没有任何新仓库没有的提交。
++
+ **本包是个人自用，不向上游 `rime/weasel` 提 PR。** 这个分支混着软件渲染改动
+ （issue #1913）、安装脚本 trace 和个人偏好，不适合整体提交上游；将来若要贡献
+ 某一部分，应另开干净分支单独整理。
+diff --git a/agent.md b/agent.md
+index 09794a2..95e7e98 100644
+--- a/agent.md
++++ b/agent.md
+@@ -254,14 +254,22 @@ Boost       1.84.0（静态库）
+ ```text
+ origin        https://github.com/mianxiu/weasel-ui-patch.git  （独立仓库，主线 main）
+ upstream      https://github.com/rime/weasel.git              （官方）
+-fork-backup   https://github.com/mianxiu/weasel.git           （早期 fork，留作备份）
+ ```
+ 
++旧 fork `mianxiu/weasel` 已退役：本地 remote `fork-backup` 已移除。
++退役前核对过它只有 3 个引用（`HEAD` + `feature/rewrite-ui` `ea4e622` +
++`master` `d73f629`），且这两个提交都已经是 `main` 的祖先，
++**没有任何新仓库没有的内容**，所以删除不丢东西。
++
++> GitHub 上的仓库本身要在网页删除（`Settings → Danger Zone →
++> Delete this repository`，需手动输入仓库名确认）；`git` 没有这个能力，
++> 删除 API 又需要带 `delete_repo` 权限的令牌。
++
+ 分支对应：
+ 
+ | 本地 | 远端 | 说明 |
+ |---|---|---|
+-| `main` | `origin/main` | 主线，15 个提交在 `upstream/master` 之上 |
++| `main` | `origin/main` | 主线，16 个提交在 `upstream/master` 之上 |
+ | `master` | `upstream/master` | 上游镜像（本地便利分支，不推） |
+ | — | `origin/upstream-master` | 推到远端的上游镜像，**专门用于 GitHub 的 compare 视图** |
+ 
+@@ -271,7 +279,7 @@ fork-backup   https://github.com/mianxiu/weasel.git           （早期 fork，
+ 
+ 【历史】§0.1／§0.3 要求的 Fork 与 remote 配置曾在 2026-09-28 20:40 补做
+ （`origin`＝fork、`upstream`＝官方）；由于确定不会向上游提 PR，fork 相对于
+-独立仓库已无独有优势，当日 21:22 迁出到独立仓库。
++独立仓库已无独有优势，当日 21:22 迁出到独立仓库，随后退役。
+ 
+ 【踩坑】`git remote rename origin upstream` 会把 `refs/remotes/origin/*`
+ 整体搬到 `refs/remotes/upstream/*`，`branch.master.remote` 也会自动跟着改，
+-- 
+2.53.0.windows.2
+

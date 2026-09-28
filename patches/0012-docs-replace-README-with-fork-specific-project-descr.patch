@@ -1,0 +1,277 @@
+From c62974ffb994ed29abe49f1b75ee0bdbbc2f45e5 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:48:47 +0800
+Subject: [PATCH 12/18] docs: replace README with fork-specific project
+ description
+
+---
+ README.md | 241 ++++++++++++++++++++++++++++--------------------------
+ agent.md  |   6 ++
+ 2 files changed, 130 insertions(+), 117 deletions(-)
+
+diff --git a/README.md b/README.md
+index 60d3001..cf1d24e 100644
+--- a/README.md
++++ b/README.md
+@@ -1,117 +1,124 @@
+-﻿【小狼毫】輸入法
+-================
+-
+-基於 中州韻輸入法引擎／Rime Input Method Engine 等開源技術
+-
+-式恕堂 版權所無
+-
+-[![Download](https://img.shields.io/github/v/release/rime/weasel)](https://github.com/rime/weasel/releases/latest)
+-[![Build status](https://github.com/rime/weasel/actions/workflows/commit-ci.yml/badge.svg)](https://github.com/rime/weasel/actions/workflows/commit-ci.yml)
+-[![GitHub Tag](https://img.shields.io/github/tag/rime/weasel.svg)](https://github.com/rime/weasel)
+-
+-授權條款：GPLv3
+-
+-項目主頁：https://rime.im
+-
+-您可能還需要 RIME 用於其他操作系統的發行版：
+-
+-  * ibus-rime、fcitx5-rime 或 fcitx-rime 用於 Linux
+-  * 【鼠鬚管】用於 macOS （64位）
+-
+-安裝輸入法
+-----------
+-
+-本品適用於 Windows 8.1 ~ Windows 11
+-
+-初次安裝時，安裝程序將顯示「安裝選項」對話框。
+-
+-若要將【小狼毫】註冊到繁體中文（臺灣）鍵盤佈局，請在「輸入語言」欄選擇「中文（臺灣）」，再點擊「安裝」按鈕。
+-
+-安裝完成後，仍可由開始菜單打開「安裝選項」更改輸入語言。
+-
+-使用輸入法
+-----------
+-
+-選取輸入法指示器菜單裏的【中】字樣圖標，開始用小狼毫寫字。
+-
+-可通過快捷鍵 <kbd>Ctrl+`</kbd> 或 <kbd>F4</kbd> 呼出方案選單、切換輸入方式。
+-
+-定製輸入法
+-----------
+-
+-通過 開始菜單 » 小狼毫輸入法 訪問設定工具及常用位置。
+-
+-用戶詞庫、配置文件位於 `%AppData%\Rime`，可通過菜單中的「用戶文件夾」打開。高水平玩家調教 Rime 輸入法常會用到。
+-
+-修改詞庫、配置文件後，須「重新部署」方可生效。
+-
+-定製 Rime 的方法，請參考 Wiki [《定製指南》](https://github.com/rime/home/wiki/CustomizationGuide)。如需定製 Weasel 獨有的樣式和行為，請參考本倉庫 [Wiki 頁面](https://github.com/rime/weasel/wiki)。
+-
+-致謝
+-----
+-
+-### 輸入方案設計：
+-
+-  * 【朙月拼音】系列及【八股文】詞典
+-    - 部分數據來源於 CC-CEDICT、Android 拼音、新酷音、opencc 等開源項目
+-    - 維護者：佛振、瑾昀
+-  * 【注音／地球拼音】
+-    - 維護者：佛振、瑾昀
+-  * 【倉頡五代】
+-    - 發明人：朱邦復先生
+-    - 碼表源自 www.chinesecj.com
+-    - 構詞碼表作者：惜緣
+-
+-  【五笔】【粵拼】【上海／蘇州吳語】【中古漢語拼音】【國際音標】等衆多方案
+-  不再以安裝包預裝形式提供。可由 <https://github.com/rime/plum> 下載安裝。
+-
+-### 程序設計：
+-
+-  * [佛振](https://github.com/lotem)
+-  * [鄒旭](https://github.com/zouxu09)
+-  * [Xiangyan Sun](https://github.com/wishstudio)
+-  * [Prcuvu](https://github.com/Prcuvu)
+-  * [nameoverflow](https://github.com/nameoverflow)
+-  * [fxliang](https://github.com/fxliang)
+-  * [Azuk 443](https://github.com/determ1ne)
+-
+-  查看更多 [代碼貢獻者](https://github.com/rime/weasel/graphs/contributors)
+-
+-### 美術：
+-
+-  * 圖標設計／[Patricivs](https://github.com/Patricivs)
+-  * 配色方案／Aben、P1461、Patricivs、skoj、佛振、五磅兔
+-
+-### 本品引用了以下開源軟件：
+-
+-  * [Boost C++ Libraries](http://www.boost.org/) (Boost Software License)
+-  * [curl](https://curl.haxx.se/) (MIT/X derivate license)
+-  * [google-glog](https://github.com/google/glog) (BSD 3-Clause License)
+-  * [Google Test](https://github.com/google/googletest) (BSD 3-Clause License)
+-  * [LevelDB](https://github.com/google/leveldb) (BSD 3-Clause License)
+-  * [librime](https://github.com/rime/librime) (BSD 3-Clause License)
+-  * [marisa-trie](https://github.com/s-yata/marisa-trie) (BSD 2-Clause License, LGPL 2.1)
+-  * [OpenCC / 開放中文轉換](https://github.com/BYVoid/OpenCC) (Apache License 2.0)
+-  * [plum](https://github.com/rime/plum) (GNU Lesser General Public License v3.0)
+-  * [WinSparkle](https://github.com/vslavik/winsparkle) (MIT License)
+-  * [yaml-cpp](https://github.com/jbeder/yaml-cpp) (MIT License)
+-  * [7-Zip](https://www.7-zip.org) (GNU LGPLv2.1+ with unRAR restriction)
+-
+-問題與反饋
+-----------
+-
+-發現程序有 bug，請到 GitHub 反饋
+-<https://github.com/rime/weasel/issues>
+-
+-歡迎提交 pull request
+-<https://github.com/rime/weasel/pulls>
+-
+-Rime 輸入法（不限於 Windows 平臺）功能、使用方法與配置相關的問題，請反饋到
+-<https://github.com/rime/home/issues>
+-
+-聯繫方式
+---------
+-
+-技術交流，歡迎光臨 [Rime 代碼之家](https://github.com/rime/home)，或致信 Rime 開發者 <rimeime@gmail.com>
+-
+-謝謝！
++# 小狼毫 · 万象 Pro 编码重写补丁
++
++基于 [rime/weasel](https://github.com/rime/weasel) 的个人定制分支，为 Windows
++小狼毫增加「未上屏编码快速重写」的**原生 UI**。
++
++> **个人自用项目，不向上游提交 PR。** `master` 保持与上游一致的干净镜像，
++> 所有改动都在 `feature/rewrite-ui` 分支上。将来若要把某部分贡献上游，
++> 应另开干净分支单独整理。
++
++## 这是什么
++
++在 Rime 里，未上屏的编码可以用 `Tab` 进入编辑模式，按音节重写，
++全程不把编辑状态写进真实编码：
++
++```text
++普通输入     jxjirzbj
++Tab          jx¹   ji²   rz³   bj⁴            ← 第 1 音节高亮
++3            jx¹   ji²  [rz³]  bj⁴      ³     ← 高亮即时移动 + 索引 badge
++jm           jx¹   ji²  [jm³]  bj⁴      ³     ← replacement 即时更新
++Esc          jxjirzbj                         ← 恢复原编码
++```
++
++`[ ]` 表示真正的圆角背景高亮，界面上不显示括号；`³` 是独立的弱背景 badge。
++
++| 操作 | 作用 |
++|---|---|
++| `Tab` | 进入编辑模式 |
++| `Tab` + 字母 | 从头覆盖当前编码 |
++| `Tab` + 数字 | 选择第 N 个音节 |
++| `Tab` + 数字 + 字母 | 替换第 N 个音节 |
++| `Backspace` | 撤销本次 replacement 或索引输入 |
++| `Esc` | 恢复进入编辑模式前的原始编码 |
++| `Space` / `Enter` / 标点 | 保留修改并退出编辑模式，交给 Rime 正常处理 |
++
++## 为什么要改 Weasel 本体
++
++编辑算法（Lua processor）早就跑通了，卡住的是**刷新**：
++
++按数字选音节时，数字被 processor 吃掉、只写进 `_indexed_rewrite_index`，
++`context.input` 没有变化，因此 translation / filter / preedit 都不会重算，UI 不动。
++在纯 Lua 侧试过的几条刷新路线——`refresh_non_confirmed_composition()`、
++`env.engine:compose(ctx)`、caret 原地写回、手工改 composition 制造原生 selection——
++全部无效，或直接破坏输入状态。
++
++最终方案是把刷新交给 Weasel 侧：
++
++```text
++Lua processor 写 _indexed_rewrite_*
++  → RimeWithWeaselHandler::OnNotify      过滤 rewrite 属性，不污染通用通知
++  → 按键结束后 _Respond                  用 get_property 取一份完整快照
++  → 下发 ctx.rewrite.* 到 IPC 响应
++  → ContextUpdater::Store                写入 Context::rewrite
++  → Context::operator==                  把 rewrite 计入比较
++                                         → preedit 不变也判定为「变了」
++  → MeasureRewrite + WeaselPanel::_DrawRewrite   原生绘制
++```
++
++**职责边界**：替换算法、双拼解析、Esc 恢复字符串全部留在 Lua 里；
++Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没有往 `preedit`
++塞隐藏字符，更没有为了刷新去改 `context.input`。
++
++## 仓库结构
++
++| 路径 | 说明 |
++|---|---|
++| [`REWRITE-UI.md`](REWRITE-UI.md) | 补丁说明：安装、验证情况、构建基线、已知遗留 |
++| [`agent.md`](agent.md) | 完整开发记录与约定：设计、踩坑、验收结论、维护要求 |
++| `RimeWithWeasel/`、`WeaselIPC/`、`WeaselUI/` | Rewrite UI 改动所在 |
++| `include/RewriteState.h`、`WeaselUI/RewriteLayout.h` | 新增的模型与布局头文件 |
++| `test/rewrite_state_test.cpp` 等 | 状态机、IPC 管线、librime property 测试与夹具 |
++| `build-rewrite.cmd`、`package-rewrite.ps1` | 构建与出包 |
++| `Apply-Patch.cmd` / `Apply-Patch.ps1` | 在已装小狼毫上覆盖安装（含备份与回退） |
++| `enable-rewrite-ui.ps1` | 开关 `rewrite_ui/*`；默认只预览，加 `-Apply` 才写盘 |
++
++## 安装使用
++
++完整步骤见 [`REWRITE-UI.md`](REWRITE-UI.md)，要点：
++
++1. 需要已有小狼毫、万象 Pro，以及已验证的 `indexed_rewrite_pro.lua`
++   （本仓库不含万象词库和 Lua 重写算法）。
++2. 在现有 `weasel.custom.yaml` 的 `patch:` 内合并：
++
++   ```yaml
++   rewrite_ui/enabled: true
++   rewrite_ui/debug: false
++   ```
++
++3. 改完**必须重新部署（`WeaselDeployer.exe /deploy`）并重启服务**。
++   服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`，
++   不是同目录的 `weasel.yaml`，也不是 `weasel.custom.yaml`；
++   只改 custom 文件不部署是无效的。
++4. `Tab` 入口依赖 schema 中已有的 `Tab → send_sequence: "//"` 绑定。
++5. 从 schema 的 filters 里移除旧的 `lua_filter@*indexed_rewrite_tab_ui_v2`，
++   否则编号会被 Lua filter 和 Weasel 各画一遍。
++
++## 验证情况
++
++已在真实万象 Pro + 小鹤双拼 + 直接辅助配置上完成真机验收：`Tab` 进入编辑、
++按数字即时移动高亮并显示 badge、多位索引（`32` / `321` / 退格）、
++`j` → `jm` → 退格的 replacement 实时更新、`Esc` 恢复原编码；
++普通输入、候选与直接辅助未受影响。
++
++尚未覆盖：多位索引 badge 的肉眼确认、`Space` / `Enter` / 标点提交后的上屏结果、
++`Tab` 后直接打字母的 `head_replace` 路径。详见 `REWRITE-UI.md`。
++
++## 构建
++
++MSVC v143（14.44.35207）+ Windows SDK 10.0、Boost 1.84.0 静态库、
++官方 librime 1.17.0（含 librime-lua）。运行 `build-rewrite.cmd` 构建
++x64/x86 两套，`package-rewrite.ps1` 出包并刷新 `SHA256SUMS.txt`。
++基线 commit、子模块版本与依赖下载地址见 `REWRITE-UI.md`。
++
++## 许可与致谢
++
++本项目基于 [rime/weasel](https://github.com/rime/weasel) 修改，沿用其
++**GPLv3** 许可（见 `LICENSE.txt`）。上游作者与贡献者名单见上游
++[README](https://github.com/rime/weasel) 与
++[贡献者列表](https://github.com/rime/weasel/graphs/contributors)。
++
++程序引用的开源软件：Boost、curl、google-glog、Google Test、LevelDB、
++librime、marisa-trie、OpenCC、plum、WinSparkle、yaml-cpp、7-Zip（完整清单
++与许可条款见上游 README）。
++
++输入方案数据（万象 Pro、小鹤双拼等）不属于本仓库，也不随本仓库分发。
+diff --git a/agent.md b/agent.md
+index 132a92f..486bbd7 100644
+--- a/agent.md
++++ b/agent.md
+@@ -19,6 +19,12 @@
+ > fork（`mianxiu/weasel`）上；同步官方用 `upstream` remote。将来若要把某部分
+ > 改动贡献给上游，再从干净分支单独整理，**不要直接拿这个分支开 PR**——
+ > 它混着软件渲染改动、安装脚本 trace 和个人偏好配置。
++>
++> **Fork 首页说明**：仓库根的 `README.md` 已替换为本项目说明（简中技术向），
++> 写在 `feature/rewrite-ui` 上；`master` 的 `README.md` 保持上游原文。
++> 要让首页显示新说明，需在 GitHub 网页里把 fork 的默认分支改成
++> `feature/rewrite-ui`（`Settings → General → Default branch`），
++> 这是网页设置，git 命令改不了。
+ 
+ ## 0. 仓库准备与开发流程
+ 
+-- 
+2.53.0.windows.2
+

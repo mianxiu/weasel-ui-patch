@@ -1,0 +1,339 @@
+From d052fb4f18d60253071ca9c21ea48927402d0868 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:40 +0800
+Subject: [PATCH 03/18] feat(rewrite-ui): draw syllable cells, active highlight
+ and index badge
+
+---
+ WeaselUI/HorizontalLayout.cpp  |  2 +-
+ WeaselUI/Layout.cpp            |  2 ++
+ WeaselUI/RewriteLayout.h       | 46 ++++++++++++++++++++++++++++++++++
+ WeaselUI/StandardLayout.cpp    |  4 +++
+ WeaselUI/VHorizontalLayout.cpp | 12 ++++-----
+ WeaselUI/VerticalLayout.cpp    |  2 +-
+ WeaselUI/WeaselPanel.cpp       | 43 +++++++++++++++++++++++++------
+ WeaselUI/WeaselPanel.h         |  1 +
+ 8 files changed, 96 insertions(+), 16 deletions(-)
+ create mode 100644 WeaselUI/RewriteLayout.h
+
+diff --git a/WeaselUI/HorizontalLayout.cpp b/WeaselUI/HorizontalLayout.cpp
+index 99d8e64..73bb613 100644
+--- a/WeaselUI/HorizontalLayout.cpp
++++ b/WeaselUI/HorizontalLayout.cpp
+@@ -47,7 +47,7 @@ void HorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+   int pgh = page_en ? max(pgszl.cy, pgszr.cy) : 0;
+ 
+   /* Preedit */
+-  if (!IsInlinePreedit() && !_context.preedit.str.empty()) {
++  if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = pgw, szy = max(size.cy, pgh);
+     // icon size higher then preedit text
+diff --git a/WeaselUI/Layout.cpp b/WeaselUI/Layout.cpp
+index 60b60b4..4112a2b 100644
+--- a/WeaselUI/Layout.cpp
++++ b/WeaselUI/Layout.cpp
+@@ -17,6 +17,8 @@ Layout::Layout(const UIStyle& style,
+       labelFontValid(!!(_style.label_font_point > 0)),
+       textFontValid(!!(_style.font_point > 0)),
+       cmtFontValid(!!(_style.comment_font_point > 0)) {
++  // Only this layout snapshot is changed; TSF's inline composition is retained.
++  if (_context.rewrite.active()) _style.inline_preedit = false;
+   if (pDWR) {
+     float scale = pDWR->dpiScaleLayout;
+     _style.min_width = (int)(_style.min_width * scale);
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+new file mode 100644
+index 0000000..6d8eabb
+--- /dev/null
++++ b/WeaselUI/RewriteLayout.h
+@@ -0,0 +1,46 @@
++#pragma once
++#include "Layout.h"
++
++namespace weasel {
++struct RewriteCell {
++  RewriteState::Unit unit;
++  CRect back, text;
++};
++struct RewriteLayout {
++  CSize size = CSize(0, 0);
++  std::vector<RewriteCell> cells;
++};
++// Used by both measurement and paint, including DPI and wrapping decisions.
++inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
++                                    PDWR dwr) {
++  RewriteLayout result;
++  const auto& style = layout._style;
++  const bool vertical = style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
++  const int px = (std::max)(1, style.hilite_padding_x);
++  const int py = (std::max)(1, style.hilite_padding_y);
++  const int gap = (std::max)(2, style.hilite_spacing);
++  const int limit = vertical ? style.max_height : style.max_width;
++  int advance = 0, cross = 0, line = 0;
++  for (const auto& unit : state.Units()) {
++    CSize text(0, 0);
++    layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pPreeditTextFormat,
++                         dwr, &text);
++    const int w = text.cx + px * 2, h = text.cy + py * 2;
++    const int span = vertical ? h : w;
++    if (limit > 0 && advance > 0 && advance + span > limit) {
++      cross += line + gap;
++      advance = 0;
++      line = 0;
++    }
++    const int x = vertical ? cross : advance;
++    const int y = vertical ? advance : cross;
++    result.cells.push_back({unit, CRect(x, y, x + w, y + h),
++                           CRect(x + px, y + py, x + px + text.cx, y + py + text.cy)});
++    result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
++    result.size.cy = (std::max<LONG>)(result.size.cy, y + h);
++    advance += span + gap;
++    line = (std::max)(line, vertical ? w : h);
++  }
++  return result;
++}
++}  // namespace weasel
+diff --git a/WeaselUI/StandardLayout.cpp b/WeaselUI/StandardLayout.cpp
+index 1855ec4..50f39a8 100644
+--- a/WeaselUI/StandardLayout.cpp
++++ b/WeaselUI/StandardLayout.cpp
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+ #include "StandardLayout.h"
++#include "RewriteLayout.h"
+ 
+ using namespace weasel;
+ 
+@@ -85,6 +86,8 @@ CSize StandardLayout::GetPreeditSize(CDCHandle dc,
+                                      const weasel::Text& text,
+                                      ComPtr<IDWriteTextFormat1> pTextFormat,
+                                      PDWR pDWR) {
++  if (&text == &_context.preedit && _context.rewrite.active())
++    return MeasureRewrite(*this, _context.rewrite, pDWR).size;
+   const std::wstring& preedit = text.str;
+   const std::vector<weasel::TextAttribute>& attrs = text.attributes;
+   CSize size(0, 0);
+@@ -378,6 +381,7 @@ void StandardLayout::UpdateStatusIconLayout(int* width, int* height) {
+ }
+ 
+ bool StandardLayout::IsInlinePreedit() const {
++  if (_context.rewrite.active()) return false;
+   return _style.inline_preedit &&
+          (_style.client_caps & weasel::INLINE_PREEDIT_CAPABLE) != 0 &&
+          _style.layout_type != UIStyle::LAYOUT_VERTICAL_FULLSCREEN &&
+diff --git a/WeaselUI/VHorizontalLayout.cpp b/WeaselUI/VHorizontalLayout.cpp
+index 1f57113..2311c76 100644
+--- a/WeaselUI/VHorizontalLayout.cpp
++++ b/WeaselUI/VHorizontalLayout.cpp
+@@ -52,7 +52,7 @@ void VHorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+   int pgw = page_en ? max(pgszl.cx, pgszr.cx) : 0;
+ 
+   /* Preedit */
+-  if (!IsInlinePreedit() && !_context.preedit.str.empty()) {
++  if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = max(size.cx, pgw), szy = pgh;
+     // icon size wider then preedit text
+@@ -182,7 +182,7 @@ void VHorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+     if (!_style.vertical_text_left_to_right) {
+       // re position right to left
+       int base_left;
+-      if ((!IsInlinePreedit() && !_context.preedit.str.empty()))
++      if ((!IsInlinePreedit() && _context.HasPanelPreedit()))
+         base_left = _preeditRect.left;
+       else if (!_context.aux.str.empty())
+         base_left = _auxiliaryRect.left;
+@@ -200,7 +200,7 @@ void VHorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+         _candidateTextRects[i].OffsetRect(offset, 0);
+         _candidateCommentRects[i].OffsetRect(offset, 0);
+       }
+-      if (!IsInlinePreedit() && !_context.preedit.str.empty())
++      if (!IsInlinePreedit() && _context.HasPanelPreedit())
+         _preeditRect.OffsetRect(
+             _candidateRects[0].right + _style.spacing - _preeditRect.left, 0);
+       if (!_context.aux.str.empty())
+@@ -298,7 +298,7 @@ void VHorizontalLayout::DoLayoutWithWrap(CDCHandle dc, PDWR pDWR) {
+   int pgw = page_en ? max(pgszl.cx, pgszr.cx) : 0;
+ 
+   /* Preedit */
+-  if (!IsInlinePreedit() && !_context.preedit.str.empty()) {
++  if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     size_t szx = max(size.cx, pgw), szy = pgh;
+     // icon size wider then preedit text
+@@ -457,7 +457,7 @@ void VHorizontalLayout::DoLayoutWithWrap(CDCHandle dc, PDWR pDWR) {
+   if (!_style.vertical_text_left_to_right) {
+     // re position right to left
+     int base_left;
+-    if ((!IsInlinePreedit() && !_context.preedit.str.empty()))
++    if ((!IsInlinePreedit() && _context.HasPanelPreedit()))
+       base_left = _preeditRect.left;
+     else if (!_context.aux.str.empty())
+       base_left = _auxiliaryRect.left;
+@@ -495,7 +495,7 @@ void VHorizontalLayout::DoLayoutWithWrap(CDCHandle dc, PDWR pDWR) {
+             offset_of_cols[col_of_candidate[i]], 0);
+       }
+       _highlightRect = _candidateRects[id];
+-      if (!IsInlinePreedit() && !_context.preedit.str.empty())
++      if (!IsInlinePreedit() && _context.HasPanelPreedit())
+         _preeditRect.OffsetRect(
+             _candidateRects[0].right + _style.spacing - _preeditRect.left, 0);
+       if (!_context.aux.str.empty())
+diff --git a/WeaselUI/VerticalLayout.cpp b/WeaselUI/VerticalLayout.cpp
+index fee38f6..b260b74 100644
+--- a/WeaselUI/VerticalLayout.cpp
++++ b/WeaselUI/VerticalLayout.cpp
+@@ -47,7 +47,7 @@ void weasel::VerticalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+   /*  preedit and auxiliary rectangle calc start */
+   CSize size;
+   /* Preedit */
+-  if (!IsInlinePreedit() && !_context.preedit.str.empty()) {
++  if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = pgw, szy = max(size.cy, pgh);
+     // icon size higher then preedit text
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 4e52ba8..5530562 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "RewriteLayout.h"
+ #include "WeaselPanel.h"
+ 
+ #include <utility>
+@@ -147,7 +148,7 @@ void WeaselPanel::Refresh() {
+   // icon status; 2)only icon(ascii mode switching)
+   bool show_tips =
+       m_in_server &&
+-      ((!m_ctx.aux.empty() && m_ctx.cinfo.empty() && m_ctx.preedit.empty()) ||
++      ((!m_ctx.aux.empty() && m_ctx.cinfo.empty() && !m_ctx.HasPanelPreedit()) ||
+        (m_ctx.empty() && should_show_icon));
+   // show schema menu status: schema_id == L".default"
+   bool show_schema_menu = m_status.schema_id == L".default";
+@@ -158,7 +159,7 @@ void WeaselPanel::Refresh() {
+   // switching / simp-trad switching / error tips), and not in schema menu
+   // 2. inline preedit without candidates
+   bool inline_no_candidates =
+-      (m_style.inline_preedit && m_candidateCount == 0) && !show_tips;
++      (m_style.inline_preedit && m_candidateCount == 0) && !show_tips && !m_ctx.rewrite.active();
+   hide_candidates = inline_no_candidates ||
+                     (margin_negative && !show_tips && !show_schema_menu);
+ 
+@@ -631,6 +632,8 @@ void WeaselPanel::_HighlightText(CDCHandle& dc,
+ bool WeaselPanel::_DrawPreedit(const Text& text,
+                                CDCHandle dc,
+                                const CRect& rc) {
++  if (&text == &m_ctx.preedit && m_ctx.rewrite.active())
++    return _DrawRewrite(dc, rc, false);
+   bool drawn = false;
+   std::wstring const& t = text.str;
+   IDWriteTextFormat1* txtFormat = pDWR->pPreeditTextFormat.Get();
+@@ -727,6 +730,8 @@ bool WeaselPanel::_DrawPreedit(const Text& text,
+ bool WeaselPanel::_DrawPreeditBack(const Text& text,
+                                    CDCHandle dc,
+                                    const CRect& rc) {
++  if (&text == &m_ctx.preedit && m_ctx.rewrite.active())
++    return _DrawRewrite(dc, rc, true);
+   bool drawn = false;
+   std::wstring const& t = text.str;
+   IDWriteTextFormat1* txtFormat = pDWR->pPreeditTextFormat.Get();
+@@ -782,6 +787,28 @@ bool WeaselPanel::_DrawPreeditBack(const Text& text,
+   return drawn;
+ }
+ 
++bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
++  auto layout = MeasureRewrite(*m_layout, m_ctx.rewrite, pDWR);
++  for (auto cell : layout.cells) {
++    cell.back.OffsetRect(rc.left, rc.top);
++    cell.text.OffsetRect(rc.left, rc.top);
++    if (background) {
++      if (cell.unit.active || cell.unit.badge) {
++        unsigned int color = m_style.hilited_back_color;
++        if (cell.unit.badge)
++          color = (color & 0x00ffffff) | (((color >> 24) / 3) << 24);
++        _HighlightText(dc, cell.back, color, 0, DPI_SCALE(m_style.round_corner),
++                       BackType::TEXT, IsToRoundStruct());
++      }
++    } else {
++      int color = cell.unit.active ? m_style.hilited_text_color : m_style.text_color;
++      _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), color,
++               pDWR->pPreeditTextFormat.Get());
++    }
++  }
++  return !layout.cells.empty();
++}
++
+ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+   bool drawn = false;
+   const std::vector<Text>& candidates(m_ctx.cinfo.candies);
+@@ -1007,7 +1034,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+         btmys[i] = rects[i].bottom;
+       }
+       if (m_candidateCount) {
+-        if (!m_layout->IsInlinePreedit() && !m_ctx.preedit.str.empty())
++        if (!m_layout->IsInlinePreedit() && m_ctx.HasPanelPreedit())
+           m_offsety_preedit =
+               rects[m_candidateCount - 1].bottom - preeditrc.bottom;
+         if (!m_ctx.aux.str.empty())
+@@ -1019,7 +1046,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+       int base_gap = 0;
+       if (!m_ctx.aux.str.empty())
+         base_gap = auxrc.Height() + m_style.spacing;
+-      else if (!m_layout->IsInlinePreedit() && !m_ctx.preedit.str.empty())
++      else if (!m_layout->IsInlinePreedit() && m_ctx.HasPanelPreedit())
+         base_gap = preeditrc.Height() + m_style.spacing;
+ 
+       for (auto i = 0; i < m_candidateCount && i < MAX_CANDIDATES_COUNT; ++i) {
+@@ -1035,7 +1062,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+       delete[] btmys;
+     }
+     // background and candidates back, hilite back drawing start
+-    if ((!m_ctx.empty() && !m_style.inline_preedit) ||
++    if ((!m_ctx.empty() && (!m_style.inline_preedit || m_ctx.rewrite.active())) ||
+         (m_style.inline_preedit && (m_candidateCount || !m_ctx.aux.empty()))) {
+       CRect backrc = m_layout->GetContentRect();
+       _HighlightText(memDC, backrc, m_style.back_color, m_style.shadow_color,
+@@ -1047,7 +1074,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+         auxrc.OffsetRect(0, m_offsety_aux);
+       drawn |= _DrawPreeditBack(m_ctx.aux, memDC, auxrc);
+     }
+-    if (!m_layout->IsInlinePreedit() && !m_ctx.preedit.str.empty()) {
++    if (!m_layout->IsInlinePreedit() && m_ctx.HasPanelPreedit()) {
+       if (m_istorepos)
+         preeditrc.OffsetRect(0, m_offsety_preedit);
+       drawn |= _DrawPreeditBack(m_ctx.preedit, memDC, preeditrc);
+@@ -1067,7 +1094,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+     if (!m_ctx.aux.str.empty())
+       drawn |= _DrawPreedit(m_ctx.aux, memDC, auxrc);
+     // draw preedit string
+-    if (!m_layout->IsInlinePreedit() && !m_ctx.preedit.str.empty())
++    if (!m_layout->IsInlinePreedit() && m_ctx.HasPanelPreedit())
+       drawn |= _DrawPreedit(m_ctx.preedit, memDC, preeditrc);
+     // draw candidates string
+     if (m_candidateCount)
+@@ -1093,7 +1120,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+       if (m_istorepos && !m_ctx.aux.str.empty())
+         iconRect.OffsetRect(0, m_offsety_aux);
+       else if (m_istorepos && !m_layout->IsInlinePreedit() &&
+-               !m_ctx.preedit.str.empty())
++               m_ctx.HasPanelPreedit())
+         iconRect.OffsetRect(0, m_offsety_preedit);
+ 
+       CIcon& icon(
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 7ad3af7..8c77357 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -86,6 +86,7 @@ class WeaselPanel
+   void _ResizeWindow();
+   void _RepositionWindow(const bool& adj = false);
+   bool _DrawPreedit(const Text& text, CDCHandle dc, const CRect& rc);
++  bool _DrawRewrite(CDCHandle dc, const CRect& rc, bool background);
+   bool _DrawPreeditBack(const Text& text, CDCHandle dc, const CRect& rc);
+   bool _DrawCandidates(CDCHandle& dc, bool back = false);
+   void _HighlightText(CDCHandle& dc,
+-- 
+2.53.0.windows.2
+

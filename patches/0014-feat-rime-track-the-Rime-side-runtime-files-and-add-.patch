@@ -1,0 +1,1251 @@
+From 4388ca4b49ff0ef625b6fe0c8422f66c624528f7 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:57:19 +0800
+Subject: [PATCH 14/18] feat(rime): track the Rime-side runtime files and add
+ an installer
+
+---
+ README.md                        |  44 ++-
+ REWRITE-UI.md                    |  60 ++-
+ agent.md                         |  77 +++-
+ package-rewrite.ps1              |   4 +-
+ rewrite-ui.custom.example.yaml   |  19 -
+ rime/README.md                   |  45 +++
+ rime/install-rime-files.ps1      | 155 ++++++++
+ rime/lua/indexed_rewrite_pro.lua | 601 +++++++++++++++++++++++++++++++
+ rime/wanxiang_pro.custom.yaml    |  29 ++
+ rime/weasel.custom.yaml          |  24 ++
+ 10 files changed, 996 insertions(+), 62 deletions(-)
+ delete mode 100644 rewrite-ui.custom.example.yaml
+ create mode 100644 rime/README.md
+ create mode 100644 rime/install-rime-files.ps1
+ create mode 100644 rime/lua/indexed_rewrite_pro.lua
+ create mode 100644 rime/wanxiang_pro.custom.yaml
+ create mode 100644 rime/weasel.custom.yaml
+
+diff --git a/README.md b/README.md
+index cf1d24e..d87b6b0 100644
+--- a/README.md
++++ b/README.md
+@@ -63,8 +63,9 @@ Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没
+ 
+ | 路径 | 说明 |
+ |---|---|
++| [`rime/`](rime/README.md) | **运行期文件**：核心 Lua、`wanxiang_pro.custom.yaml`、`rewrite_ui` 开关，含一键装回脚本 `install-rime-files.ps1` |
+ | [`REWRITE-UI.md`](REWRITE-UI.md) | 补丁说明：安装、验证情况、构建基线、已知遗留 |
+-| [`agent.md`](agent.md) | 完整开发记录与约定：设计、踩坑、验收结论、维护要求 |
++| [`agent.md`](agent.md) | 完整开发记录与约定：设计、踩坑、验收结论、维护要求、上游更新后如何重建 |
+ | `RimeWithWeasel/`、`WeaselIPC/`、`WeaselUI/` | Rewrite UI 改动所在 |
+ | `include/RewriteState.h`、`WeaselUI/RewriteLayout.h` | 新增的模型与布局头文件 |
+ | `test/rewrite_state_test.cpp` 等 | 状态机、IPC 管线、librime property 测试与夹具 |
+@@ -76,20 +77,27 @@ Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没
+ 
+ 完整步骤见 [`REWRITE-UI.md`](REWRITE-UI.md)，要点：
+ 
+-1. 需要已有小狼毫、万象 Pro，以及已验证的 `indexed_rewrite_pro.lua`
+-   （本仓库不含万象词库和 Lua 重写算法）。
+-2. 在现有 `weasel.custom.yaml` 的 `patch:` 内合并：
++1. 需要已有小狼毫和万象 Pro（本仓库不含万象词库与方案数据）。
++2. 把本仓库自带的运行期文件装进 Rime 用户目录：
++
++   ```powershell
++   pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
++   ```
++
++   它会安装核心 `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`
++   （`Tab` 绑定与 processor 注册），并只补齐 `weasel.custom.yaml` 里
++   **缺失**的开关行——你原有的主题配置不会被覆盖。详见 [`rime/README.md`](rime/README.md)。
++3. 确认 `weasel.custom.yaml` 的 `patch:` 下有这两行：
+ 
+    ```yaml
+    rewrite_ui/enabled: true
+    rewrite_ui/debug: false
+    ```
+ 
+-3. 改完**必须重新部署（`WeaselDeployer.exe /deploy`）并重启服务**。
++4. 改动后**必须重新部署（`WeaselDeployer.exe /deploy`）并重启服务**。
+    服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`，
+    不是同目录的 `weasel.yaml`，也不是 `weasel.custom.yaml`；
+    只改 custom 文件不部署是无效的。
+-4. `Tab` 入口依赖 schema 中已有的 `Tab → send_sequence: "//"` 绑定。
+ 5. 从 schema 的 filters 里移除旧的 `lua_filter@*indexed_rewrite_tab_ui_v2`，
+    否则编号会被 Lua filter 和 Weasel 各画一遍。
+ 
+@@ -121,4 +129,26 @@ x64/x86 两套，`package-rewrite.ps1` 出包并刷新 `SHA256SUMS.txt`。
+ librime、marisa-trie、OpenCC、plum、WinSparkle、yaml-cpp、7-Zip（完整清单
+ 与许可条款见上游 README）。
+ 
+-输入方案数据（万象 Pro、小鹤双拼等）不属于本仓库，也不随本仓库分发。
++输入方案数据（万象 Pro、小鹤双拼等）不属于本仓库，也不随本仓库分发；
++仓库里的 `rime/` 只包含本补丁自己需要的 Lua 与配置片段。
++
++## 从零恢复
++
++换机器或重装时的完整顺序：
++
++1. `git clone --recursive` 本仓库（`feature/rewrite-ui` 分支）
++2. 装好小狼毫与万象 Pro，准备好词库
++3. `rime\install-rime-files.ps1 -Apply` —— 装回 Lua 与配置
++4. `build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd` —— 编译并安装程序
++5. `WeaselDeployer.exe /deploy`，然后重启 `WeaselServer.exe`
++6. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
++7. 按上面的验收项回归
++
++只调 `rewrite_ui/*` 开关时不需要第 4、6 步，但第 5 步不能省。
++
++**注意 `indexed_rewrite_pro.lua` 有两份**：`%APPDATA%\Rime\lua\` 里那份是真正
++被加载的，`rime/lua/` 那份是版本控制副本。改了任意一份都要同步另一份，
++否则换机器恢复出来的是旧算法。
++
++上游更新后如何重建（`rebase` 流程、冲突热点、三个坑）见
++[`agent.md`](agent.md) §25 与 [`REWRITE-UI.md`](REWRITE-UI.md)。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 62f8b68..3605027 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -39,8 +39,10 @@ Rewrite UI 仍需手动启用。
+ 哈希均与本包 `SHA256SUMS.txt` 一致。x64 安装不展开 `Win32\` 目录，与上游
+ `install.nsi` 行为相同，不是缺失文件。
+ 
+-本包是小狼毫的定制二进制补丁，需要已有小狼毫、万象 Pro 和已验证的
+-`indexed_rewrite_pro.lua`。它不包含万象词库或 Lua 重写算法。
++本包是小狼毫的定制二进制补丁，需要已有小狼毫和万象 Pro。本补丁需要的
++Rime 侧文件（核心 `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`、
++`rewrite_ui` 开关）随本包的 `rewrite-source.zip` 一起分发，位于 `rime/`
++目录；它**不**包含万象词库或方案数据。
+ 
+ ## 本次功能
+ 
+@@ -70,16 +72,24 @@ TSF 客户端，64 位 Windows 同样需要二者。`WeaselSetup.exe` 是上游
+ 3. 在原安装目录以管理员权限运行 `WeaselSetup.exe /s`，重新注册简体中文
+    TSF DLL。繁体用户保留原来的注册参数（例如 `/t`）。此步骤会更新系统目录
+    中的 DLL，因此只复制 `WeaselServer.exe` 不足以启用新 UI。
+-4. 在现有 `weasel.custom.yaml` 的 `patch:` 内合并：
++4. 把 Rime 侧文件装进用户目录。本包 `rewrite-source.zip` 里的 `rime/` 就是它们；
++   在源码仓库里可以直接跑脚本（默认预览，`-Apply` 才写盘）：
++
++   ```powershell
++   pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
++   ```
++
++   它会安装 `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`
++   （含 `Tab -> send_sequence: "//"` 绑定与 processor 注册），并只补齐
++   `weasel.custom.yaml` 里**缺失**的这两行开关，不覆盖你原有的主题：
+ 
+    ```yaml
+    rewrite_ui/enabled: true
+    rewrite_ui/debug: false
+    ```
+ 
+-5. 保留现有 `Tab -> send_sequence: "//"` 和 `indexed_rewrite_pro.lua`。
+-   启用本补丁后，从 schema 的 filters 中移除旧的
+-   `lua_filter@*indexed_rewrite_tab_ui_v2` 条目，避免重复编号。
++5. 从 schema 的 filters 中移除旧的 `lua_filter@*indexed_rewrite_tab_ui_v2`
++   条目，避免编号被画两遍。
+ 6. 重新部署、注销并重新登录 Windows，使应用加载新 DLL，再启动小狼毫。
+ 
+ 如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true`，然后
+@@ -180,28 +190,46 @@ upstream  https://github.com/rime/weasel.git      （官方）
+ 
+ | 项 | 说明 |
+ |---|---|
+-| 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被任何 schema 引用，文件仍在 `%APPDATA%\Rime\lua\` |
++| 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被任何 schema 引用，文件仍在 `%APPDATA%\Rime\lua\`；仓库里也故意没有收录它 |
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)` 调用，重绘现在由 Weasel 负责 |
+ | 补测三项验收 | 多位索引 badge 肉眼确认、`Space`/`Enter`/标点提交、`head_replace` |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题参数，未新增独立颜色键 |
+-| 运行期文件不在仓库 | `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`、`weasel.custom.yaml` 只在 `%APPDATA%\Rime`，本包与仓库都不含 |
++| ~~运行期文件不在仓库~~ | 已解决：见 `rime/`。注意 `%APPDATA%\Rime` 与仓库是两份副本，改完要同步 |
+ 
+ 重新出包请运行 `package-rewrite.ps1`；它会同时刷新本文件（作为包内 `README.md`）、
+ `rewrite-source.zip` 和 `SHA256SUMS.txt`。改动 Weasel 侧二进制后，必须重新安装
+ 并重跑上面的验收项。
+ 
+-## 本包不含什么【重要】
++## Rime 侧文件在哪里【重要】
+ 
+-Weasel 侧的程序文件全部来自本仓库，但**整个可用系统不是自包含的**。
+-下面这些运行期文件只存在于本机 `%APPDATA%\Rime`，本包与仓库都没有：
++Weasel 侧的程序文件全部来自本仓库；整套系统还需要三个 **Rime 用户目录文件**，
++它们已纳入仓库的 `rime/` 目录（并随本包的 `rewrite-source.zip` 分发）：
+ 
+-| 文件 | 作用 | 丢失后果 |
++| 仓库路径 | 目标位置 | 作用 |
+ |---|---|---|
+-| `lua\indexed_rewrite_pro.lua` | 核心编辑算法 | `Tab` 完全失效 |
+-| `wanxiang_pro.custom.yaml` | `Tab → send_sequence: "//"` 绑定、注册 processor | `Tab` 进不去编辑模式 |
+-| `weasel.custom.yaml` | `rewrite_ui/enabled` 等开关与主题 | Rewrite UI 默认关闭 |
++| `rime/lua/indexed_rewrite_pro.lua` | `%APPDATA%\Rime\lua\` | 核心编辑算法 |
++| `rime/wanxiang_pro.custom.yaml` | `%APPDATA%\Rime\` | `Tab → send_sequence: "//"` 绑定、注册 processor |
++| `rime/weasel.custom.yaml` | `%APPDATA%\Rime\` | `rewrite_ui/*` 开关（脱敏版，不含个人主题） |
++
++装回去用仓库里的脚本（默认只预览，`-Apply` 才写盘，会备份）：
++
++```powershell
++pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
++```
++
++已存在 `weasel.custom.yaml` 时它**只补齐缺失的开关行**，不会覆盖你的主题；
++已存在 `wanxiang_pro.custom.yaml` 时只检查必需的三行是否齐全，不覆盖
++（必要时加 `-Force`）。
++
++**本包不包含**万象 Pro 词库与方案数据，也不包含已被原生绘制取代的
++`indexed_rewrite_tab_ui_v2.lua`。
++
++注意两处细节：
+ 
+-把这套东西搬到另一台机器时，必须一并带上这三个文件。
++- `indexed_rewrite_pro.lua` 有**两份副本**：`%APPDATA%\Rime\lua\` 那份真正被加载，
++  `rime/lua/` 那份是版本控制副本，改完要同步。
++- 本包内那个名为 `rewrite-ui.custom.example.yaml` 的文件，来源就是
++  `rime/weasel.custom.yaml`（同一份内容，只是改了文件名）。
+ 
+ ## 上游更新后如何重建
+ 
+diff --git a/agent.md b/agent.md
+index aa238f1..28d36c4 100644
+--- a/agent.md
++++ b/agent.md
+@@ -7,14 +7,19 @@
+ > `【待办】` 标注。**当前实际状态、构建基线与验收结论以 `weasel/REWRITE-UI.md`
+ > 为准**，不要把本文档中未标注的早期设想当成现状。
+ >
+-> 仍在维护的只有三处：
++> 仍在维护的只有四处：
+ >
+ > ```text
+-> 1. indexed_rewrite_pro.lua      %APPDATA%\Rime\lua\（核心编辑算法，唯一被加载）
+-> 2. weasel/ 仓库 feature/rewrite-ui 分支（Weasel 侧 Rewrite UI 补丁）
+-> 3. weasel/dist/Weasel-Rewrite-UI.zip（补丁包，由 package-rewrite.ps1 生成）
++> 1. rime/lua/indexed_rewrite_pro.lua     核心编辑算法（%APPDATA%\Rime 的版本控制副本）
++> 2. rime/                                另外两个运行期文件 + 一键装回脚本
++> 3. weasel/ 仓库 feature/rewrite-ui 分支（Weasel 侧 Rewrite UI 补丁）
++> 4. weasel/dist/Weasel-Rewrite-UI.zip（补丁包，由 package-rewrite.ps1 生成）
+ > ```
+ >
++> 注意 `indexed_rewrite_pro.lua` 有**两个副本**：`%APPDATA%\Rime\lua\` 里那份是
++> 真正被加载的，仓库里 `rime/lua/` 那份是版本控制副本。改完要通过
++> `rime/install-rime-files.ps1 -Apply` 装回去，见 §25.6。
++>
+ > **用途：个人自用，不提上游 PR。** `feature/rewrite-ui` 长期留在自己的
+ > fork（`mianxiu/weasel`）上；同步官方用 `upstream` remote。将来若要把某部分
+ > 改动贡献给上游，再从干净分支单独整理，**不要直接拿这个分支开 PR**——
+@@ -1101,7 +1106,8 @@ patch:
+ | 音节间距 | `hilite_spacing`（最小 2） |
+ | index badge 背景 | active 背景的 **1/3 透明度**，其余通道不变 |
+ 
+-打包时随附的 `weasel/rewrite-ui.custom.example.yaml` 就是这份配置的示例。
++打包时随附的示例配置来自 `rime/weasel.custom.yaml`（在包内改名为
++`rewrite-ui.custom.example.yaml`，内容就是上面这份）。
+ 
+ > **【重要】改这些键必须重新部署。** 服务端读的是部署产物
+ > `%APPDATA%\Rime\build\weasel.yaml`：
+@@ -1884,7 +1890,7 @@ jx¹   ji²   [jm³]   bj⁴    ³
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)`（§6.3） |
+ | 补测 §17.2 的三项 | 多位索引 badge 肉眼确认、提交键行为、`head_replace` |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题，§11 的彩色配置未实现 |
+-| **运行期文件不在仓库** | `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`、`weasel.custom.yaml` 只存在于 `%APPDATA%\Rime`，仓库和补丁包里都没有。只 clone fork 到新机器是**跑不起来**的，见 §25.6 |
++| ~~运行期文件不在仓库~~ | 已于 2026-09-28 解决，见 `rime/` 与 §25.6。注意 `%APPDATA%\Rime` 里的副本与仓库副本是两份，改完要同步 |
+ 
+ ---
+ 
+@@ -1992,18 +1998,53 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ ```
+ 
+-### 25.6 仓库之外还依赖什么【重要】
++### 25.6 运行期文件与仓库副本【已纳入版本控制】
+ 
+-Weasel 侧的二进制完全来自本仓库，但**整个可用系统不是自包含的**。
+-下面这些运行期文件只存在于本机 `%APPDATA%\Rime`，仓库和补丁包里都没有
+-（实测 `rewrite-source.zip` 中不含任何 `.lua` 或 `custom.yaml`）：
++Weasel 侧的二进制来自本仓库，但整套系统还需要三个 **Rime 用户目录文件**。
++它们原先只存在于本机 `%APPDATA%\Rime`，已于 2026-09-28 纳入仓库：
+ 
+-| 文件 | 作用 | 丢失后果 |
+-|---|---|---|
+-| `lua\indexed_rewrite_pro.lua` | 核心编辑算法 | `Tab` 完全失效，等于没有这个功能 |
+-| `wanxiang_pro.custom.yaml` | `Tab → send_sequence: "//"` 绑定、注册 processor | `Tab` 进不去编辑模式 |
+-| `weasel.custom.yaml` | `rewrite_ui/enabled` 等开关 + 主题 | Rewrite UI 默认关闭 |
++| 仓库路径 | 目标位置 | 作用 | 丢失后果 |
++|---|---|---|---|
++| `rime/lua/indexed_rewrite_pro.lua` | `%APPDATA%\Rime\lua\` | 核心编辑算法 | `Tab` 完全失效 |
++| `rime/wanxiang_pro.custom.yaml` | `%APPDATA%\Rime\` | `Tab → send_sequence: "//"` 绑定、注册 processor | `Tab` 进不去编辑模式 |
++| `rime/weasel.custom.yaml` | `%APPDATA%\Rime\` | `rewrite_ui/*` 开关（**脱敏版**，不含个人主题与 `app_options`） | Rewrite UI 默认关闭 |
++
++**没有**纳入的：万象 Pro 词库与方案数据、`wanxiang_algebra.yaml`，
++以及已被 Weasel 原生绘制取代的 `indexed_rewrite_tab_ui_v2.lua`（可以直接删除）。
++
++#### 装回去
++
++```powershell
++cd C:\Users\mianx\Desktop\小狼毫万象补丁\weasel
++
++# 预览（默认不改任何文件）
++pwsh -NoProfile -File .\rime\install-rime-files.ps1
++
++# 实际写入（自动备份）
++pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
++```
++
++脚本行为（已在临时目录实测四种场景）：
++
++| 情况 | 行为 |
++|---|---|
++| 目标不存在 | 复制 |
++| `lua/indexed_rewrite_pro.lua` 已存在且内容不同 | 备份后覆盖 |
++| `wanxiang_pro.custom.yaml` 已存在 | **只检查**必需的三行是否齐全，不覆盖（你可能有模糊音等额外自定义）；缺行会列出，加 `-Force` 才覆盖 |
++| `weasel.custom.yaml` 已存在 | 只在 `patch:` 下补齐**缺失**的开关行，主题与 `app_options` 原样保留；已有 `rewrite_ui/enabled: false` 不会被改成 `true` |
++
++写完必须**重新部署 + 重启服务**（§11.1 / §25.5），脚本最后会打印这两步。
++
++#### 两个副本怎么管
++
++`indexed_rewrite_pro.lua` 现在有两份：`%APPDATA%\Rime\lua\` 那份是真正被加载的，
++`rime/lua/` 那份是版本控制副本。**改完要同步**，否则换机器恢复出来的是旧算法：
++
++```powershell
++# 本机版本 → 仓库
++Copy-Item "$env:APPDATA\Rime\lua\indexed_rewrite_pro.lua" .\rime\lua\ -Force
++# 仓库版本 → 本机
++pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
++```
+ 
+-只 clone fork 到一台新机器是**跑不起来**的，必须另外把这几个文件带过去。
+-建议把 `indexed_rewrite_pro.lua` 与两个 custom 文件（脱敏后）也纳入仓库，
+-例如放在 `rime/` 目录下并在 `REWRITE-UI.md` 里说明如何安装。
++`REWRITE-UI.md` 和 `rime/README.md` 里也有同样的说明。
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index af06568..d93d4e3 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -9,7 +9,7 @@ foreach ($name in @('WeaselServer.exe', 'WeaselDeployer.exe', 'rime.dll', 'WinSp
+   Copy-Item "output/Win32/$name" "$destination/Win32/$name" -Force
+ }
+ Copy-Item REWRITE-UI.md "$destination/README.md" -Force
+-Copy-Item rewrite-ui.custom.example.yaml $destination -Force
++Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
+ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,rewrite-build.txt $destination -Force
+ Copy-Item LICENSE.txt "$destination/licenses/Weasel-GPL-3.0.txt" -Force
+ Copy-Item librime/LICENSE "$destination/licenses/librime-BSD.txt" -Force
+@@ -24,7 +24,7 @@ $sourceArchive = [IO.Compression.ZipArchive]::new($sourceStream, [IO.Compression
+ try {
+   $files = @(git ls-files) + @(
+     'include/RewriteState.h', 'WeaselUI/RewriteLayout.h', 'WeaselSetup/SetupTrace.h', 'build-rewrite.cmd',
+-    'weasel.props', 'REWRITE-UI.md', 'rewrite-ui.custom.example.yaml',
++    'weasel.props', 'REWRITE-UI.md',
+     'package-rewrite.ps1', 'Apply-Patch.cmd', 'Apply-Patch.ps1', 'rewrite-build.txt', 'test/patch_shutdown_test.ps1', 'test/rewrite_state_test.cpp',
+     'test/rewrite_pipeline_test.cpp', 'test/rewrite_rime_test.cpp',
+     'test/rime-fixture/default.yaml', 'test/rime-fixture/rewrite_test.schema.yaml')
+diff --git a/rewrite-ui.custom.example.yaml b/rewrite-ui.custom.example.yaml
+deleted file mode 100644
+index d03e3f0..0000000
+--- a/rewrite-ui.custom.example.yaml
++++ /dev/null
+@@ -1,19 +0,0 @@
+-# Merge these keys into the EXISTING patch map of weasel.custom.yaml.
+-# Do not replace your theme or existing settings.
+-patch:
+-  rewrite_ui/enabled: true
+-  rewrite_ui/debug: false
+-# Existing theme settings control native rewrite cells:
+-# hilited_back_color, hilited_text_color, text_color,
+-# style/layout/corner_radius, hilite_padding_x/y and hilite_spacing.
+-# The index badge uses one third of the highlight background opacity.
+-#
+-# After editing these keys you MUST redeploy (WeaselDeployer.exe /deploy) and
+-# then restart WeaselServer.exe. The server reads the compiled config at
+-# %APPDATA%\Rime\build\weasel.yaml, not weasel.yaml (the installed default
+-# copy, which has no rewrite_ui/* keys) and not this custom file. Editing the
+-# custom file alone leaves the old values in build\weasel.yaml in effect.
+-#
+-# rewrite_ui/debug: true writes the codes being typed to
+-# %TEMP%\rime.weasel\rewrite-ui.log. Turn it back off, redeploy and restart
+-# the server when the investigation is finished.
+diff --git a/rime/README.md b/rime/README.md
+new file mode 100644
+index 0000000..de43118
+--- /dev/null
++++ b/rime/README.md
+@@ -0,0 +1,45 @@
++# Rime 用户目录文件（不带词库）
++
++这个目录放的是本补丁**必需的、原先只存在于 `%APPDATA%\Rime` 的运行期文件**。
++没有它们，只 clone 本仓库是跑不起来的。
++
++| 文件 | 目标位置 | 作用 |
++|---|---|---|
++| `lua/indexed_rewrite_pro.lua` | `%APPDATA%\Rime\lua\` | 核心编辑算法（`Tab` 重写状态机） |
++| `wanxiang_pro.custom.yaml` | `%APPDATA%\Rime\` | `Tab → send_sequence: "//"` 绑定、注册 processor |
++| `weasel.custom.yaml` | `%APPDATA%\Rime\` | `rewrite_ui/*` 开关（脱敏版，只有开关没有主题） |
++
++**不含**：万象 Pro 词库与方案数据、`wanxiang_algebra.yaml`、
++`indexed_rewrite_tab_ui_v2.lua`（已被 Weasel 原生绘制取代，不再需要）。
++
++## 安装
++
++```powershell
++# 预览（默认不改任何文件）
++pwsh -NoProfile -File .\install-rime-files.ps1
++
++# 实际写入（自动备份）
++pwsh -NoProfile -File .\install-rime-files.ps1 -Apply
++```
++
++脚本行为：
++
++- `lua\indexed_rewrite_pro.lua`：不存在就复制；已存在且内容不同则先备份再覆盖
++- `wanxiang_pro.custom.yaml`：不存在就复制；已存在则**只检查**必需的几行是否齐全，
++  不覆盖（你可能有模糊音之类的额外自定义），报告缺什么
++- `weasel.custom.yaml`：不存在就复制；已存在则在 `patch:` 下补齐两行开关，
++  不改动你原有的主题配置
++
++写入完成后脚本会打印后续必须执行的步骤（重新部署 + 重启服务）。
++
++## 换机器恢复顺序
++
++1. `git clone` 本仓库（`feature/rewrite-ui` 分支，`--recursive` 取子模块）
++2. 装好小狼毫、万象 Pro，准备好词库
++3. 在仓库根运行 `rime\install-rime-files.ps1 -Apply`
++4. 编译并安装补丁程序：`build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd`
++5. `WeaselDeployer.exe /deploy`，然后重启 `WeaselServer.exe`
++6. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
++7. 按 `REWRITE-UI.md` 的验收项回归：`jxjirzbj` → `Tab` → `3` → `j` → `m` → `Backspace` → `Esc`
++
++只调 `rewrite_ui/*` 开关时不需要第 4、6 步，但第 5 步不能省。
+diff --git a/rime/install-rime-files.ps1 b/rime/install-rime-files.ps1
+new file mode 100644
+index 0000000..79542ac
+--- /dev/null
++++ b/rime/install-rime-files.ps1
+@@ -0,0 +1,155 @@
++# Installs the Rime-side files this patch depends on. Preview by default;
++# pass -Apply to write. Existing files are backed up before being replaced.
++[CmdletBinding()]
++param(
++  [string]$UserDataRoot = (Join-Path $env:APPDATA 'Rime'),
++  [switch]$Apply,
++  [switch]$Force
++)
++$ErrorActionPreference = 'Stop'
++$source = $PSScriptRoot
++
++function Backup-File([string]$Path) {
++  $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
++  $dest = "$Path.rewrite-backup-$stamp"
++  Copy-Item -LiteralPath $Path -Destination $dest
++  Write-Output ("  backup: " + (Split-Path $dest -Leaf))
++}
++
++$luaSrc = Join-Path $source 'lua\indexed_rewrite_pro.lua'
++$schemaSrc = Join-Path $source 'wanxiang_pro.custom.yaml'
++$uiSrc = Join-Path $source 'weasel.custom.yaml'
++foreach ($f in @($luaSrc, $schemaSrc, $uiSrc)) {
++  if (!(Test-Path -LiteralPath $f -PathType Leaf)) { throw "Missing source file: $f" }
++}
++if (!(Test-Path -LiteralPath $UserDataRoot -PathType Container)) {
++  throw "Rime user directory not found: $UserDataRoot"
++}
++
++$luaDst = Join-Path $UserDataRoot 'lua\indexed_rewrite_pro.lua'
++$schemaDst = Join-Path $UserDataRoot 'wanxiang_pro.custom.yaml'
++$uiDst = Join-Path $UserDataRoot 'weasel.custom.yaml'
++
++Write-Output "Rime user directory : $UserDataRoot"
++Write-Output "Source              : $source"
++Write-Output ("Mode                : " + $(if ($Apply) { 'APPLY' } else { 'preview (no files changed)' }))
++Write-Output ""
++
++# ---------------------------------------------------------------- 1. Lua
++Write-Output '[1/3] lua\indexed_rewrite_pro.lua'
++$luaAction = 'copy'
++if (Test-Path -LiteralPath $luaDst) {
++  $luaAction = if ((Get-FileHash -LiteralPath $luaDst).Hash -eq
++                   (Get-FileHash -LiteralPath $luaSrc).Hash) { 'unchanged' } else { 'replace' }
++}
++switch ($luaAction) {
++  'unchanged' { Write-Output '  already identical, nothing to do' }
++  'copy' { Write-Output '  will install (target does not exist)' }
++  'replace' { Write-Output '  will REPLACE the existing file (backup kept)' }
++}
++
++# ------------------------------------------- 2. wanxiang_pro.custom.yaml
++Write-Output '[2/3] wanxiang_pro.custom.yaml'
++$required = @('lua_processor@\*indexed_rewrite_pro', 'key_binder/bindings/\+:', 'speller/algebra:')
++if (!(Test-Path -LiteralPath $schemaDst)) {
++  $schemaAction = 'copy'
++  Write-Output '  will install (target does not exist)'
++}
++else {
++  # Never overwrite silently: the file may carry unrelated customisations.
++  $existing = [IO.File]::ReadAllLines($schemaDst)
++  $missing = @($required | Where-Object { -not ($existing -match $_) })
++  if ($missing.Count -eq 0) {
++    $schemaAction = 'unchanged'
++    Write-Output '  existing file already has the required patch lines, left untouched'
++  }
++  elseif ($Force) {
++    $schemaAction = 'replace'
++    Write-Output '  existing file is missing required lines; -Force given, will overwrite (backup kept)'
++  }
++  else {
++    $schemaAction = 'skip'
++    Write-Output '  existing file is MISSING required lines and was left untouched:'
++    $missing | ForEach-Object { Write-Output "    - $_" }
++    Write-Output '  merge them manually, or re-run with -Force to overwrite.'
++  }
++}
++
++# ------------------------------------------------- 3. weasel.custom.yaml
++Write-Output '[3/3] weasel.custom.yaml'
++$uiAction = 'merge'
++if (!(Test-Path -LiteralPath $uiDst)) {
++  $uiAction = 'copy'
++  Write-Output '  will install (target does not exist)'
++}
++else {
++  $lines = [IO.File]::ReadAllLines($uiDst)
++  if (@($lines | Where-Object { $_ -ceq 'patch:' }).Count -ne 1) {
++    throw "Expected exactly one top-level 'patch:' line in $uiDst."
++  }
++  if ($lines -match '^\s+rewrite_ui:\s*$') {
++    throw "Nested rewrite_ui map in $uiDst requires manual reconciliation."
++  }
++  $needEnabled = -not ($lines -match '^\s*["'']?rewrite_ui/enabled["'']?\s*:')
++  $needDebug = -not ($lines -match '^\s*["'']?rewrite_ui/debug["'']?\s*:')
++  if (!$needEnabled -and !$needDebug) {
++    $uiAction = 'unchanged'
++    Write-Output '  both rewrite_ui switches already present, left untouched'
++  }
++  else {
++    $newLines = @(
++      foreach ($line in $lines) {
++        $line
++        if ($line -ceq 'patch:') {
++          if ($needEnabled) { '  rewrite_ui/enabled: true' }
++          if ($needDebug) { '  rewrite_ui/debug: false' }
++        }
++      }
++    )
++    $missing = @()
++    if ($needEnabled) { $missing += 'rewrite_ui/enabled' }
++    if ($needDebug) { $missing += 'rewrite_ui/debug' }
++    Write-Output ('  will insert under patch/: ' + ($missing -join ', '))
++    Write-Output '  existing theme and app_options are preserved'
++  }
++}
++
++Write-Output ''
++if (!$Apply) {
++  Write-Output 'Preview only. Re-run with -Apply to write.'
++  return
++}
++
++# ------------------------------------------------------------------ apply
++Write-Output 'Applying:'
++if ($luaAction -eq 'copy' -or $luaAction -eq 'replace') {
++  $luaDir = Split-Path $luaDst -Parent
++  if (!(Test-Path -LiteralPath $luaDir)) { New-Item -ItemType Directory -Force $luaDir | Out-Null }
++  if ($luaAction -eq 'replace') { Backup-File $luaDst }
++  Copy-Item -LiteralPath $luaSrc -Destination $luaDst -Force
++  Write-Output "  lua\indexed_rewrite_pro.lua : installed"
++}
++if ($schemaAction -eq 'copy' -or $schemaAction -eq 'replace') {
++  if ($schemaAction -eq 'replace') { Backup-File $schemaDst }
++  Copy-Item -LiteralPath $schemaSrc -Destination $schemaDst -Force
++  Write-Output '  wanxiang_pro.custom.yaml    : installed'
++}
++if ($uiAction -eq 'copy') {
++  Copy-Item -LiteralPath $uiSrc -Destination $uiDst -Force
++  Write-Output '  weasel.custom.yaml          : installed'
++}
++elseif ($uiAction -eq 'merge') {
++  Backup-File $uiDst
++  $utf8 = New-Object Text.UTF8Encoding($false)
++  [IO.File]::WriteAllLines($uiDst, [string[]]$newLines, $utf8)
++  Write-Output '  weasel.custom.yaml          : switches merged'
++}
++
++Write-Output ''
++Write-Output 'Next steps (both are required):'
++Write-Output '  1. WeaselDeployer.exe /deploy        # rebuilds %APPDATA%\Rime\build\weasel.yaml'
++Write-Output '  2. restart WeaselServer.exe          # Initialize() reads the config at startup'
++Write-Output ''
++Write-Output 'If you replaced the Weasel binaries too, sign out and back in so that'
++Write-Output 'hosting processes load the new TSF DLL, then re-run the acceptance checks'
++Write-Output 'listed in REWRITE-UI.md.'
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+new file mode 100644
+index 0000000..2bbcd6d
+--- /dev/null
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -0,0 +1,601 @@
++-- indexed_rewrite_pro.lua
++-- 万象 Pro / 小鹤双拼：双模式 // 快速重写器
++--
++-- 同时支持：
++--
++--   1) // + 字母
++--      从头逐字符覆盖（保留旧功能）
++--
++--      jxjirz//jm
++--      -> jmjirz
++--
++--   2) // + 数字 + 字母
++--      按音节索引替换
++--
++--      jxjirzbj//3jm
++--      -> 把第 3 音节替换为 jm
++--
++-- UI 与 indexed_rewrite_preedit.lua 配合：
++--   //      -> jx¹ ji² rz³ bj⁴
++--   //3     -> jx¹ ji² 【rz³】 bj⁴
++--
++-- 单个 / 始终先交给万象 Pro。
++-- 只有第二个连续 / 到来时才进入本脚本。
++
++local M = {}
++
++local ACCEPTED = 1
++local NOOP = 2
++
++local PROP_STAGE = "_indexed_rewrite_stage"
++local PROP_ORIGINAL = "_indexed_rewrite_original"
++local PROP_INDEX = "_indexed_rewrite_index"
++local PROP_RANGES = "_indexed_rewrite_ranges"
++local PROP_REPLACEMENT = "_indexed_rewrite_replacement"
++
++local function set_prop(ctx, key, value)
++    ctx:set_property(key, value or "")
++end
++
++local function get_prop(ctx, key)
++    return ctx:get_property(key) or ""
++end
++
++-- 只在“索引 property 改变、context.input 没变”时使用。
++-- librime-lua 正式暴露 Engine:compose(Context)。
++-- 这里重新 Compose 当前输入，让 translation/filter 重新建立；
++-- 不修改 context.input，也不调用 RefreshNonConfirmedComposition。
++local function sync_ui(env, ctx)
++    pcall(function()
++        env.engine:compose(ctx)
++    end)
++end
++
++
++local function clear_props(ctx)
++    set_prop(ctx, PROP_STAGE, "")
++    set_prop(ctx, PROP_ORIGINAL, "")
++    set_prop(ctx, PROP_INDEX, "")
++    set_prop(ctx, PROP_RANGES, "")
++    set_prop(ctx, PROP_REPLACEMENT, "")
++end
++
++local function is_slash(repr)
++    return repr == "/" or repr == "slash"
++end
++
++local function is_digit(repr)
++    return #repr == 1 and repr:match("^[0-9]$") ~= nil
++end
++
++local function is_lower_letter(repr)
++    return #repr == 1 and repr:match("^[a-z]$") ~= nil
++end
++
++------------------------------------------------------------
++-- range helpers
++------------------------------------------------------------
++
++local function serialize_ranges(ranges)
++    local parts = {}
++    for _, r in ipairs(ranges) do
++        parts[#parts + 1] = tostring(r[1]) .. "-" .. tostring(r[2])
++    end
++    return table.concat(parts, ",")
++end
++
++local function parse_ranges(s)
++    local ranges = {}
++    for a, b in (s or ""):gmatch("(%d+)%-(%d+)") do
++        ranges[#ranges + 1] = { tonumber(a), tonumber(b) }
++    end
++    return ranges
++end
++
++------------------------------------------------------------
++-- 尝试读取 Rime candidate spans
++------------------------------------------------------------
++
++local function try_previous_stop(spans, pos)
++    local names = {
++        "previous_stop",
++        "PreviousStop",
++        "prev_stop",
++        "PrevStop",
++    }
++
++    for _, name in ipairs(names) do
++        local ok, value = pcall(function()
++            local fn = spans[name]
++            if type(fn) == "function" then
++                return fn(spans, pos)
++            end
++            return nil
++        end)
++
++        if ok and type(value) == "number" then
++            return value
++        end
++    end
++
++    return nil
++end
++
++local function ranges_from_rime(ctx, raw)
++    local cand = ctx:get_selected_candidate()
++    if not cand then
++        return nil
++    end
++
++    local ok, spans = pcall(function()
++        return cand:spans()
++    end)
++
++    if not ok or not spans then
++        return nil
++    end
++
++    local stops = { #raw }
++    local pos = #raw
++    local guard = 0
++
++    while pos > 0 and guard < 128 do
++        guard = guard + 1
++        local prev = try_previous_stop(spans, pos)
++
++        if type(prev) ~= "number"
++            or prev < 0
++            or prev >= pos
++        then
++            break
++        end
++
++        table.insert(stops, 1, prev)
++        pos = prev
++    end
++
++    if stops[1] ~= 0 or #stops < 2 then
++        return nil
++    end
++
++    local ranges = {}
++    for i = 1, #stops - 1 do
++        local a = stops[i]
++        local b = stops[i + 1]
++        if b > a then
++            ranges[#ranges + 1] = { a, b }
++        end
++    end
++
++    if #ranges == 0 then
++        return nil
++    end
++
++    return ranges
++end
++
++------------------------------------------------------------
++-- 小鹤双拼 fallback：两码一音节
++------------------------------------------------------------
++
++local function ranges_fallback_xiaohe(raw)
++    local ranges = {}
++    local n = #raw
++    local pos = 0
++
++    while pos < n do
++        local next_pos = math.min(pos + 2, n)
++        ranges[#ranges + 1] = { pos, next_pos }
++        pos = next_pos
++    end
++
++    return ranges
++end
++
++local function get_ranges(ctx, raw)
++    local ranges = ranges_from_rime(ctx, raw)
++    if ranges and #ranges > 0 then
++        return ranges
++    end
++    return ranges_fallback_xiaohe(raw)
++end
++
++------------------------------------------------------------
++-- string helpers
++------------------------------------------------------------
++
++local function slice0(s, start_pos, end_pos)
++    if end_pos <= start_pos then
++        return ""
++    end
++    return s:sub(start_pos + 1, end_pos)
++end
++
++local function replace_range(original, start_pos, end_pos, replacement)
++    local prefix = slice0(original, 0, start_pos)
++    local suffix = original:sub(end_pos + 1)
++    return prefix .. replacement .. suffix
++end
++
++-- 旧版 // 从头覆盖行为
++local function overwrite_from_start(original, typed)
++    local n = #typed
++    if n >= #original then
++        return typed
++    end
++    return typed .. original:sub(n + 1)
++end
++
++------------------------------------------------------------
++-- state helpers
++------------------------------------------------------------
++
++local function finish(ctx)
++    clear_props(ctx)
++end
++
++local function cancel(ctx)
++    local original = get_prop(ctx, PROP_ORIGINAL)
++    if original ~= "" then
++        ctx.input = original
++        ctx.caret_pos = #original
++    end
++    clear_props(ctx)
++end
++
++local function get_target_range(ctx)
++    local n = tonumber(get_prop(ctx, PROP_INDEX))
++    if not n or n < 1 then
++        return nil, nil, nil
++    end
++
++    local ranges = parse_ranges(get_prop(ctx, PROP_RANGES))
++    local r = ranges[n]
++    if not r then
++        return nil, nil, nil
++    end
++
++    return r[1], r[2], n
++end
++
++------------------------------------------------------------
++-- init / fini
++------------------------------------------------------------
++
++function M.init(env)
++    clear_props(env.engine.context)
++end
++
++function M.fini(env)
++    clear_props(env.engine.context)
++end
++
++------------------------------------------------------------
++-- processor
++------------------------------------------------------------
++
++function M.func(key, env)
++
++    if key:release() then
++        return NOOP
++    end
++
++    local ctx = env.engine.context
++    local repr = key:repr()
++    local stage = get_prop(ctx, PROP_STAGE)
++
++    if stage ~= "" and (
++        not ctx:is_composing()
++        or ctx.input == ""
++    ) then
++        clear_props(ctx)
++        stage = ""
++    end
++
++    --------------------------------------------------------
++    -- armed:
++    -- 已按 //，下一键决定模式：
++    --   数字 -> 索引模式
++    --   字母 -> 从头覆盖模式
++    --------------------------------------------------------
++
++    if stage == "armed" then
++
++        if is_digit(repr) then
++            if repr == "0" then
++                return ACCEPTED
++            end
++
++            set_prop(ctx, PROP_INDEX, repr)
++            set_prop(ctx, PROP_STAGE, "index")
++            sync_ui(env, ctx)
++            return ACCEPTED
++        end
++
++        if is_lower_letter(repr) then
++            local original = get_prop(ctx, PROP_ORIGINAL)
++            local typed = repr
++
++            set_prop(ctx, PROP_REPLACEMENT, typed)
++            set_prop(ctx, PROP_STAGE, "head_replace")
++
++            local new_input = overwrite_from_start(original, typed)
++            ctx.input = new_input
++            ctx.caret_pos = #new_input
++
++            return ACCEPTED
++        end
++
++        if repr == "BackSpace" then
++            finish(ctx)
++            return ACCEPTED
++        end
++
++        if repr == "Escape" then
++            cancel(ctx)
++            return ACCEPTED
++        end
++
++        if is_slash(repr) then
++            finish(ctx)
++            return ACCEPTED
++        end
++
++        finish(ctx)
++        return NOOP
++    end
++
++    --------------------------------------------------------
++    -- index:
++    -- 已输入 //N，继续收数字或等待替换字母
++    --------------------------------------------------------
++
++    if stage == "index" then
++
++        if is_digit(repr) then
++            local current = get_prop(ctx, PROP_INDEX)
++            current = current .. repr
++            set_prop(ctx, PROP_INDEX, current)
++            sync_ui(env, ctx)
++            return ACCEPTED
++        end
++
++        if repr == "BackSpace" then
++            local current = get_prop(ctx, PROP_INDEX)
++
++            if #current > 1 then
++                current = current:sub(1, #current - 1)
++                set_prop(ctx, PROP_INDEX, current)
++            else
++                set_prop(ctx, PROP_INDEX, "")
++                set_prop(ctx, PROP_STAGE, "armed")
++            end
++
++            sync_ui(env, ctx)
++            return ACCEPTED
++        end
++
++        if repr == "Escape" then
++            cancel(ctx)
++            return ACCEPTED
++        end
++
++        if is_lower_letter(repr) then
++            local start_pos, end_pos = get_target_range(ctx)
++
++            if not start_pos then
++                -- 索引越界时不吞字母，恢复正常输入
++                finish(ctx)
++                return NOOP
++            end
++
++            local original = get_prop(ctx, PROP_ORIGINAL)
++            local replacement = repr
++
++            set_prop(ctx, PROP_REPLACEMENT, replacement)
++            set_prop(ctx, PROP_STAGE, "index_replace")
++
++            local new_input = replace_range(
++                original,
++                start_pos,
++                end_pos,
++                replacement
++            )
++
++            ctx.input = new_input
++            ctx.caret_pos = #new_input
++
++            return ACCEPTED
++        end
++
++        if is_slash(repr) then
++            finish(ctx)
++            return ACCEPTED
++        end
++
++        finish(ctx)
++        return NOOP
++    end
++
++    --------------------------------------------------------
++    -- head_replace:
++    -- 旧功能：从输入串开头逐字符覆盖
++    --------------------------------------------------------
++
++    if stage == "head_replace" then
++
++        if is_lower_letter(repr) then
++            local typed = get_prop(ctx, PROP_REPLACEMENT) .. repr
++            local original = get_prop(ctx, PROP_ORIGINAL)
++
++            set_prop(ctx, PROP_REPLACEMENT, typed)
++
++            local new_input = overwrite_from_start(original, typed)
++            ctx.input = new_input
++            ctx.caret_pos = #new_input
++
++            return ACCEPTED
++        end
++
++        if repr == "BackSpace" then
++            local typed = get_prop(ctx, PROP_REPLACEMENT)
++
++            if #typed > 0 then
++                typed = typed:sub(1, #typed - 1)
++                set_prop(ctx, PROP_REPLACEMENT, typed)
++
++                local original = get_prop(ctx, PROP_ORIGINAL)
++
++                if typed == "" then
++                    ctx.input = original
++                    ctx.caret_pos = #original
++                    set_prop(ctx, PROP_STAGE, "armed")
++                else
++                    local new_input = overwrite_from_start(original, typed)
++                    ctx.input = new_input
++                    ctx.caret_pos = #new_input
++                end
++
++                return ACCEPTED
++            end
++
++            set_prop(ctx, PROP_STAGE, "armed")
++            return ACCEPTED
++        end
++
++        if repr == "Escape" then
++            cancel(ctx)
++            return ACCEPTED
++        end
++
++        if is_slash(repr) then
++            finish(ctx)
++            return ACCEPTED
++        end
++
++        finish(ctx)
++        return NOOP
++    end
++
++    --------------------------------------------------------
++    -- index_replace:
++    -- 替换指定音节
++    --------------------------------------------------------
++
++    if stage == "index_replace" then
++
++        if is_lower_letter(repr) then
++            local start_pos, end_pos = get_target_range(ctx)
++
++            if not start_pos then
++                finish(ctx)
++                return NOOP
++            end
++
++            local replacement = get_prop(ctx, PROP_REPLACEMENT) .. repr
++            local original = get_prop(ctx, PROP_ORIGINAL)
++
++            set_prop(ctx, PROP_REPLACEMENT, replacement)
++
++            local new_input = replace_range(
++                original,
++                start_pos,
++                end_pos,
++                replacement
++            )
++
++            ctx.input = new_input
++            ctx.caret_pos = #new_input
++
++            return ACCEPTED
++        end
++
++        if repr == "BackSpace" then
++            local replacement = get_prop(ctx, PROP_REPLACEMENT)
++            local start_pos, end_pos = get_target_range(ctx)
++
++            if not start_pos then
++                cancel(ctx)
++                return ACCEPTED
++            end
++
++            if #replacement > 0 then
++                replacement = replacement:sub(1, #replacement - 1)
++                set_prop(ctx, PROP_REPLACEMENT, replacement)
++
++                local original = get_prop(ctx, PROP_ORIGINAL)
++
++                if replacement == "" then
++                    ctx.input = original
++                    ctx.caret_pos = #original
++                    set_prop(ctx, PROP_STAGE, "index")
++                else
++                    local new_input = replace_range(
++                        original,
++                        start_pos,
++                        end_pos,
++                        replacement
++                    )
++                    ctx.input = new_input
++                    ctx.caret_pos = #new_input
++                end
++
++                return ACCEPTED
++            end
++
++            set_prop(ctx, PROP_STAGE, "index")
++            return ACCEPTED
++        end
++
++        if repr == "Escape" then
++            cancel(ctx)
++            return ACCEPTED
++        end
++
++        if is_slash(repr) then
++            finish(ctx)
++            return ACCEPTED
++        end
++
++        finish(ctx)
++        return NOOP
++    end
++
++    --------------------------------------------------------
++    -- 普通模式：
++    -- 第一个 / 已由万象处理。
++    -- 第二个 / 到来时进入 armed。
++    --------------------------------------------------------
++
++    if is_slash(repr) then
++        local raw = ctx.input or ""
++
++        if raw:match("^[a-z0-9]+/$")
++            and not ctx:get_option("ascii_mode")
++            and ctx.caret_pos == #raw
++        then
++            local original = raw:sub(1, #raw - 1)
++
++            if original ~= "" then
++                local ranges = get_ranges(ctx, original)
++
++                set_prop(ctx, PROP_STAGE, "armed")
++                set_prop(ctx, PROP_ORIGINAL, original)
++                set_prop(ctx, PROP_INDEX, "")
++                set_prop(ctx, PROP_RANGES, serialize_ranges(ranges))
++                set_prop(ctx, PROP_REPLACEMENT, "")
++
++                -- 去掉第一枚已进入 input 的 /
++                ctx.input = original
++                ctx.caret_pos = #original
++
++                -- 吞掉第二枚 /
++                return ACCEPTED
++            end
++        end
++    end
++
++    return NOOP
++end
++
++return M
+diff --git a/rime/wanxiang_pro.custom.yaml b/rime/wanxiang_pro.custom.yaml
+new file mode 100644
+index 0000000..b421257
+--- /dev/null
++++ b/rime/wanxiang_pro.custom.yaml
+@@ -0,0 +1,29 @@
++# 本文件的工作目录是在用户根目录，本目录携带是因为如果放外面就会更新的时候覆盖你的修改，因此我只能藏起来。
++# 如果没有按初始化说明进行初始化那么你需要手动复制本文件到上层目录，请知悉。
++patch:
++  engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
++
++  key_binder/bindings/+:
++    - { when: has_menu, accept: "Tab", send_sequence: "//" }
++    - { when: composing, accept: "Tab", send_sequence: "//" }
++
++  speller/algebra:
++    __patch:
++      #- wanxiang_algebra:/模糊音_nl
++      #- wanxiang_algebra:/模糊音_ry
++      #- wanxiang_algebra:/模糊音_hf
++      #- wanxiang_algebra:/模糊音_rl
++      #- wanxiang_algebra:/模糊音_kg
++      #- wanxiang_algebra:/模糊音_en_eng
++      #- wanxiang_algebra:/模糊音_in_ing
++      #- wanxiang_algebra:/模糊音_c_ch
++      #- wanxiang_algebra:/模糊音_z_zh
++      #- wanxiang_algebra:/模糊音_s_sh
++      - wanxiang_algebra:/pro/小鹤双拼
++      # 可选输入方案名称：自然码, 自然龙, 小鹤双拼, 搜狗双拼, 微软双拼, 智能ABC, 紫光双拼, 国标双拼
++      - wanxiang_algebra:/pro/直接辅助
++      #辅助码升级为：直接辅助和间接辅助两种类型，都是句中任意，不同点在于直接辅助是nire=你  而间接则需要/引导  ni/re=你 ，在这个基础上直接辅助支持拼音后任意位置数字声调参与，间接辅助声调在/引导前参与
++      #- wanxiang_algebra:/自然码提权             #自然码提权、小鹤双拼提权 可选
++
++  #下面是候选数量
++  menu/page_size: 6
+diff --git a/rime/weasel.custom.yaml b/rime/weasel.custom.yaml
+new file mode 100644
+index 0000000..f904329
+--- /dev/null
++++ b/rime/weasel.custom.yaml
+@@ -0,0 +1,24 @@
++# Rewrite UI 开关（脱敏版：只有开关，不含个人主题与 app_options）。
++#
++# 如果 %APPDATA%\Rime\weasel.custom.yaml 已经存在（通常都有，里面是你的主题），
++# 请把下面 patch: 下的两行合并进去，**不要整体覆盖**那个文件，否则会丢主题。
++# 也可以直接用仓库根的 enable-rewrite-ui.ps1 -Apply 自动合并。
++patch:
++  rewrite_ui/enabled: true
++  rewrite_ui/debug: false
++
++# 原生绘制用到的颜色 / 圆角 / 间距全部复用当前主题，不在这里配置：
++#   hilited_back_color      当前音节背景
++#   hilited_text_color      当前音节文字
++#   text_color              普通音节文字
++#   style/layout/corner_radius、hilite_padding_x/y、hilite_spacing
++# index badge 的背景取高亮背景透明度的 1/3，不单独配置。
++#
++# 改完必须重新部署再重启服务，顺序不能省：
++#   WeaselDeployer.exe /deploy    → 重新生成 %APPDATA%\Rime\build\weasel.yaml
++#   WeaselServer.exe /quit        → 停服务
++#   启动 WeaselServer.exe          → Initialize() 重新读配置
++# 服务端读的是 build\weasel.yaml，只改这个文件而不部署是无效的。
++#
++# rewrite_ui/debug: true 会把正在输入的编码写进
++# %TEMP%\rime.weasel\rewrite-ui.log，排查完请改回 false 并再次部署 + 重启。
+-- 
+2.53.0.windows.2
+

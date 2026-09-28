@@ -1,0 +1,29 @@
+From 28e627ea71b2489f97bcd0ddcc97076060135b3b Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:39 +0800
+Subject: [PATCH 01/18] perf(WeaselUI): use software Direct2D render target for
+ panel
+
+---
+ WeaselUI/DirectWriteResources.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index 07d3481..b98a16d 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -43,7 +43,10 @@ DirectWriteResources::DirectWriteResources(weasel::UIStyle& style,
+   const D2D1_PIXEL_FORMAT format = D2D1::PixelFormat(
+       DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
+   const D2D1_RENDER_TARGET_PROPERTIES properties =
+-      D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT, format);
++      // TSF loads this renderer in each host process. Software rendering avoids
++      // hardware device/driver initialization for this small GDI-backed panel.
++      // See rime/weasel#1913; retain the existing device-loss recovery path.
++      D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE, format);
+   HR(pD2d1Factory->CreateDCRenderTarget(&properties, &pRenderTarget));
+   pRenderTarget->SetTextAntialiasMode(mode);
+   pRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+-- 
+2.53.0.windows.2
+

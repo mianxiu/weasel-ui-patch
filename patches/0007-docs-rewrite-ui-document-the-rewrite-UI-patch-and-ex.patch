@@ -1,0 +1,163 @@
+From 1e2fd4e63ce12e5e3c7e20b8dfafca4aaf6c347d Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:30:40 +0800
+Subject: [PATCH 07/18] docs(rewrite-ui): document the rewrite UI patch and
+ example config
+
+---
+ REWRITE-UI.md                  | 126 +++++++++++++++++++++++++++++++++
+ rewrite-ui.custom.example.yaml |   9 +++
+ 2 files changed, 135 insertions(+)
+ create mode 100644 REWRITE-UI.md
+ create mode 100644 rewrite-ui.custom.example.yaml
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+new file mode 100644
+index 0000000..178b957
+--- /dev/null
++++ b/REWRITE-UI.md
+@@ -0,0 +1,126 @@
++# Rewrite UI 补丁
++
++当前包标识：`rewrite-ui-software-render-20260928`。
++安装脚本修订版：revision 3（command-line whitespace fix）。修复启动参数尾部空格导致
++`/s` 未识别而进入隐藏交互窗口的问题；注册程序也兼容参数两端空白。
++已在本机实际执行注册，返回码 0，System32/SysWOW64 DLL 均通过哈希核验。
++修复备份后退出服务无限等待：
++退出请求最多等待 10 秒；如仍有同安装目录的服务，需输入 `YES` 确认强制结束。
++确认前请完成输入并保存工作，强制结束可能丢失尚未保存的输入或学习状态。
++拒绝确认则停止安装，不替换程序。重试前先关闭旧补丁窗口；保留已有备份。
++包含此前 Rewrite UI 与 issue #1913 的软件渲染修改。软件渲染默认生效；
++Rewrite UI 仍需手动启用。
++
++## 一键应用（已有小狼毫）
++
++将整个 ZIP 解压到原安装目录之外，双击 `Apply-Patch.cmd`，接受 Windows
++管理员权限提示。脚本自动识别安装目录，验证文件哈希，备份即将替换的程序，
++退出服务，覆盖同架构程序并重新注册 TSF DLL。完成后重启 Windows。
++脚本保留原用户配置、词库和注册语言，不自动启用 Rewrite UI 或删除旧 filter。
++软件渲染优化无需修改 YAML。
++
++必须完整解压，不能直接在压缩包里运行。支持标准的 x64/x86 小狼毫安装；
++找不到安装目录、文件不完整、另一套小狼毫正在运行或 ARM64 系统时会停止。
++如自动识别失败，可在 PowerShell 中指定原目录：
++
++```powershell
++.\Apply-Patch.ps1 -Target 'C:\实际的小狼毫安装目录'
++```
++
++`-CheckOnly` 可只检查文件和目录，不执行安装。
++备份位于原安装目录的 `rewrite-backup-日期时间-随机编号` 文件夹，内含
++`RESTORE.txt`。失败时脚本尝试恢复原程序；恢复失败会显示备份路径，需手动恢复。
++成功后原安装目录中的 `rewrite-build.txt` 标明本包标识；它是安装记录，
++二进制身份仍以本包 `SHA256SUMS.txt` 为准，重启后新 DLL 才会在应用中加载。
++
++脚本已在本机真实安装上执行覆盖（2026-09-28，两次执行各留一份
++`rewrite-backup-*`）。安装后安装目录内的程序文件，以及注册到
++`System32\weasel.dll`（x64）与 `SysWOW64\weasel.dll`（x86）的 TSF 客户端，
++哈希均与本包 `SHA256SUMS.txt` 一致。x64 安装不展开 `Win32\` 目录，与上游
++`install.nsi` 行为相同，不是缺失文件。
++
++本包是小狼毫的定制二进制补丁，需要已有小狼毫、万象 Pro 和已验证的
++`indexed_rewrite_pro.lua`。它不包含万象词库或 Lua 重写算法。
++
++## 本次功能
++
++- D2D 渲染目标改为 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`，用于减少新宿主进程
++  的硬件设备初始化成本（https://github.com/rime/weasel/issues/1913）；保留原资源恢复路径。
++  实际首字延迟改善幅度尚未在用户环境测量。
++- 默认关闭；通过 `weasel.custom.yaml` 中的 `rewrite_ui/enabled` 开启。
++- 通过每次按键后的 IPC 响应发送独立 RewriteState，即使 raw input 不变也更新候选窗。
++- 原生背景高亮目标音节，音节编号和独立索引 badge 支持多位数字。
++- `index_replace` 显示 replacement；`head_replace` 使用 current input 和原始 ranges。
++- 使用现有主题的高亮文字、背景、圆角、padding 和间距；badge 背景透明度为高亮背景的 1/3。
++- 普通输入及应用内 preedit 保持原有路径；编号与 badge 不写入实际编码。
++
++## 文件
++
++根目录的 `WeaselServer.exe`、`WeaselDeployer.exe`、`rime.dll` 用于 x64 Windows。
++`Win32` 目录保存 x86 版本。`weaselx64.dll` 与 `weasel.dll` 是两种架构的
++TSF 客户端，64 位 Windows 同样需要二者。`WeaselSetup.exe` 是上游的
++注册工具，不能当作包含词库的一键安装包。本包不支持 ARM64 Windows。
++
++## 在已有小狼毫上使用
++
++1. 备份当前小狼毫安装目录和 Rime 用户目录，保留可回退的原版本。
++2. 退出小狼毫，关闭正在使用它的应用。将本包的程序文件合并到原安装目录，
++   保留原目录中的 `data`、词库和其他资源。64 位系统使用根目录的服务器和
++   运行库；32 位系统使用 `Win32` 中对应文件覆盖安装目录根部的文件。
++3. 在原安装目录以管理员权限运行 `WeaselSetup.exe /s`，重新注册简体中文
++   TSF DLL。繁体用户保留原来的注册参数（例如 `/t`）。此步骤会更新系统目录
++   中的 DLL，因此只复制 `WeaselServer.exe` 不足以启用新 UI。
++4. 在现有 `weasel.custom.yaml` 的 `patch:` 内合并：
++
++   ```yaml
++   rewrite_ui/enabled: true
++   rewrite_ui/debug: false
++   ```
++
++5. 保留现有 `Tab -> send_sequence: "//"` 和 `indexed_rewrite_pro.lua`。
++   启用本补丁后，从 schema 的 filters 中移除旧的
++   `lua_filter@*indexed_rewrite_tab_ui_v2` 条目，避免重复编号。
++6. 重新部署、注销并重新登录 Windows，使应用加载新 DLL，再启动小狼毫。
++
++如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true` 后重新部署、
++重启服务；日志位于 `%TEMP%\rime.weasel\rewrite-ui.log`，包含会话 ID、属性名和值。
++日志可能包含正在输入的编码，排查结束后关闭。日志写入失败不应影响输入。
++
++关闭 UI：将 `rewrite_ui/enabled` 设为 `false` 后重新部署并重启服务。
++完整回退：恢复备份的程序文件、配置及旧 filter，使用原版本的注册工具重注册
++原 DLL，然后注销重新登录。
++
++## 验证情况与范围
++
++- x64/x86 Release 构建通过，生成服务器、部署工具、TSF DLL；x86 注册工具通过。
++- 状态测试覆盖 armed、index、replacement、head replacement、12→1→空、
++  非等长 ranges、非法范围和越界数字。
++- 真实 IPC 解析器与 UI::Update 测试确认：preedit 不变、index 变化时 Context
++  不相等，UI 得到新的 index；退出后清除编辑显示。
++- DirectWrite 布局测试覆盖横排、竖排候选及竖排文字，96/144/192 DPI，
++  检查音节和 badge 的边界及互不重叠。
++- 隔离 librime 测试验证 property 通知携带 `名称=值`、清空通知、raw input
++  和 preedit 不变，并确认随包 librime 含 Lua 模块。
++- 已于 2026-09-28 在用户实际万象 Pro + 小鹤双拼 + 直接辅助配置上完成真实键盘
++  操作验收，一次会话内跑通：`Tab` 进入编辑、`3` 即时移动高亮并显示 badge、
++  `32`/`321`/退格 的多位索引、`j` → `jm` → 退格的 replacement 实时更新、
++  `Esc` 恢复原编码并清除编辑显示；普通输入与候选未受影响。
++- 调试日志记录到 `_indexed_rewrite_index` 单独变化（`preedit` 与 raw input
++  都不变）时通知照常发出，证明 property-only 刷新路径成立。
++- 尚未在本次验收中覆盖：多位索引 badge 的 `¹²` 显示是否肉眼可见、
++  `Space`/`Enter`/标点提交后的上屏结果、`head_replace`（Tab 后直接打字母）
++  的真机表现。如需完整确认，可按同样方式补测。
++
++## 构建基线
++
++- Weasel：`d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，分支 `feature/rewrite-ui`。
++- 源码中 librime 子模块：`1c23358157934bd6e6d6981f0c0164f05393b497`。
++- 实际链接/打包：官方 librime 1.17.0 `33e7814`，含 librime-lua `ec52e48`；
++  没有声称打包 DLL 来自本地子模块编译。
++- Boost 1.84.0，MSVC v143（14.44.35207），Windows SDK 10.0。
++- 文件版本：0.17.4.1。程序未进行发行代码签名。
++- `build-rewrite.cmd` 构建两个架构；需先准备 `weasel.props`、Boost 静态库、
++  librime 头文件与导入库。源码与测试位于此仓库。
++
++依赖来源：https://github.com/rime/librime/releases/tag/1.17.0
++及 https://archives.boost.io/release/1.84.0/source/boost_1_84_0.zip 。
+diff --git a/rewrite-ui.custom.example.yaml b/rewrite-ui.custom.example.yaml
+new file mode 100644
+index 0000000..793fe0b
+--- /dev/null
++++ b/rewrite-ui.custom.example.yaml
+@@ -0,0 +1,9 @@
++# Merge these keys into the EXISTING patch map of weasel.custom.yaml.
++# Do not replace your theme or existing settings.
++patch:
++  rewrite_ui/enabled: true
++  rewrite_ui/debug: false
++# Existing theme settings control native rewrite cells:
++# hilited_back_color, hilited_text_color, text_color,
++# style/layout/corner_radius, hilite_padding_x/y and hilite_spacing.
++# The index badge uses one third of the highlight background opacity.
+-- 
+2.53.0.windows.2
+

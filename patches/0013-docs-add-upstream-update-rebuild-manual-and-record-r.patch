@@ -1,0 +1,213 @@
+From e06f9be6ab54aec9f4d15e4dd442600d2ca83102 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:53:50 +0800
+Subject: [PATCH 13/18] docs: add upstream-update rebuild manual and record
+ runtime files outside the repo
+
+---
+ REWRITE-UI.md |  41 ++++++++++++++++
+ agent.md      | 131 ++++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 168 insertions(+), 4 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index ddec29a..62f8b68 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -184,7 +184,48 @@ upstream  https://github.com/rime/weasel.git      （官方）
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)` 调用，重绘现在由 Weasel 负责 |
+ | 补测三项验收 | 多位索引 badge 肉眼确认、`Space`/`Enter`/标点提交、`head_replace` |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题参数，未新增独立颜色键 |
++| 运行期文件不在仓库 | `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`、`weasel.custom.yaml` 只在 `%APPDATA%\Rime`，本包与仓库都不含 |
+ 
+ 重新出包请运行 `package-rewrite.ps1`；它会同时刷新本文件（作为包内 `README.md`）、
+ `rewrite-source.zip` 和 `SHA256SUMS.txt`。改动 Weasel 侧二进制后，必须重新安装
+ 并重跑上面的验收项。
++
++## 本包不含什么【重要】
++
++Weasel 侧的程序文件全部来自本仓库，但**整个可用系统不是自包含的**。
++下面这些运行期文件只存在于本机 `%APPDATA%\Rime`，本包与仓库都没有：
++
++| 文件 | 作用 | 丢失后果 |
++|---|---|---|
++| `lua\indexed_rewrite_pro.lua` | 核心编辑算法 | `Tab` 完全失效 |
++| `wanxiang_pro.custom.yaml` | `Tab → send_sequence: "//"` 绑定、注册 processor | `Tab` 进不去编辑模式 |
++| `weasel.custom.yaml` | `rewrite_ui/enabled` 等开关与主题 | Rewrite UI 默认关闭 |
++
++把这套东西搬到另一台机器时，必须一并带上这三个文件。
++
++## 上游更新后如何重建
++
++简要版（完整操作手册、冲突热点与踩坑见 `agent.md` §25）：
++
++```powershell
++cd weasel
++git fetch upstream
++git checkout feature/rewrite-ui
++git rebase upstream/master          # 冲突热点：RimeWithWeasel.cpp、WeaselPanel.cpp、README.md
++Test-Path weasel.props              # 被 git 忽略，rebase 不会提示版本号变更
++.\build-rewrite.cmd                 # 构建 x64 + x86
++pwsh -NoProfile -File .\package-rewrite.ps1
++.\Apply-Patch.cmd                   # 覆盖安装，需管理员权限
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselDeployer.exe' /deploy
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe' /quit
++Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
++```
++
++之后注销并重新登录 Windows，再按上面的验收项回归一遍。
++
++重建所需但**不被 git 跟踪**的依赖：`weasel.props`、`deps/boost_1_84_0`、
++`deps/rime-x64`、`deps/rime-x86`（`deps/` 下没有任何文件被跟踪），
++以及 `C:\BuildTools` 下的 MSVC v143。
++
++只调 `rewrite_ui/*` 开关时不需要重建，但仍然要**重新部署 + 重启服务**：
++服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`。
+diff --git a/agent.md b/agent.md
+index 486bbd7..aa238f1 100644
+--- a/agent.md
++++ b/agent.md
+@@ -141,10 +141,10 @@ agent.md
+ 【已完成】已于 2026-09-28 复制到 `weasel/agent.md` 并纳入版本控制，
+ 随 `feature/rewrite-ui` 一起 push 到 fork。
+ 
+-【注意份数】工作目录根部（`小狼毫万象补丁\agent.md`）仍留有一份内容相同的
+-副本，它不是版本控制的一部分。**以后只改仓库里的 `weasel/agent.md`**，
+-或者把根目录那份删掉，避免两份内容不一致。改动后用
+-`Get-FileHash` 比对两者即可确认是否已经分叉。
++【单一来源】原来放在工作目录根部（`小狼毫万象补丁\agent.md`）的那份重复副本
++**已删除**，避免两份内容分叉。现在 `weasel/agent.md`（即仓库根的 `agent.md`）
++是唯一正本；工作目录根部只剩 `weasel/` 与 `.build-tools/`，不再有散落的文档。
++需要临时取回旧副本可用 `git show HEAD:agent.md`。
+ 
+ ### 0.6 第一轮只做源码调查【已完成】
+ 
+@@ -1884,3 +1884,126 @@ jx¹   ji²   [jm³]   bj⁴    ³
+ | 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)`（§6.3） |
+ | 补测 §17.2 的三项 | 多位索引 badge 肉眼确认、提交键行为、`head_replace` |
+ | `rewrite_ui/*` 颜色配置 | 目前只复用主题，§11 的彩色配置未实现 |
++| **运行期文件不在仓库** | `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`、`weasel.custom.yaml` 只存在于 `%APPDATA%\Rime`，仓库和补丁包里都没有。只 clone fork 到新机器是**跑不起来**的，见 §25.6 |
++
++---
++
++## 25. 上游更新后的重建流程【操作手册】
++
++### 25.1 重建需要什么
++
++源码仓库本身不含以下内容（`.gitignore` 第 38、56 行），重建前必须确认它们还在：
++
++| 依赖 | 位置 | 说明 |
++|---|---|---|
++| `weasel.props` | `weasel/weasel.props` | 由 `weasel.props.template` 复制后填本机实际值。**被 git 忽略**，rebase 不会碰它，也不会提示你上游改了版本号 |
++| `deps/boost_1_84_0` | `weasel/deps/` | Boost 1.84.0 静态库（`install_boost.bat`） |
++| `deps/rime-x64`、`deps/rime-x86` | `weasel/deps/` | librime 1.17.0 的头文件与导入库（`get-rime.ps1`） |
++| MSVC v143 | `C:\BuildTools` | `vcvars64.bat` 与 `MSBuild.exe` 已就位，`build-rewrite.cmd` 会自动调用 |
++
++`deps/` 下**没有任何文件被 git 跟踪**（实测 `git ls-files deps` 为 0 个），
++换机器或清理过目录后要重新准备。
++
++### 25.2 完整步骤
++
++```powershell
++cd C:\Users\mianx\Desktop\小狼毫万象补丁\weasel
++
++# 0. 工作区必须干净，否则先 commit 或 stash
++git status
++
++# 1. 取上游
++git fetch upstream
++
++# 2. 个人分支建议 rebase，历史比 merge 干净
++git checkout feature/rewrite-ui
++git rebase upstream/master
++
++# 3. 解决冲突（热点见 §25.3），确认结果
++git status
++git log --oneline -5
++
++# 4. 检查 weasel.props 是否还在；并核对上游有没有改 weasel.props.template
++Test-Path weasel.props
++git diff upstream/master -- weasel.props.template
++
++# 5. 构建 x64 + x86（日志写到 build-rewrite-x64.log / -x86.log）
++.\build-rewrite.cmd
++
++# 6. 出包：刷新包内 README.md、rewrite-source.zip、SHA256SUMS.txt
++pwsh -NoProfile -File .\package-rewrite.ps1
++
++# 7. 覆盖安装（需要管理员权限，会自动备份并在失败时回滚）
++.\Apply-Patch.cmd
++#   或显式指定安装目录：
++#   .\Apply-Patch.ps1 -Target 'C:\Program Files\Rime\weasel-0.17.4'
++
++# 8. 让配置生效：重新部署 + 重启服务
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselDeployer.exe' /deploy
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe' /quit
++Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
++
++# 9. 真机验收（§17.1）
++#    jxjirzbj → Tab → 3 → j → m → Backspace → Esc
++```
++
++第 7 步之后需要**注销并重新登录 Windows**，宿主进程才会加载新的 TSF DLL。
++
++### 25.3 冲突热点
++
++上游一旦改到下面这些文件就必然冲突，都是本项目动过的：
++
++| 文件 | 我们改了什么 | 风险 |
++|---|---|---|
++| `RimeWithWeasel/RimeWithWeasel.cpp` | `Initialize()` 读开关、`OnNotify` 过滤、`_Respond` 下发 rewrite | 高 |
++| `WeaselIPC/ContextUpdater.cpp` | 增加 `ctx.rewrite.*` 分支 | 中 |
++| `include/WeaselIPCData.h` | `Context` 增加 `rewrite`，改 `empty()`/`==`/`operator!` | 中 |
++| `WeaselUI/WeaselPanel.cpp` / `.h` | `_DrawRewrite()`、preedit 分支判断 | 高 |
++| `WeaselUI/{Layout,StandardLayout,Horizontal,Vertical,VHorizontal}Layout.cpp` | `HasPanelPreedit()`、`IsInlinePreedit()` | 中 |
++| `WeaselSetup/WeaselSetup.cpp`、`imesetup.cpp` | 命令行空白归一、`WEASEL_SETUP_LOG` trace | 中 |
++| `README.md` | 整体替换为项目说明 | **必冲突** |
++| `.gitignore` | 加 `/test/rime-fixture/user.yaml`、`/test/activation-fixture/`、`/dist/` | 低 |
++
++处理原则：**保留上游的新结构，把我们的改动重新贴上去**，不要反过来整个吃掉上游。
++`WeaselUI` 的布局代码上游改动频繁，`HasPanelPreedit()` 的每一处替换点都要重看，
++确认新的 preedit 分支没有绕过 Rewrite UI。
++
++### 25.4 三个容易踩的坑
++
++1. **`weasel.props` 被忽略，rebase 不会提示版本号变了。**
++   上游升版本时会改 `weasel.props.template`（`VERSION_MAJOR/MINOR/PATCH`、
++   `PRODUCT_VERSION`、`FILE_VERSION`）。这些值只写在被忽略的 `weasel.props` 里，
++   不手动同步就会编出旧版本号的 exe，而且没有任何报错。
++2. **`deps/` 全部被忽略。** 清理过目录或换机器后要重新准备 Boost 与 librime。
++3. **`README.md` 一定会冲突。** 它在功能分支上被整体替换过，
++   `git checkout --ours README.md` 保留我们的版本即可；
++   `master` 上的上游原文不受影响。
++
++### 25.5 只改配置、不重建的情况
++
++只调 `rewrite_ui/enabled`、`rewrite_ui/debug` 时不需要上面整套流程，
++但仍必须**重新部署 + 重启服务**（§11.1）：服务端读的是
++`%APPDATA%\Rime\build\weasel.yaml`，不是 `weasel.custom.yaml`。
++
++```powershell
++# 改完 weasel.custom.yaml 之后
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselDeployer.exe' /deploy
++& 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe' /quit
++Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
++```
++
++### 25.6 仓库之外还依赖什么【重要】
++
++Weasel 侧的二进制完全来自本仓库，但**整个可用系统不是自包含的**。
++下面这些运行期文件只存在于本机 `%APPDATA%\Rime`，仓库和补丁包里都没有
++（实测 `rewrite-source.zip` 中不含任何 `.lua` 或 `custom.yaml`）：
++
++| 文件 | 作用 | 丢失后果 |
++|---|---|---|
++| `lua\indexed_rewrite_pro.lua` | 核心编辑算法 | `Tab` 完全失效，等于没有这个功能 |
++| `wanxiang_pro.custom.yaml` | `Tab → send_sequence: "//"` 绑定、注册 processor | `Tab` 进不去编辑模式 |
++| `weasel.custom.yaml` | `rewrite_ui/enabled` 等开关 + 主题 | Rewrite UI 默认关闭 |
++
++只 clone fork 到一台新机器是**跑不起来**的，必须另外把这几个文件带过去。
++建议把 `indexed_rewrite_pro.lua` 与两个 custom 文件（脱敏后）也纳入仓库，
++例如放在 `rime/` 目录下并在 `REWRITE-UI.md` 里说明如何安装。
+-- 
+2.53.0.windows.2
+

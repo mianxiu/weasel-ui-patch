@@ -1,0 +1,96 @@
+From 1464ed4fdc3e1223abdd4cfe902dc4abf5170556 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Mon, 28 Sep 2026 20:36:26 +0800
+Subject: [PATCH 08/18] docs(rewrite-ui): record acceptance results, config
+ reload semantics and known leftovers
+
+---
+ REWRITE-UI.md                  | 50 +++++++++++++++++++++++++++++++---
+ rewrite-ui.custom.example.yaml |  8 ++++++
+ 2 files changed, 54 insertions(+), 4 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 178b957..6b52cfb 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -82,11 +82,17 @@ TSF 客户端，64 位 Windows 同样需要二者。`WeaselSetup.exe` 是上游
+    `lua_filter@*indexed_rewrite_tab_ui_v2` 条目，避免重复编号。
+ 6. 重新部署、注销并重新登录 Windows，使应用加载新 DLL，再启动小狼毫。
+ 
+-如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true` 后重新部署、
+-重启服务；日志位于 `%TEMP%\rime.weasel\rewrite-ui.log`，包含会话 ID、属性名和值。
+-日志可能包含正在输入的编码，排查结束后关闭。日志写入失败不应影响输入。
++如需定位 property 更新，将 `rewrite_ui/debug` 临时设为 `true`，然后**重启
++`WeaselServer.exe`**；日志位于 `%TEMP%\rime.weasel\rewrite-ui.log`，格式为
++`<运行毫秒> session=<会话 ID> <属性名>=<属性值>`，包含正在输入的编码。
+ 
+-关闭 UI：将 `rewrite_ui/enabled` 设为 `false` 后重新部署并重启服务。
++这两个开关**不需要重新部署**：`weasel.yaml` 里并没有 `rewrite_ui/*`，
++服务端在加载配置时会合并 `weasel.custom.yaml` 的 `patch:`，所以改完只需重启
++服务。`Initialize()` 只在服务启动时读一次配置，不重启是不生效的。
++日志可能包含正在输入的编码，排查结束后务必改回 `false` 并再次重启。
++日志写入失败不影响输入。
++
++关闭 UI：将 `rewrite_ui/enabled` 设为 `false`，重启服务即可（同理无需重新部署）。
+ 完整回退：恢复备份的程序文件、配置及旧 filter，使用原版本的注册工具重注册
+ 原 DLL，然后注销重新登录。
+ 
+@@ -124,3 +130,39 @@ TSF 客户端，64 位 Windows 同样需要二者。`WeaselSetup.exe` 是上游
+ 
+ 依赖来源：https://github.com/rime/librime/releases/tag/1.17.0
+ 及 https://archives.boost.io/release/1.84.0/source/boost_1_84_0.zip 。
++
++## 源码提交
++
++改动全部位于 `feature/rewrite-ui` 分支，基线为
++`d73f6295e8252ed2f7b9c12bae32e9001b1afdaa`，共 7 个提交：
++
++```text
++28e627e perf(WeaselUI): use software Direct2D render target for panel
++18942af feat(rewrite-ui): bridge indexed rewrite properties through IPC context
++d052fb4 feat(rewrite-ui): draw syllable cells, active highlight and index badge
++4d9e211 fix(WeaselSetup): trim command-line whitespace and add opt-in setup tracing
++fd33dc1 test(rewrite-ui): add state, IPC pipeline and librime property tests
++44e2972 chore(build): add rewrite build, package, activation and patch scripts
++1e2fd4e docs(rewrite-ui): document the rewrite UI patch and example config
++```
++
++其中 `4d9e211` 同时包含命令行首尾空白归一（修掉参数尾部空格导致 `/s` 未识别、
++进入隐藏交互窗口的问题）和 `WEASEL_SETUP_LOG` 门控的安装 trace；两者落在同一个
++代码块内，无法干净拆分。trace 不设置该环境变量时零开销。
++
++`git remote` 目前只有 `origin`，直接指向官方 `rime/weasel`，**尚未 Fork、
++也没有 `upstream`**；同步上游前需要先补做。
++
++## 已知遗留
++
++| 项 | 说明 |
++|---|---|
++| 删除 `indexed_rewrite_tab_ui_v2.lua` | 已不被任何 schema 引用，文件仍在 `%APPDATA%\Rime\lua\` |
++| 移除核心 Lua 里的 `sync_ui()` | 多余的 `env.engine:compose(ctx)` 调用，重绘现在由 Weasel 负责 |
++| 补测三项验收 | 多位索引 badge 肉眼确认、`Space`/`Enter`/标点提交、`head_replace` |
++| 补做 Fork 与 `upstream` | 见上 |
++| `rewrite_ui/*` 颜色配置 | 目前只复用主题参数，未新增独立颜色键 |
++
++重新出包请运行 `package-rewrite.ps1`；它会同时刷新本文件（作为包内 `README.md`）、
++`rewrite-source.zip` 和 `SHA256SUMS.txt`。改动 Weasel 侧二进制后，必须重新安装
++并重跑上面的验收项。
+diff --git a/rewrite-ui.custom.example.yaml b/rewrite-ui.custom.example.yaml
+index 793fe0b..3a56128 100644
+--- a/rewrite-ui.custom.example.yaml
++++ b/rewrite-ui.custom.example.yaml
+@@ -7,3 +7,11 @@ patch:
+ # hilited_back_color, hilited_text_color, text_color,
+ # style/layout/corner_radius, hilite_padding_x/y and hilite_spacing.
+ # The index badge uses one third of the highlight background opacity.
++#
++# After editing these keys, restart WeaselServer.exe. A full redeploy is NOT
++# needed: weasel.yaml contains no rewrite_ui/* keys, and the server merges the
++# patch map from weasel.custom.yaml when it loads the config at startup.
++#
++# rewrite_ui/debug: true writes the codes being typed to
++# %TEMP%\rime.weasel\rewrite-ui.log. Turn it back off and restart the server
++# when the investigation is finished.
+-- 
+2.53.0.windows.2
+
