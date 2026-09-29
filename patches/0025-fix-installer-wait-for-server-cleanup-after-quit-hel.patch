@@ -1,7 +1,7 @@
 From 99242e0b03af92554380876618f879e4e1cf0be4 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Tue, 29 Sep 2026 22:52:55 +0800
-Subject: [PATCH 25/26] fix(installer): wait for server cleanup after quit
+Subject: [PATCH 25/27] fix(installer): wait for server cleanup after quit
  helper exits
 
 ---

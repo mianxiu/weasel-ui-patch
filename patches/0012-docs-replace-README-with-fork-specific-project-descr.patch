@@ -1,7 +1,7 @@
 From c62974ffb994ed29abe49f1b75ee0bdbbc2f45e5 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:48:47 +0800
-Subject: [PATCH 12/26] docs: replace README with fork-specific project
+Subject: [PATCH 12/27] docs: replace README with fork-specific project
  description
 
 ---

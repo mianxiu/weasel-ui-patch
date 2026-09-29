@@ -1,0 +1,1341 @@
+From 896af8cd88a0d2064fe262f7719237f72cc04089 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Tue, 29 Sep 2026 23:25:15 +0800
+Subject: [PATCH 27/27] feat(rewrite): add opt-in TSF inline syllable highlight
+ preview
+
+---
+ Apply-Inline-Preview.cmd                |   9 ++
+ Apply-Patch.ps1                         |  10 +-
+ INLINE-REWRITE.md                       |  50 +++++++
+ INSTALL-PATCH.md                        |   1 +
+ Install-Binaries.ps1                    |   2 +-
+ REWRITE-UI.md                           |   2 +
+ RimeWithWeasel/RimeWithWeasel.cpp       |  10 ++
+ WeaselIPC/Configurator.cpp              |   6 +-
+ WeaselTSF/Composition.cpp               | 176 +++++++++++++++++-------
+ WeaselTSF/DisplayAttribute.cpp          |  28 +++-
+ WeaselTSF/DisplayAttributeInfo.cpp      |  14 +-
+ WeaselTSF/DisplayAttributeInfo.h        |   2 +-
+ WeaselTSF/DisplayAttributeProvider.cpp  |   6 +-
+ WeaselTSF/EditSession.cpp               |   2 +-
+ WeaselTSF/EnumDisplayAttributeInfo.cpp  |   8 +-
+ WeaselTSF/Globals.cpp                   |   4 +
+ WeaselTSF/Globals.h                     |   1 +
+ WeaselTSF/ThreadMgrEventSink.cpp        |   1 +
+ WeaselTSF/WeaselTSF.h                   |  13 +-
+ agent.md                                |   2 +
+ include/InlineRewrite.h                 |  61 ++++++++
+ include/InlineRewriteUpdate.h           |  31 +++++
+ include/RimeWithWeasel.h                |   2 +
+ include/WeaselIPCData.h                 |   4 +-
+ package-rewrite.ps1                     |  10 +-
+ rewrite-build.txt                       |   2 +-
+ rime/inline-rewrite.custom.example.yaml |   8 ++
+ test-inline-rewrite.cmd                 |  27 ++++
+ test/inline_attribute_test.cpp          |  48 +++++++
+ test/inline_rewrite_test.cpp            | 101 ++++++++++++++
+ test/installer_config_test.ps1          |  19 +++
+ test/installer_rime_test.cpp            |  49 ++++++-
+ test/installer_rime_test.ps1            |   7 +-
+ tools/rewrite-config.cpp                |  33 ++++-
+ 34 files changed, 669 insertions(+), 80 deletions(-)
+ create mode 100644 Apply-Inline-Preview.cmd
+ create mode 100644 INLINE-REWRITE.md
+ create mode 100644 include/InlineRewrite.h
+ create mode 100644 include/InlineRewriteUpdate.h
+ create mode 100644 rime/inline-rewrite.custom.example.yaml
+ create mode 100644 test-inline-rewrite.cmd
+ create mode 100644 test/inline_attribute_test.cpp
+ create mode 100644 test/inline_rewrite_test.cpp
+
+diff --git a/Apply-Inline-Preview.cmd b/Apply-Inline-Preview.cmd
+new file mode 100644
+index 0000000..d7bfcb5
+--- /dev/null
++++ b/Apply-Inline-Preview.cmd
+@@ -0,0 +1,9 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Patch.ps1" -InlineRewrite
++set "patch_result=%errorlevel%"
++echo.
++if not "%patch_result%"=="0" echo Patch failed. Read the message above; do not delete the backup.
++pause
++exit /b %patch_result%
+diff --git a/Apply-Patch.ps1 b/Apply-Patch.ps1
+index 827c3e0..26b97a3 100644
+--- a/Apply-Patch.ps1
++++ b/Apply-Patch.ps1
+@@ -1,6 +1,6 @@
+ ﻿# Only the binary installer is elevated; configuration belongs to the signed-in user.
+ [CmdletBinding()]
+-param([string]$Target, [string]$UserDataRoot, [switch]$CheckOnly)
++param([string]$Target, [string]$UserDataRoot, [switch]$CheckOnly, [switch]$InlineRewrite)
+ $ErrorActionPreference = 'Stop'
+ Set-StrictMode -Version 2
+ $package = $PSScriptRoot
+@@ -136,7 +136,9 @@ try {
+     $path = Join-Path $UserDataRoot $relative
+     $inputSnapshot[$relative] = if (Test-Path -LiteralPath $path -PathType Leaf) { (Get-FileHash -LiteralPath $path).Hash } else { $null }
+   }
+-  Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('prepare "{0}" "{1}"' -f $UserDataRoot, $stage)
++  $prepareMode = if ($InlineRewrite) { 'prepare-inline' } else { 'prepare' }
++  if ($InlineRewrite) { Write-Host '试验模式：启用行内预编辑，重写期间显示原始编码与音节高亮；候选窗保留。应用兼容性待验收。' }
++  Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('{0} "{1}" "{2}"' -f $prepareMode, $UserDataRoot, $stage)
+   Write-Host "Program directory: $Target"
+   Write-Host "User directory: $UserDataRoot"
+   Write-Host 'Will merge YAML, install Lua, enable Rewrite UI, disable debug logging, deploy and restart.'
+@@ -181,7 +183,8 @@ try {
+   New-Item -ItemType Directory -Path (Join-Path $UserDataRoot 'lua') -Force | Out-Null
+   Copy-Checked (Join-Path $package 'rime\lua\indexed_rewrite_pro.lua') (Join-Path $UserDataRoot 'lua\indexed_rewrite_pro.lua')
+   Invoke-Wait (Join-Path $Target 'WeaselDeployer.exe') '/deploy'
+-  Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('verify "{0}"' -f $UserDataRoot)
++  $verifyMode = if ($InlineRewrite) { 'verify-inline' } else { 'verify' }
++  Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('{0} "{1}"' -f $verifyMode, $UserDataRoot)
+   Start-UserServer
+   Write-Host 'SUCCESS: program files, Lua and YAML installed; deployment verified; Rewrite UI enabled.' -ForegroundColor Green
+   Write-Host 'Sign out and back in (or restart Windows) so applications load the new TSF DLLs.'
+@@ -193,6 +196,7 @@ try {
+   Write-Host '  2. 输入拼音后按 Tab，检查音节高亮、数字索引选择，以及 Esc 恢复是否正常。'
+   Write-Host '开头的 CHECK ONLY 只是安装前预检；本次安装已完成。'
+   Write-Host '备份已保留，无需删除。按任意键只关闭此窗口，不会自动重启 Windows。'
++  if ($InlineRewrite) { Write-Host '行内试验配置已部署；若应用不显示高亮，继续使用候选窗反馈。回退方法见 INLINE-REWRITE.md。' }
+   exit 0
+ } catch {
+   Write-Host "INSTALL FAILED: $_" -ForegroundColor Red
+diff --git a/INLINE-REWRITE.md b/INLINE-REWRITE.md
+new file mode 100644
+index 0000000..a26cdec
+--- /dev/null
++++ b/INLINE-REWRITE.md
+@@ -0,0 +1,50 @@
++# 输入框内音节高亮（试验版）
++
++本版实现应用输入框内的 TSF 音节高亮；仍使用 Tab → 数字 → 替换字母的操作，不支持鼠标点击选择音节。候选窗里的重写行、编号和徽标继续保留。
++
++## 安装并启用
++
++完整解压 `Weasel-Rewrite-UI-Inline-Preview.zip`，普通双击 **Apply-Inline-Preview.cmd**。它使用现有备份、合并、提权、部署和恢复流程，显式启用以下配置：
++
++```yaml
++patch:
++  rewrite_ui/enabled: true
++  rewrite_ui/debug: false
++  rewrite_ui/display: inline
++  rewrite_ui/inline_raw_input: true
++  style/inline_preedit: true
++```
++
++成功后注销或重启 Windows，再打开应用测试。普通 `Apply-Patch.cmd` 不主动开启这些试验选项，保留已有设置。
++
++`inline_raw_input: true` 表示仅在可映射的重写状态中，把行内未上屏文本临时显示成原始键盘编码。最终提交继续使用 Rime 的 commit；不会把音节编号写入文档。退出重写恢复正常预编辑，宿主强制结束原始编码预览时尝试清除预览并取消对应 Rime 组合。
++
++如不希望改变预编辑显示内容，设置 `rewrite_ui/inline_raw_input: false`。这时仅支持与原编码逐字一致（允许额外显示空格）的预编辑文本；展开拼音、汉字预览、无法可靠映射的范围回退候选窗。
++
++方案和应用的 `inline_preedit: false` 覆盖仍会生效，不强制绕过。此开关是全局默认，会让支持它的应用使用行内预编辑；如需仅在特定应用启用，请保留适当的应用级设置。
++
++## 实现边界
++
++- `rewrite_ui/display` 默认 `panel`；只有精确的 `inline` 开启试验功能。`auto` 尚未启用，未知值保持 panel 行为。
++- 高亮使用系统选择颜色及实线下划线，宿主决定实际绘制效果。API 成功不代表宿主一定显示，故不隐藏候选窗反馈。
++- 索引变化且文本不变时，不调用 SetText 或 SetSelection。目标范围只使用显示属性，不修改真实文本选区。
++- 内联写入在当前写会话中执行，检查 composition 身份；焦点清理使用身份和修订号，防止旧请求清理新状态。
++- Lua 核心、候选提交路径和稳定版 Release 保持原状。本包单独生成，不覆盖稳定 ZIP。
++
++## 验收状态
++
++已覆盖：范围与替换长度、两位索引、非法范围、UTF-16 回退；属性更新不写文本/选区；失效 composition；属性失败；显式 raw 模式与退出；DLL 的显示属性枚举/查询；隔离 librime 的 Lua、部署、替换、退格、Esc 和 Enter 提交。
++
++**尚未完成真实宿主 UI 验收，不能宣称兼容所有输入框。** 请分别在记事本、浏览器 input/contenteditable、VS Code/Electron、常用聊天输入框中检查：
++
++1. 输入拼音，Tab → 数字：输入框目标音节立即高亮，候选窗仍正常。
++2. 替换不同长度、退格、Esc；两位索引及越界索引不误高亮。
++3. Space、Enter、标点提交，以及连续输入、换行：文档中无编号或残留原始编码。
++4. 鼠标移动光标、切换应用、宿主终止组合、滚动换行：无光标跳动或旧高亮残留。
++5. 深浅主题、高对比度、DPI；应用禁用行内预编辑后候选窗仍可用。
++
++## 关闭与回退
++
++在现有 `weasel.custom.yaml` 的 `patch` 下设置 `rewrite_ui/display: panel`、`rewrite_ui/inline_raw_input: false`，重新部署并重启小狼毫服务。`style/inline_preedit` 恢复为安装前备份中的原值（原来不存在则移除新加条目），避免改变你原来的显示偏好。
++
++需要完整还原时按本次 `rewrite-backup-*` 中的 `RESTORE.txt` 恢复配置与程序，再注销/重启。保留备份。真机通过前不要把此包当作稳定版本发布。
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 6848fe1..babbc22 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **行内高亮预览版：** 本分支生成独立的 `Weasel-Rewrite-UI-Inline-Preview.zip`。要启用输入框内音节高亮，请普通双击 `Apply-Inline-Preview.cmd`，并先阅读 `INLINE-REWRITE.md`。该入口会显式开启行内预编辑与重写期间的原始编码预览；应用兼容性尚待真机验收。下面的普通安装入口保留已有显示设置。
+ # 小狼毫 / 万象 Pro 一键重写补丁
+ 
+ 适用于已经安装小狼毫和万象 Pro 方案、词库的 Windows x64 / x86 电脑。不支持 ARM64。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 136c579..1854dd6 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -137,7 +137,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-one-click-20260929; profile: $profileName"
++  Write-Host "Build: rewrite-ui-inline-preview-20260929; profile: $profileName"
+   Write-Host 'Program installer: revision 5 (persistent administrator diagnostics)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 16e8540..ca0247a 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,5 @@
++> **2026-09-29 行内试验分支：** 已实现 TSF 音节范围高亮、属性独立更新及显式原始编码预览。独立包和配置入口见 `INLINE-REWRITE.md`；真实宿主兼容性尚未验收，稳定 Release 不变。`test-inline-rewrite.cmd` 运行模型、DLL 接口与隔离 librime 测试。
++
+ # Rewrite UI 补丁
+ 
+ > 2026-09-29：分发安装流程已更新为一键安装程序、合并 YAML、安装 Lua、启用、部署与验证。
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index fdd82a8..9093779 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -121,12 +121,20 @@ void RimeWithWeaselHandler::Initialize() {
+   RimeConfig config = {NULL};
+   m_rewrite_enabled = false;
+   m_rewrite_debug = false;
++  m_rewrite_inline = false;
++  m_rewrite_inline_raw = false;
+   if (rime_api->config_open("weasel", &config)) {
+     Bool rewrite_enabled = False, rewrite_debug = False;
+     rime_api->config_get_bool(&config, "rewrite_ui/enabled", &rewrite_enabled);
+     rime_api->config_get_bool(&config, "rewrite_ui/debug", &rewrite_debug);
+     m_rewrite_enabled = !!rewrite_enabled;
+     m_rewrite_debug = !!rewrite_debug;
++    char rewrite_display[32] = {};
++    Bool rewrite_raw = False;
++    rime_api->config_get_string(&config, "rewrite_ui/display", rewrite_display, sizeof(rewrite_display));
++    rime_api->config_get_bool(&config, "rewrite_ui/inline_raw_input", &rewrite_raw);
++    m_rewrite_inline = m_rewrite_enabled && std::string(rewrite_display) == "inline";
++    m_rewrite_inline_raw = m_rewrite_inline && !!rewrite_raw;
+     if (m_ui) {
+       _UpdateUIStyle(&config, m_ui, true);
+       _UpdateShowNotifications(&config, true);
+@@ -949,6 +957,8 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
+   body.append(L"config.inline_preedit=")
+       .append(std::to_wstring((int)session_status.style.inline_preedit))
+       .append(L"\n");
++  body.append(L"config.rewrite_inline=").append(m_rewrite_inline ? L"1\n" : L"0\n");
++  body.append(L"config.rewrite_inline_raw=").append(m_rewrite_inline_raw ? L"1\n" : L"0\n");
+ 
+   // style
+   if (!session_status.__synced) {
+diff --git a/WeaselIPC/Configurator.cpp b/WeaselIPC/Configurator.cpp
+index a16c4fa..9cbc365 100644
+--- a/WeaselIPC/Configurator.cpp
++++ b/WeaselIPC/Configurator.cpp
+@@ -14,10 +14,14 @@ Configurator::~Configurator() {}
+ 
+ void Configurator::Store(Deserializer::KeyType const& key,
+                          std::wstring const& value) {
+-  if (!m_pTarget->p_context || key.size() < 2)
++  if (!m_pTarget->p_config || key.size() < 2)
+     return;
+   bool bool_value = (!value.empty() && value != L"0");
+   if (key[1] == L"inline_preedit") {
+     m_pTarget->p_config->inline_preedit = bool_value;
++  } else if (key[1] == L"rewrite_inline") {
++    m_pTarget->p_config->rewrite_inline = value == L"1";
++  } else if (key[1] == L"rewrite_inline_raw") {
++    m_pTarget->p_config->rewrite_inline_raw = value == L"1";
+   }
+ }
+diff --git a/WeaselTSF/Composition.cpp b/WeaselTSF/Composition.cpp
+index 533a054..bd1e970 100644
+--- a/WeaselTSF/Composition.cpp
++++ b/WeaselTSF/Composition.cpp
+@@ -3,6 +3,7 @@
+ #include "EditSession.h"
+ #include "ResponseParser.h"
+ #include "CandidateList.h"
++#include <InlineRewriteUpdate.h>
+ 
+ /* Start Composition */
+ class CStartCompositionEditSession : public CEditSession {
+@@ -99,11 +100,14 @@ STDMETHODIMP CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
+   if (!_pTextService || !_pContext)
+     return S_OK;
+ 
+-  _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
+-
+   com_ptr<ITfRange> pCompositionRange;
+-  if (_clear && _pComposition->GetRange(&pCompositionRange) == S_OK)
+-    pCompositionRange->SetText(ec, 0, L"", 0);
++  if (_pComposition->GetRange(&pCompositionRange) == S_OK) {
++    // Clear the captured composition, never a newer current composition.
++    com_ptr<ITfProperty> property;
++    if (_pContext->GetProperty(GUID_PROP_ATTRIBUTE, &property) == S_OK)
++      property->Clear(ec, pCompositionRange);
++    if (_clear) pCompositionRange->SetText(ec, 0, L"", 0);
++  }
+ 
+   // Drop ownership before EndComposition(). Some applications notify
+   // OnCompositionTerminated synchronously while the old composition ends.
+@@ -250,10 +254,11 @@ class CInlinePreeditEditSession : public CEditSession {
+   CInlinePreeditEditSession(com_ptr<WeaselTSF> pTextService,
+                             com_ptr<ITfContext> pContext,
+                             com_ptr<ITfComposition> pComposition,
+-                            const std::shared_ptr<weasel::Context> context)
++                            const std::shared_ptr<weasel::Context> context,
++                            const weasel::Config& config)
+       : CEditSession(pTextService, pContext),
+         _pComposition(pComposition),
+-        _context(context) {}
++        _context(context), _config(config) {}
+ 
+   /* ITfEditSession */
+   STDMETHODIMP DoEditSession(TfEditCookie ec);
+@@ -261,62 +266,112 @@ class CInlinePreeditEditSession : public CEditSession {
+  private:
+   com_ptr<ITfComposition> _pComposition;
+   const std::shared_ptr<weasel::Context> _context;
++  const weasel::Config _config;
+ };
+ 
+ STDMETHODIMP CInlinePreeditEditSession::DoEditSession(TfEditCookie ec) {
+-  std::wstring preedit = _context->preedit.str;
+-
+-  com_ptr<ITfRange> pRangeComposition;
+-  if (_pComposition == nullptr)
+-    return E_FAIL;
+-  if ((_pComposition->GetRange(&pRangeComposition)) != S_OK)
+-    return E_FAIL;
+-
+-  if ((pRangeComposition->SetText(ec, 0, preedit.c_str(),
+-                                  static_cast<LONG>(preedit.length()))) != S_OK)
+-    return E_FAIL;
+-
+-  /* TODO: Check the availability and correctness of these values */
+-  int sel_cursor = -1;
+-  for (size_t i = 0; i < _context->preedit.attributes.size(); i++) {
+-    if (_context->preedit.attributes.at(i).type == weasel::HIGHLIGHTED) {
+-      sel_cursor = _context->preedit.attributes.at(i).range.cursor;
++  com_ptr<ITfRange> range;
++  if (!_pComposition || !_pTextService->_IsCurrentComposition(_pComposition) ||
++      _pComposition->GetRange(&range) != S_OK) return E_FAIL;
++  struct Editor {
++    WeaselTSF* service;
++    ITfContext* context;
++    ITfComposition* composition;
++    ITfRange* range;
++    TfEditCookie ec;
++    bool IsCurrent() { return service->_IsCurrentComposition(composition); }
++    bool SameText(const std::wstring& text) {
++      if (text.size() > 8192) return false;
++      std::vector<WCHAR> current(text.size() + 1);
++      ULONG fetched = 0;
++      return range->GetText(ec, 0, current.data(), static_cast<ULONG>(current.size()),
++                            &fetched) == S_OK && fetched == text.size() &&
++             std::wstring(current.data(), fetched) == text;
++    }
++    bool WriteText(const std::wstring& text) {
++      return range->SetText(ec, 0, text.c_str(), static_cast<LONG>(text.size())) == S_OK;
++    }
++    void SetRaw(bool raw) { service->_SetInlineRewriteRaw(raw); }
++    bool ResetAttributes() {
++      return service->_SetCompositionDisplayAttributes(ec, context, range);
++    }
++    void Highlight(const weasel::InlineRewriteRange& target) {
++      service->_SetRewriteDisplayAttribute(ec, context, range,
++          static_cast<LONG>(target.start), static_cast<LONG>(target.end));
++    }
++    bool SetCaret(int cursor, size_t length) {
++      LONG moved = 0;
++      if (cursor < 0 || static_cast<size_t>(cursor) > length) {
++        if (range->Collapse(ec, TF_ANCHOR_END) != S_OK) return false;
++      } else {
++        if (range->Collapse(ec, TF_ANCHOR_START) != S_OK ||
++            range->ShiftStart(ec, cursor, &moved, nullptr) != S_OK || moved != cursor)
++          return false;
++      }
++      TF_SELECTION selection = {};
++      selection.range = range;
++      selection.style.ase = TF_AE_NONE;
++      return context->SetSelection(ec, 1, &selection) == S_OK;
++    }
++  } editor{_pTextService, _pContext, _pComposition, range, ec};
++  int cursor = -1;
++  for (const auto& attribute : _context->preedit.attributes) {
++    if (attribute.type == weasel::HIGHLIGHTED) {
++      cursor = attribute.range.cursor;
+       break;
+     }
+   }
+-
+-  _pTextService->_SetCompositionDisplayAttributes(ec, _pContext,
+-                                                  pRangeComposition);
+-
+-  /* Set caret */
+-  LONG cch;
+-  TF_SELECTION tfSelection;
+-  if (sel_cursor < 0) {
+-    pRangeComposition->Collapse(ec, TF_ANCHOR_END);
+-  } else {
+-    pRangeComposition->Collapse(ec, TF_ANCHOR_START);
+-    pRangeComposition->ShiftStart(ec, sel_cursor, &cch, NULL);
+-  }
+-  tfSelection.range = pRangeComposition;
+-  tfSelection.style.ase = TF_AE_NONE;
+-  tfSelection.style.fInterimChar = FALSE;
+-  _pContext->SetSelection(ec, 1, &tfSelection);
+-
+-  return S_OK;
++  return weasel::UpdateInlinePreedit(editor, _context->rewrite, _context->preedit.str,
++      cursor, _config.rewrite_inline, _config.rewrite_inline_raw) ? S_OK : E_FAIL;
+ }
+-
+ BOOL WeaselTSF::_ShowInlinePreedit(
+     com_ptr<ITfContext> pContext,
+-    const std::shared_ptr<weasel::Context> context) {
++    const std::shared_ptr<weasel::Context> context,
++    TfEditCookie ec, const weasel::Config& config) {
++  ++_inlineRevision;
+   com_ptr<CInlinePreeditEditSession> pEditSession;
+   pEditSession.Attach(
+-      new CInlinePreeditEditSession(this, pContext, _pComposition, context));
++      new CInlinePreeditEditSession(this, pContext, _pComposition, context, config));
+   if (pEditSession != NULL) {
+-    HRESULT hr;
+-    pContext->RequestEditSession(_tfClientId, pEditSession,
+-                                 TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
++    if (!config.rewrite_inline) {
++      HRESULT hr = E_FAIL;
++      return SUCCEEDED(pContext->RequestEditSession(_tfClientId, pEditSession,
++          TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr)) && SUCCEEDED(hr);
++    }
++    // Already inside this context's write edit session. Do not queue an old
++    // preedit snapshot that might execute after commit or a newer index.
++    return SUCCEEDED(pEditSession->DoEditSession(ec));
+   }
+-  return TRUE;
++  return FALSE;
++}
++
++class CClearRewriteHighlight : public CEditSession {
++ public:
++  CClearRewriteHighlight(WeaselTSF* service, com_ptr<ITfContext> context,
++                         com_ptr<ITfComposition> composition, unsigned long long revision)
++      : CEditSession(service, context), _composition(composition), _revision(revision) {}
++  STDMETHODIMP DoEditSession(TfEditCookie ec) {
++    if (!_pTextService->_IsCurrentComposition(_composition) ||
++        _pTextService->_InlineRevision() != _revision) return S_OK;
++    com_ptr<ITfRange> range;
++    if (_composition->GetRange(&range) == S_OK)
++      _pTextService->_SetCompositionDisplayAttributes(ec, _pContext, range);
++    return S_OK;
++  }
++ private:
++  com_ptr<ITfComposition> _composition;
++  unsigned long long _revision;
++};
++
++void WeaselTSF::_ResetInlineRewriteHighlight() {
++  ++_inlineRevision;
++  if (!_pComposition || !_pEditSessionContext) return;
++  com_ptr<CClearRewriteHighlight> session;
++  session.Attach(new CClearRewriteHighlight(this, _pEditSessionContext,
++                                             _pComposition, _inlineRevision));
++  HRESULT hr;
++  _pEditSessionContext->RequestEditSession(_tfClientId, session,
++      TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+ }
+ 
+ /* Update Composition */
+@@ -348,6 +403,9 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
+   if (FAILED(_pComposition->GetRange(&pRange)))
+     return E_FAIL;
+ 
++  // From this point the range is being replaced with authoritative Rime
++  // commit text. A reentrant termination must not treat it as raw preview.
++  _pTextService->_SetInlineRewriteRaw(false);
+   if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
+                              static_cast<LONG>(_text.length()))))
+     return E_FAIL;
+@@ -401,6 +459,23 @@ STDMETHODIMP WeaselTSF::OnCompositionTerminated(TfEditCookie ecWrite,
+   if (!_IsCurrentComposition(pComposition))
+     return S_OK;
+ 
++  _ClearCompositionDisplayAttributes(ecWrite, _pEditSessionContext);
++  if (_rewriteRawComposition) {
++    // Explicit raw display is preview-only. A host-forced termination must
++    // not leave those keyboard codes in the document or reinsert them later.
++    com_ptr<ITfRange> range;
++    HRESULT erased = E_FAIL;
++    pComposition->GetRange(&range);
++    // Clearing text may reenter this callback. Drop ownership first.
++    _FinalizeComposition();
++    if (range) erased = range->SetText(ecWrite, 0, L"", 0);
++    m_client.ClearComposition();
++    _status.composing = false;
++    _committed = TRUE;
++    _cand->Destroy();
++    return erased;
++  }
++
+   // A host may terminate the empty TSF composition used for a non-inline
+   // preedit. Keep Rime's composing state; the next key will create a fresh
+   // TSF composition. Only an inactive Rime session should be aborted here.
+@@ -423,10 +498,13 @@ void WeaselTSF::_AbortComposition(bool clear) {
+ }
+ 
+ void WeaselTSF::_FinalizeComposition() {
++  ++_inlineRevision;
++  _rewriteRawComposition = false;
+   _pComposition = nullptr;
+ }
+ 
+ void WeaselTSF::_SetComposition(com_ptr<ITfComposition> pComposition) {
++  ++_inlineRevision;
+   _pComposition = pComposition;
+ }
+ 
+diff --git a/WeaselTSF/DisplayAttribute.cpp b/WeaselTSF/DisplayAttribute.cpp
+index 679c799..9e6a1a5 100644
+--- a/WeaselTSF/DisplayAttribute.cpp
++++ b/WeaselTSF/DisplayAttribute.cpp
+@@ -7,7 +7,7 @@ void WeaselTSF::_ClearCompositionDisplayAttributes(TfEditCookie ec,
+   ITfRange* pRangeComposition = nullptr;
+   ITfProperty* pDisplayAttributeProperty = nullptr;
+ 
+-  if (FAILED(_pComposition->GetRange(&pRangeComposition))) {
++  if (!pContext || !_pComposition || FAILED(_pComposition->GetRange(&pRangeComposition))) {
+     return;
+   }
+ 
+@@ -26,6 +26,7 @@ BOOL WeaselTSF::_SetCompositionDisplayAttributes(TfEditCookie ec,
+                                                  ITfRange* pRangeComposition) {
+   ITfProperty* pDisplayAttributeProperty = nullptr;
+   HRESULT hr = S_OK;
++  if (_gaDisplayAttributeInput == TF_INVALID_GUIDATOM) return FALSE;
+ 
+   if (pRangeComposition == nullptr)
+     hr = _pComposition->GetRange(&pRangeComposition);
+@@ -67,9 +68,34 @@ BOOL WeaselTSF::_InitDisplayAttributeGuidAtom() {
+   if (FAILED(hr)) {
+     goto Exit;
+   }
++  hr = pCategoryMgr->RegisterGUID(c_guidDisplayAttributeRewrite,
++                                  &_gaDisplayAttributeRewrite);
+ 
+ Exit:
+   pCategoryMgr->Release();
+ 
+   return (hr == S_OK);
+ }
++
++BOOL WeaselTSF::_SetRewriteDisplayAttribute(TfEditCookie ec, ITfContext* context,
++                                           ITfRange* range, LONG start, LONG end) {
++  if (!range || start < 0 || end <= start ||
++      _gaDisplayAttributeRewrite == TF_INVALID_GUIDATOM) return FALSE;
++  com_ptr<ITfRange> target;
++  com_ptr<ITfProperty> property;
++  if (range->Clone(&target) != S_OK ||
++      target->Collapse(ec, TF_ANCHOR_START) != S_OK) return FALSE;
++  LONG moved = 0;
++  if (target->ShiftEnd(ec, end, &moved, nullptr) != S_OK || moved != end ||
++      target->ShiftStart(ec, start, &moved, nullptr) != S_OK || moved != start)
++    return FALSE;
++  LONG comparison = 0;
++  if (target->CompareEnd(ec, range, TF_ANCHOR_END, &comparison) != S_OK || comparison > 0)
++    return FALSE;
++  if (context->GetProperty(GUID_PROP_ATTRIBUTE, &property) != S_OK) return FALSE;
++  VARIANT value;
++  VariantInit(&value);
++  value.vt = VT_I4;
++  value.lVal = _gaDisplayAttributeRewrite;
++  return property->SetValue(ec, target, &value) == S_OK;
++}
+diff --git a/WeaselTSF/DisplayAttributeInfo.cpp b/WeaselTSF/DisplayAttributeInfo.cpp
+index 85c276a..06951e0 100644
+--- a/WeaselTSF/DisplayAttributeInfo.cpp
++++ b/WeaselTSF/DisplayAttributeInfo.cpp
+@@ -16,7 +16,13 @@ const TF_DISPLAYATTRIBUTE _daiDisplayAttribute = {
+     TF_ATTR_INPUT     // attribute info
+ };
+ 
+-CDisplayAttributeInfoInput::CDisplayAttributeInfoInput() {
++const TF_DISPLAYATTRIBUTE _daiRewriteAttribute = {
++    {TF_CT_SYSCOLOR, COLOR_HIGHLIGHTTEXT},
++    {TF_CT_SYSCOLOR, COLOR_HIGHLIGHT},
++    TF_LS_SOLID, TRUE, {TF_CT_SYSCOLOR, COLOR_HIGHLIGHTTEXT},
++    TF_ATTR_TARGET_NOTCONVERTED};
++
++CDisplayAttributeInfoInput::CDisplayAttributeInfoInput(bool rewrite) {
+   DllAddRef();
+   _refCount = 1;
+ 
+@@ -24,6 +30,12 @@ CDisplayAttributeInfoInput::CDisplayAttributeInfoInput() {
+   _pDisplayAttribute = &_daiDisplayAttribute;
+   _pDescription = _daiDescription;
+   _pValueName = _daiInputName;
++  if (rewrite) {
++    _pguid = &c_guidDisplayAttributeRewrite;
++    _pDisplayAttribute = &_daiRewriteAttribute;
++    _pDescription = L"Weasel active rewrite syllable";
++    _pValueName = L"DisplayAttributeRewrite";
++  }
+ }
+ 
+ CDisplayAttributeInfoInput::~CDisplayAttributeInfoInput() {
+diff --git a/WeaselTSF/DisplayAttributeInfo.h b/WeaselTSF/DisplayAttributeInfo.h
+index 99e6eaf..6461fb4 100644
+--- a/WeaselTSF/DisplayAttributeInfo.h
++++ b/WeaselTSF/DisplayAttributeInfo.h
+@@ -4,7 +4,7 @@
+ 
+ class CDisplayAttributeInfoInput : public ITfDisplayAttributeInfo {
+  public:
+-  CDisplayAttributeInfoInput();
++  explicit CDisplayAttributeInfoInput(bool rewrite = false);
+   ~CDisplayAttributeInfoInput();
+ 
+   // IUnknown
+diff --git a/WeaselTSF/DisplayAttributeProvider.cpp b/WeaselTSF/DisplayAttributeProvider.cpp
+index e792542..5ab1ade 100644
+--- a/WeaselTSF/DisplayAttributeProvider.cpp
++++ b/WeaselTSF/DisplayAttributeProvider.cpp
+@@ -33,8 +33,10 @@ STDMETHODIMP WeaselTSF::GetDisplayAttributeInfo(
+ 
+   *ppInfo = nullptr;
+ 
+-  if (IsEqualGUID(guidInfo, c_guidDisplayAttributeInput)) {
+-    *ppInfo = new (std::nothrow) CDisplayAttributeInfoInput();
++  if (IsEqualGUID(guidInfo, c_guidDisplayAttributeInput) ||
++      IsEqualGUID(guidInfo, c_guidDisplayAttributeRewrite)) {
++    *ppInfo = new (std::nothrow) CDisplayAttributeInfoInput(
++        IsEqualGUID(guidInfo, c_guidDisplayAttributeRewrite));
+     if ((*ppInfo) == nullptr) {
+       return E_OUTOFMEMORY;
+     }
+diff --git a/WeaselTSF/EditSession.cpp b/WeaselTSF/EditSession.cpp
+index 1468e5b..1b49157 100644
+--- a/WeaselTSF/EditSession.cpp
++++ b/WeaselTSF/EditSession.cpp
+@@ -45,7 +45,7 @@ STDMETHODIMP WeaselTSF::DoEditSession(TfEditCookie ec) {
+       _EndComposition(_pEditSessionContext, true);
+     }
+     if (_IsComposing() && config.inline_preedit) {
+-      _ShowInlinePreedit(_pEditSessionContext, context);
++      _ShowInlinePreedit(_pEditSessionContext, context, ec, config);
+     }
+   }
+ 
+diff --git a/WeaselTSF/EnumDisplayAttributeInfo.cpp b/WeaselTSF/EnumDisplayAttributeInfo.cpp
+index 1498edb..0ceeb2f 100644
+--- a/WeaselTSF/EnumDisplayAttributeInfo.cpp
++++ b/WeaselTSF/EnumDisplayAttributeInfo.cpp
+@@ -94,8 +94,8 @@ STDMETHODIMP CEnumDisplayAttributeInfo::Next(
+   while (fetched < ulCount) {
+     ITfDisplayAttributeInfo* pDisplayAttributeInfo = nullptr;
+ 
+-    if (_index == 0) {
+-      pDisplayAttributeInfo = new (std::nothrow) CDisplayAttributeInfoInput();
++    if (_index < 2) {
++      pDisplayAttributeInfo = new (std::nothrow) CDisplayAttributeInfoInput(_index == 1);
+       if ((pDisplayAttributeInfo) == nullptr) {
+         return E_OUTOFMEMORY;
+       }
+@@ -122,8 +122,8 @@ STDMETHODIMP CEnumDisplayAttributeInfo::Reset() {
+ }
+ 
+ STDMETHODIMP CEnumDisplayAttributeInfo::Skip(ULONG ulCount) {
+-  if ((ulCount + _index) > 1 || (ulCount + _index) < ulCount) {
+-    _index = 1;
++  if ((ulCount + _index) > 2 || (ulCount + _index) < ulCount) {
++    _index = 2;
+     return S_FALSE;
+   }
+   _index += ulCount;
+diff --git a/WeaselTSF/Globals.cpp b/WeaselTSF/Globals.cpp
+index c5d28b9..0ae1103 100644
+--- a/WeaselTSF/Globals.cpp
++++ b/WeaselTSF/Globals.cpp
+@@ -35,6 +35,10 @@ static const GUID c_guidDisplayAttributeInput = {
+     0x4b32,
+     {0x9d, 0xea, 0xf8, 0x39, 0x09, 0x76, 0xc2, 0x0b}};
+ 
++// A separate attribute so hosts can distinguish the active rewrite syllable.
++const GUID c_guidDisplayAttributeRewrite = {
++    0x7e70395b, 0x566d, 0x4e4d, {0xa3, 0x52, 0x54, 0x36, 0xb4, 0x4e, 0x87, 0xa1}};
++
+ #ifdef WEASEL_USING_OLDER_TSF_SDK
+ 
+ /* For Windows 8 */
+diff --git a/WeaselTSF/Globals.h b/WeaselTSF/Globals.h
+index 89062e8..ff017e2 100644
+--- a/WeaselTSF/Globals.h
++++ b/WeaselTSF/Globals.h
+@@ -35,6 +35,7 @@ extern const GUID c_guidProfile;
+ extern const GUID c_guidLangBarItemButton;
+ 
+ extern const GUID c_guidDisplayAttributeInput;
++extern const GUID c_guidDisplayAttributeRewrite;
+ 
+ #ifndef TF_IPP_CAPS_IMMERSIVESUPPORT
+ 
+diff --git a/WeaselTSF/ThreadMgrEventSink.cpp b/WeaselTSF/ThreadMgrEventSink.cpp
+index cc49a0f..1fbb712 100644
+--- a/WeaselTSF/ThreadMgrEventSink.cpp
++++ b/WeaselTSF/ThreadMgrEventSink.cpp
+@@ -11,6 +11,7 @@ STDMETHODIMP WeaselTSF::OnUninitDocumentMgr(ITfDocumentMgr* pDocMgr) {
+ 
+ STDMETHODIMP WeaselTSF::OnSetFocus(ITfDocumentMgr* pDocMgrFocus,
+                                    ITfDocumentMgr* pDocMgrPrevFocus) {
++  if (pDocMgrFocus != pDocMgrPrevFocus) _ResetInlineRewriteHighlight();
+   _InitTextEditSink(pDocMgrFocus);
+ 
+   com_ptr<ITfDocumentMgr> pCandidateListDocumentMgr;
+diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
+index 1fc29cd..1b04ac2 100644
+--- a/WeaselTSF/WeaselTSF.h
++++ b/WeaselTSF/WeaselTSF.h
+@@ -116,7 +116,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+                        BOOL clear,
+                        BOOL endUI = TRUE);
+   BOOL _ShowInlinePreedit(com_ptr<ITfContext> pContext,
+-                          const std::shared_ptr<weasel::Context> context);
++                          const std::shared_ptr<weasel::Context> context,
++                          TfEditCookie ec, const weasel::Config& config);
+   void _UpdateComposition(com_ptr<ITfContext> pContext);
+   BOOL _IsComposing();
+   BOOL _IsCurrentComposition(ITfComposition* pComposition);
+@@ -125,6 +126,9 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   BOOL _UpdateCompositionWindow(com_ptr<ITfContext> pContext);
+   void _FinalizeComposition();
+   void _AbortComposition(bool clear = true);
++  void _ResetInlineRewriteHighlight();
++  unsigned long long _InlineRevision() const { return _inlineRevision; }
++  void _SetInlineRewriteRaw(bool raw) { _rewriteRawComposition = raw; }
+ 
+   /* Language bar */
+   HWND _GetFocusedContextWindow();
+@@ -148,6 +152,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+                                         _In_ ITfContext* pContext,
+                                         ITfRange* pRangeComposition);
+   BOOL _InitDisplayAttributeGuidAtom();
++  BOOL _SetRewriteDisplayAttribute(TfEditCookie ec, ITfContext* context,
++                                  ITfRange* range, LONG start, LONG end);
+ 
+   com_ptr<ITfThreadMgr> _GetThreadMgr() { return _pThreadMgr; }
+   void HandleUICallback(size_t* const sel,
+@@ -232,7 +238,10 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   weasel::Status _status;
+ 
+   // guidatom for the display attibute.
+-  TfGuidAtom _gaDisplayAttributeInput;
++  TfGuidAtom _gaDisplayAttributeInput = TF_INVALID_GUIDATOM;
++  TfGuidAtom _gaDisplayAttributeRewrite = TF_INVALID_GUIDATOM;
++  unsigned long long _inlineRevision = 0;
++  bool _rewriteRawComposition = false;
+   BOOL _async_edit = false;
+   BOOL _committed = false;
+   BOOL _isToOpenClose = false;
+diff --git a/agent.md b/agent.md
+index 2d172c6..961a675 100644
+--- a/agent.md
++++ b/agent.md
+@@ -1,3 +1,5 @@
++> **2026-09-29 行内试验分支：** 已实现 TSF 音节范围高亮、属性独立更新及显式原始编码预览。独立包和配置入口见 `INLINE-REWRITE.md`；真实宿主兼容性尚未验收，稳定 Release 不变。`test-inline-rewrite.cmd` 运行模型、DLL 接口与隔离 librime 测试。
++
+ # Agent Guide — 小狼毫 / 万象 Pro 快速重写与 Rewrite UI
+ 
+ > **2026-09-29 一键分发更新：** 安装现状以 `INSTALL-PATCH.md` 为准。
+diff --git a/include/InlineRewrite.h b/include/InlineRewrite.h
+new file mode 100644
+index 0000000..2323fb2
+--- /dev/null
++++ b/include/InlineRewrite.h
+@@ -0,0 +1,61 @@
++#pragma once
++#include "RewriteState.h"
++#include <algorithm>
++
++namespace weasel {
++// A range in the existing UTF-16 preedit, never a selection or committed text.
++struct InlineRewriteRange {
++  size_t start = 0, end = 0;
++  explicit operator bool() const { return start < end; }
++};
++
++inline InlineRewriteRange ProjectInlineRewrite(const RewriteState& r,
++                                               const std::wstring& preedit) {
++  if (!r.active() || r.input.empty() || r.input.size() > 4096) return {};
++  std::vector<std::pair<size_t, size_t>> spans;
++  size_t p = 0;
++  while (p < r.ranges.size()) {
++    size_t a = 0, b = 0;
++    // Units() has already validated the grammar and ASCII byte boundaries.
++    RewriteState::Number(r.ranges, p, a);
++    ++p;
++    RewriteState::Number(r.ranges, p, b);
++    spans.emplace_back(a, b);
++    if (p < r.ranges.size()) ++p;
++  }
++  size_t target = 1;
++  if (!r.index.empty()) {
++    p = 0;
++    if (!RewriteState::Number(r.index, p, target)) return {};
++  }
++  if (r.stage == L"head_replace") {
++    target = spans.size();
++    for (size_t i = 0; i < spans.size(); ++i)
++      if (r.replacement.size() <= spans[i].second) { target = i + 1; break; }
++  }
++  if (target == 0 || target > spans.size()) return {};
++  size_t a = spans[target - 1].first, b = spans[target - 1].second;
++  std::wstring expected = r.original;
++  if (r.stage == L"index_replace") {
++    expected.replace(a, b - a, r.replacement);
++    b = a + r.replacement.size();
++  } else if (r.stage == L"head_replace") {
++    expected = r.replacement + r.original.substr((std::min)(r.replacement.size(), r.original.size()));
++    if (target == spans.size()) b = expected.size();
++  }
++  if (expected != r.input || a >= b || b > r.input.size()) return {};
++
++  // Accept only exact raw codes, optionally separated by display-only spaces.
++  // Expanded pinyin, Hanzi previews, surrogates and decorations fall back.
++  std::vector<size_t> positions;
++  p = 0;
++  for (auto c : r.input) {
++    while (p < preedit.size() && preedit[p] == L' ' && c != L' ') ++p;
++    if (p == preedit.size() || preedit[p] != c) return {};
++    positions.push_back(p++);
++  }
++  while (p < preedit.size() && preedit[p] == L' ') ++p;
++  if (p != preedit.size()) return {};
++  return {positions[a], positions[b - 1] + 1};
++}
++}  // namespace weasel
+diff --git a/include/InlineRewriteUpdate.h b/include/InlineRewriteUpdate.h
+new file mode 100644
+index 0000000..10b84c9
+--- /dev/null
++++ b/include/InlineRewriteUpdate.h
+@@ -0,0 +1,31 @@
++#pragma once
++#include "InlineRewrite.h"
++
++namespace weasel {
++// Shared edit policy; the TSF adapter owns locks, ranges and COM calls.
++// Keeping the operations explicit lets tests assert that property-only keys
++// never write text or move a host selection.
++template <class Editor>
++bool UpdateInlinePreedit(Editor& editor, const RewriteState& state,
++                         std::wstring preedit, int cursor,
++                         bool enabled, bool rawEnabled) {
++  if (!editor.IsCurrent()) return false;
++  const bool rewriting = enabled && state.active();
++  // Keep raw display stable while the user types an out-of-range multi-digit
++  // index. It has no target, but must not rewrite preedit on each index key.
++  const bool unchangedInput = (state.stage == L"armed" || state.stage == L"index") &&
++                              state.input == state.original;
++  const bool raw = rewriting && rawEnabled &&
++                   (unchangedInput || bool(ProjectInlineRewrite(state, state.input)));
++  if (raw) { preedit = state.input; cursor = -1; }
++  const bool attributesOnly = rewriting && editor.SameText(preedit);
++  if (!attributesOnly && !editor.WriteText(preedit)) return false;
++  editor.SetRaw(raw);
++  if (editor.ResetAttributes() && rewriting) {
++    const auto target = ProjectInlineRewrite(state, preedit);
++    if (target) editor.Highlight(target);
++  }
++  // Attribute failure still leaves the panel visible; it must not move caret.
++  return attributesOnly || editor.SetCaret(cursor, preedit.size());
++}
++}  // namespace weasel
+diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
+index 3084eef..c07b27f 100644
+--- a/include/RimeWithWeasel.h
++++ b/include/RimeWithWeasel.h
+@@ -120,6 +120,8 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   bool m_global_ascii_mode;
+   bool m_rewrite_enabled = false;
+   bool m_rewrite_debug = false;
++  bool m_rewrite_inline = false;
++  bool m_rewrite_inline_raw = false;
+   int m_show_notifications_time;
+   DWORD m_pid;
+ };
+diff --git a/include/WeaselIPCData.h b/include/WeaselIPCData.h
+index 063a1b4..4ade6fe 100644
+--- a/include/WeaselIPCData.h
++++ b/include/WeaselIPCData.h
+@@ -192,8 +192,10 @@ struct Status {
+ // 用於向前端告知設置信息
+ struct Config {
+   Config() : inline_preedit(false) {}
+-  void reset() { inline_preedit = false; }
++  void reset() { inline_preedit = rewrite_inline = rewrite_inline_raw = false; }
+   bool inline_preedit;
++  bool rewrite_inline = false;
++  bool rewrite_inline_raw = false;
+ };
+ 
+ struct UIStyle {
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index 345818f..aa7405b 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -1,7 +1,7 @@
+ $ErrorActionPreference = 'Stop'
+ Set-Location $PSScriptRoot
+-$finalDestination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI'
+-$destination = Join-Path $PSScriptRoot ('dist/Weasel-Rewrite-UI-stage-' + [Guid]::NewGuid().ToString('N'))
++$finalDestination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI-Inline-Preview'
++$destination = Join-Path $PSScriptRoot ('dist/Weasel-Rewrite-UI-Inline-Preview-stage-' + [Guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Force $destination, "$destination/Win32", "$destination/licenses" | Out-Null
+ $rootFiles = @('WeaselServer.exe', 'WeaselDeployer.exe', 'WeaselSetup.exe',
+                'weasel.dll', 'weaselx64.dll', 'rime.dll', 'WinSparkle.dll')
+@@ -10,6 +10,8 @@ foreach ($name in @('WeaselServer.exe', 'WeaselDeployer.exe', 'rime.dll', 'WinSp
+   Copy-Item "output/Win32/$name" "$destination/Win32/$name" -Force
+ }
+ Copy-Item INSTALL-PATCH.md "$destination/README.md" -Force
++Copy-Item INLINE-REWRITE.md,Apply-Inline-Preview.cmd $destination -Force
++Copy-Item rime/inline-rewrite.custom.example.yaml $destination -Force
+ Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
+ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt $destination -Force
+ Copy-Item output/RewriteConfig.exe $destination -Force
+@@ -58,7 +60,7 @@ $hashes = Get-ChildItem $destination -Recurse -File | Where-Object { $_.Name -ne
+     "$hash  $relative"
+   }
+ $hashes | Set-Content "$destination/SHA256SUMS.txt" -Encoding utf8
+-Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI.zip' -Force
++Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI-Inline-Preview.zip' -Force
+ # Retain the previous unpacked package as a recoverable backup.
+ if (Test-Path -LiteralPath $finalDestination) {
+   $resolved = (Resolve-Path -LiteralPath $finalDestination).Path
+@@ -67,4 +69,4 @@ if (Test-Path -LiteralPath $finalDestination) {
+   Move-Item -LiteralPath $resolved -Destination ($finalDestination + '-previous-' + [Guid]::NewGuid().ToString('N'))
+ }
+ Move-Item -LiteralPath $destination -Destination $finalDestination
+-Get-Item 'dist/Weasel-Rewrite-UI.zip' | Select-Object FullName, Length
++Get-Item 'dist/Weasel-Rewrite-UI-Inline-Preview.zip' | Select-Object FullName, Length
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 411452c..7b0ebcc 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-one-click-20260929
++Build-ID: rewrite-ui-inline-preview-20260929
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: Rewrite UI + D2D1_RENDER_TARGET_TYPE_SOFTWARE (issue #1913)
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/inline-rewrite.custom.example.yaml b/rime/inline-rewrite.custom.example.yaml
+new file mode 100644
+index 0000000..af11a20
+--- /dev/null
++++ b/rime/inline-rewrite.custom.example.yaml
+@@ -0,0 +1,8 @@
++# Merge into weasel.custom.yaml's existing patch map; do not overwrite the file.
++# Experimental opt-in. App/schema inline_preedit overrides remain respected.
++patch:
++  rewrite_ui/enabled: true
++  rewrite_ui/debug: false
++  rewrite_ui/display: inline
++  rewrite_ui/inline_raw_input: true
++  style/inline_preedit: true
+diff --git a/test-inline-rewrite.cmd b/test-inline-rewrite.cmd
+new file mode 100644
+index 0000000..8e65fd6
+--- /dev/null
++++ b/test-inline-rewrite.cmd
+@@ -0,0 +1,27 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\inline_rewrite_test.cpp /Fodeps\inline_rewrite_test.obj /Fedeps\inline_rewrite_test.exe
++if errorlevel 1 exit /b 1
++deps\inline_rewrite_test.exe
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 test\inline_attribute_test.cpp /Fodeps\inline_attribute_test.obj /Fedeps\inline_attribute_test.exe /link ole32.lib uuid.lib
++if errorlevel 1 exit /b 1
++deps\inline_attribute_test.exe output\weaselx64.dll
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\installer_rime_test.cpp /Fodeps\installer_rime_test.obj /Fedeps\installer_rime_test.exe /link deps\rime-x64\dist\lib\rime.lib
++if errorlevel 1 exit /b 1
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_rime_test.ps1 -InlinePreview
++if errorlevel 1 exit /b 1
++call C:\BuildTools\VC\Auxiliary\Build\vcvars32.bat
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\inline_rewrite_test.cpp /Fodeps\inline_rewrite_test_x86.obj /Fedeps\inline_rewrite_test_x86.exe
++if errorlevel 1 exit /b 1
++deps\inline_rewrite_test_x86.exe
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 test\inline_attribute_test.cpp /Fodeps\inline_attribute_test_x86.obj /Fedeps\inline_attribute_test_x86.exe /link ole32.lib uuid.lib
++if errorlevel 1 exit /b 1
++deps\inline_attribute_test_x86.exe output\weasel.dll
++exit /b %errorlevel%
+diff --git a/test/inline_attribute_test.cpp b/test/inline_attribute_test.cpp
+new file mode 100644
+index 0000000..cdbc97f
+--- /dev/null
++++ b/test/inline_attribute_test.cpp
+@@ -0,0 +1,48 @@
++#include <windows.h>
++#include <msctf.h>
++#include <cassert>
++#include <iostream>
++
++// Load the built DLL without registering/activating an IME or touching Rime.
++int wmain(int argc, wchar_t** argv) {
++  assert(argc == 2);
++  assert(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
++  auto dll = LoadLibraryW(argv[1]);
++  assert(dll);
++  auto getClass = reinterpret_cast<HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**)>(
++      GetProcAddress(dll, "DllGetClassObject"));
++  assert(getClass);
++  const GUID clsid = {0xa3f4cded,0xb1e9,0x41ee,{0x9c,0xa6,0x7b,0x4d,0x0d,0xe6,0xcb,0x0a}};
++  const GUID rewrite = {0x7e70395b,0x566d,0x4e4d,{0xa3,0x52,0x54,0x36,0xb4,0x4e,0x87,0xa1}};
++  IClassFactory* factory = nullptr;
++  assert(SUCCEEDED(getClass(clsid, IID_IClassFactory, reinterpret_cast<void**>(&factory))));
++  ITfDisplayAttributeProvider* provider = nullptr;
++  assert(SUCCEEDED(factory->CreateInstance(nullptr, IID_ITfDisplayAttributeProvider,
++                                           reinterpret_cast<void**>(&provider))));
++  IEnumTfDisplayAttributeInfo* items = nullptr;
++  assert(provider->EnumDisplayAttributeInfo(&items) == S_OK);
++  ITfDisplayAttributeInfo* attrs[3] = {};
++  ULONG count = 0;
++  assert(items->Next(3, attrs, &count) == S_FALSE && count == 2);
++  GUID actual;
++  assert(attrs[1]->GetGUID(&actual) == S_OK && IsEqualGUID(actual, rewrite));
++  TF_DISPLAYATTRIBUTE target;
++  assert(attrs[1]->GetAttributeInfo(&target) == S_OK);
++  assert(target.crBk.type == TF_CT_SYSCOLOR && target.crBk.nIndex == COLOR_HIGHLIGHT);
++  assert(target.crText.type == TF_CT_SYSCOLOR && target.crText.nIndex == COLOR_HIGHLIGHTTEXT);
++  assert(target.bAttr == TF_ATTR_TARGET_NOTCONVERTED);
++  assert(items->Reset() == S_OK && items->Skip(1) == S_OK);
++  IEnumTfDisplayAttributeInfo* clone = nullptr;
++  assert(items->Clone(&clone) == S_OK);
++  ITfDisplayAttributeInfo* item = nullptr;
++  assert(clone->Next(1, &item, &count) == S_OK && count == 1);
++  assert(item->GetGUID(&actual) == S_OK && IsEqualGUID(actual, rewrite));
++  item->Release(); clone->Release();
++  assert(items->Skip(2) == S_FALSE);
++  assert(provider->GetDisplayAttributeInfo(rewrite, &item) == S_OK);
++  item->Release();
++  attrs[0]->Release(); attrs[1]->Release(); items->Release(); provider->Release(); factory->Release();
++  FreeLibrary(dll);
++  CoUninitialize();
++  std::cout << "PASS: built TSF DLL attribute lookup, enumeration, clone and system colors\n";
++}
+diff --git a/test/inline_rewrite_test.cpp b/test/inline_rewrite_test.cpp
+new file mode 100644
+index 0000000..29666c2
+--- /dev/null
++++ b/test/inline_rewrite_test.cpp
+@@ -0,0 +1,101 @@
++#include <InlineRewrite.h>
++#include <InlineRewriteUpdate.h>
++#include <cassert>
++#include <iostream>
++
++using weasel::ProjectInlineRewrite;
++struct Editor {
++  std::wstring text;
++  int writes = 0, carets = 0, resets = 0, highlights = 0;
++  bool current = true, writable = true, attributes = true, raw = false;
++  weasel::InlineRewriteRange target;
++  bool IsCurrent() { return current; }
++  bool SameText(const std::wstring& value) { return text == value; }
++  bool WriteText(const std::wstring& value) { ++writes; if (!writable) return false; text = value; return true; }
++  void SetRaw(bool value) { raw = value; }
++  bool ResetAttributes() { ++resets; target = {}; return attributes; }
++  void Highlight(weasel::InlineRewriteRange value) { ++highlights; target = value; }
++  bool SetCaret(int, size_t) { ++carets; return true; }
++};
++void range(const weasel::RewriteState& r, const std::wstring& text, size_t a, size_t b) {
++  auto result = ProjectInlineRewrite(r, text);
++  assert(result.start == a && result.end == b);
++}
++int main() {
++  weasel::RewriteState r;
++  r.stage = L"armed";
++  r.original = r.input = L"jxjirzbj";
++  r.ranges = L"0-2,2-4,4-6,6-8";
++  range(r, r.input, 0, 2);
++  r.stage = L"index"; r.index = L"3";
++  range(r, r.input, 4, 6);
++  range(r, L"jx ji rz bj", 6, 8);
++  range(r, L"  jx ji rz bj  ", 8, 10);
++  assert(!ProjectInlineRewrite(r, L"jiang jin ren zhi"));
++  assert(!ProjectInlineRewrite(r, L"测试"));
++  assert(!ProjectInlineRewrite(r, L"jxjirzbj¹"));
++  assert(!ProjectInlineRewrite(r, L"jxji\U0001F600rzbj"));
++  r.index = L"32"; assert(!ProjectInlineRewrite(r, r.input));
++  r.index = L"0"; assert(!ProjectInlineRewrite(r, r.input));
++  r.index = L"3"; r.stage = L"index_replace";
++  for (auto replacement : {L"j", L"jm", L"abcd"}) {
++    r.replacement = replacement;
++    r.input = L"jxji" + r.replacement + L"bj";
++    range(r, r.input, 4, 4 + r.replacement.size());
++  }
++  r.replacement.clear(); r.input = L"jxjibj";
++  assert(!ProjectInlineRewrite(r, r.input));
++  r.stage = L"head_replace"; r.index.clear();
++  r.replacement = L"abc"; r.input = L"abcirzbj";
++  range(r, r.input, 2, 4);
++  r.replacement = L"abcdefghij"; r.input = r.replacement;
++  range(r, r.input, 6, 10);
++  r.input += L"x"; assert(!ProjectInlineRewrite(r, r.input));
++  r.stage.clear(); assert(!ProjectInlineRewrite(r, r.input));
++  // Raw separators remain part of input; ranges may skip them.
++  r.stage = L"index"; r.index = L"2";
++  r.original = r.input = L"ab'cd"; r.ranges = L"0-2,3-5";
++  range(r, r.input, 3, 5);
++  r.ranges = L"0-2,1-5"; assert(!ProjectInlineRewrite(r, r.input));
++  r.ranges = L"0-2,3-6"; assert(!ProjectInlineRewrite(r, r.input));
++  r.original = r.input = L""; r.ranges.clear();
++  for (int i = 0; i < 32; ++i) {
++    r.original += L"ab";
++    if (i) r.ranges += L",";
++    r.ranges += std::to_wstring(i * 2) + L"-" + std::to_wstring(i * 2 + 2);
++  }
++  r.input = r.original; r.index = L"32";
++  range(r, r.input, 62, 64);
++  r.index = L"99999999"; assert(!ProjectInlineRewrite(r, r.input));
++  r.index = L"3";
++  Editor editor;
++  editor.text = r.input;
++  assert(weasel::UpdateInlinePreedit(editor, r, r.input, 0, true, false));
++  assert(editor.writes == 0 && editor.carets == 0 && editor.target.start == 4);
++  r.index = L"12";
++  assert(weasel::UpdateInlinePreedit(editor, r, r.input, 0, true, false));
++  assert(editor.writes == 0 && editor.carets == 0 && editor.target.start == 22);
++  editor.attributes = false;
++  assert(weasel::UpdateInlinePreedit(editor, r, r.input, 0, true, false));
++  assert(editor.writes == 0 && editor.carets == 0 && !editor.target);
++  editor.current = false;
++  const int resets = editor.resets;
++  assert(!weasel::UpdateInlinePreedit(editor, r, L"new composition", 0, true, true));
++  assert(editor.resets == resets && editor.writes == 0);
++  editor.current = editor.attributes = true;
++  editor.text = L"formatted preedit";
++  assert(weasel::UpdateInlinePreedit(editor, r, editor.text, 0, true, false));
++  assert(!editor.target && editor.writes == 0 && !editor.raw);
++  assert(weasel::UpdateInlinePreedit(editor, r, editor.text, 0, true, true));
++  assert(editor.raw && editor.text == r.input && editor.writes == 1 && editor.carets == 1);
++  r.index = L"999";
++  assert(weasel::UpdateInlinePreedit(editor, r, L"formatted preedit", 0, true, true));
++  assert(editor.raw && !editor.target && editor.writes == 1 && editor.carets == 1);
++  r.stage.clear();
++  assert(weasel::UpdateInlinePreedit(editor, r, L"formatted preedit", 0, true, true));
++  assert(!editor.raw && !editor.target && editor.text == L"formatted preedit");
++  editor.writable = false;
++  assert(!weasel::UpdateInlinePreedit(editor, r, L"different", 0, true, true));
++  std::cout << "PASS: inline ranges, unchanged-text index changes, replacements, separators, invalid input and UTF-16 fallback\n";
++  std::cout << "PASS: edit operations, no text/caret writes for index keys, stale composition guard, attribute failure, explicit raw mode and exit\n";
++}
+diff --git a/test/installer_config_test.ps1 b/test/installer_config_test.ps1
+index ba3a288..a26a958 100644
+--- a/test/installer_config_test.ps1
++++ b/test/installer_config_test.ps1
+@@ -97,3 +97,22 @@ Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('send_seque
+ & $helper verify (Split-Path $build -Parent)
+ Assert ($LASTEXITCODE -ne 0) 'Wrong deployed Tab accepted'
+ Write-Host "PASS: invalid deployments rejected. Fixtures: $root"
++
++# Inline options are explicit, preserve unrelated nested style values, and deploy-check strictly.
++$inline = Prepare 'inline-opt-in' 'patch: {style: {inline_preedit: false, font_point: 17}, rewrite_ui: {display: panel, inline_raw_input: false, future_option: 42}}' ''
++$normalText = Get-Content (Join-Path $inline 'stage/weasel.custom.yaml') -Raw
++Assert ($normalText -match 'inline_preedit: false' -and $normalText -match 'display: panel') 'Normal install enabled preview'
++& $helper prepare-inline $inline (Join-Path $inline 'preview')
++Assert ($LASTEXITCODE -eq 0) 'Inline merge failed'
++$inlineText = Get-Content (Join-Path $inline 'preview/weasel.custom.yaml') -Raw
++Assert ($inlineText -match 'rewrite_ui/display: inline' -and $inlineText -match 'rewrite_ui/inline_raw_input: true' -and $inlineText -match 'style/inline_preedit: true') 'Inline switches missing'
++Assert ($inlineText -match 'font_point: 17' -and $inlineText -match 'future_option: 42') 'Inline merge lost unrelated values'
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') $deployed
++Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: true, debug: false}'
++& $helper verify-inline (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -ne 0) 'Missing inline config accepted'
++Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: true, debug: false, display: inline, inline_raw_input: true}
++style: {inline_preedit: true}'
++& $helper verify-inline (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -eq 0) 'Valid inline config rejected'
++Write-Host 'PASS: explicit inline configuration and deployment verification'
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index 4cd2bb7..3782621 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -4,6 +4,7 @@
+ #include <iostream>
+ #include <stdexcept>
+ #include <string>
++#include <InlineRewrite.h>
+ void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+ int wmain(int argc, wchar_t** argv) {
+   try {
+@@ -22,19 +23,65 @@ int wmain(int argc, wchar_t** argv) {
+     api->initialize(&traits);
+     auto session = api->create_session();
+     check(session != 0, "Session creation failed");
++    auto snapshot = [&]() {
++      weasel::RewriteState state;
++      auto read = [&](const char* suffix, std::wstring& value) {
++        char buffer[8193] = {};
++        std::string key = std::string("_indexed_rewrite_") + suffix;
++        api->get_property(session, key.c_str(), buffer, sizeof(buffer));
++        std::string bytes(buffer); value.assign(bytes.begin(), bytes.end());
++      };
++      read("stage", state.stage); read("index", state.index);
++      read("original", state.original); read("ranges", state.ranges);
++      read("replacement", state.replacement);
++      std::string input(api->get_input(session));
++      state.input.assign(input.begin(), input.end());
++      return state;
++    };
+     check(api->select_schema(session, "wanxiang_pro"), "Schema selection failed");
+     for (char key : std::string("jxjirzbj")) api->process_key(session, key, 0);
+     check(api->process_key(session, 0xff09, 0), "Tab not handled");
+     char stage[64] = {};
+     check(api->get_property(session, "_indexed_rewrite_stage", stage, sizeof(stage)), "Rewrite property missing");
+     check(std::string(stage) == "armed", "Tab did not arm rewrite");
++    auto armed = snapshot();
++    auto firstRange = weasel::ProjectInlineRewrite(armed, armed.input);
++    check(bool(firstRange) && firstRange.start == 0, "Armed inline projection failed");
+     api->process_key(session, '3', 0);
+     char index[64] = {};
+     check(api->get_property(session, "_indexed_rewrite_index", index, sizeof(index)) && std::string(index) == "3", "Index selection failed");
++    auto indexed = snapshot();
++    auto selected = weasel::ProjectInlineRewrite(indexed, indexed.input);
++    // echo_translator exposes one span. An out-of-range index must not paint
++    // another syllable; multi-span and multi-digit offsets have model tests.
++    check(indexed.input == armed.input && !selected, "Invalid-index fallback failed");
++    api->process_key(session, 0xff08, 0);
++    api->process_key(session, '1', 0);
++    indexed = snapshot();
++    check(indexed.input == armed.input &&
++          bool(weasel::ProjectInlineRewrite(indexed, indexed.input)),
++          "Valid property-only inline projection failed");
++    for (char key : std::string("jma")) {
++      api->process_key(session, key, 0);
++      auto replacing = snapshot();
++      auto target = weasel::ProjectInlineRewrite(replacing, replacing.input);
++      check(bool(target) && target.end - target.start == replacing.replacement.size(),
++            "Replacement inline length failed");
++    }
++    api->process_key(session, 0xff08, 0);
++    auto shortened = snapshot();
++    check(bool(weasel::ProjectInlineRewrite(shortened, shortened.input)), "Backspace mapping failed");
+     api->process_key(session, 0xff1b, 0);
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Escape did not restore input");
++    auto escaped = snapshot();
++    check(!weasel::ProjectInlineRewrite(escaped, escaped.input), "Escape retained highlight");
++    api->process_key(session, 0xff0d, 0);
++    RIME_STRUCT(RimeCommit, commit);
++    check(api->get_commit(session, &commit), "Enter did not commit");
++    check(std::string(commit.text) == "jxjirzbj", "Display changed committed text");
++    api->free_commit(&commit);
+     api->destroy_session(session); api->finalize();
+-    std::cout << "PASS: real deployment, Lua loading, Tab, index, Escape\n";
++    std::cout << "PASS: real deployment, Lua, inline projection, property-only selection, replacement, Backspace, Escape and Enter commit\n";
+     return 0;
+   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+ }
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index e08149d..3d62cc4 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,3 +1,4 @@
++param([switch]$InlinePreview)
+ $ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+@@ -25,12 +26,14 @@ key_binder:
+ '@
+ [IO.File]::WriteAllText((Join-Path $shared 'wanxiang_pro.schema.yaml'), $schema, $utf8)
+ $repo=Split-Path $PSScriptRoot -Parent
+-& (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
++$prepareMode = if ($InlinePreview) { 'prepare-inline' } else { 'prepare' }
++& (Join-Path $repo 'output/RewriteConfig.exe') $prepareMode $user $stage
+ if ($LASTEXITCODE) { throw 'Merge failed' }
+ Copy-Item (Join-Path $stage '*.yaml') $user
+ Copy-Item (Join-Path $repo 'rime/lua/indexed_rewrite_pro.lua') (Join-Path $user 'lua')
+ & (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user
+ if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
+-& (Join-Path $repo 'output/RewriteConfig.exe') verify $user
++$verifyMode = if ($InlinePreview) { 'verify-inline' } else { 'verify' }
++& (Join-Path $repo 'output/RewriteConfig.exe') $verifyMode $user
+ if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
+ Write-Host "PASS: actual librime deployment and generated YAML. Fixture: $root"
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index a12e14f..11a07d6 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -77,7 +77,7 @@ void cleanLegacy(YAML::Node n) {
+     }
+   }
+ }
+-void prepare(const fs::path& user, const fs::path& stage) {
++void prepare(const fs::path& user, const fs::path& stage, bool inlinePreview = false) {
+   auto ui = load(user / L"weasel.custom.yaml", true);
+   auto u = patch(ui);
+   if (u["rewrite_ui"]) {
+@@ -87,6 +87,19 @@ void prepare(const fs::path& user, const fs::path& stage) {
+   }
+   u["rewrite_ui/enabled"] = true;
+   u["rewrite_ui/debug"] = false;
++  if (inlinePreview) {
++    if (u["rewrite_ui"]) {
++      u["rewrite_ui"].remove("display");
++      u["rewrite_ui"].remove("inline_raw_input");
++    }
++    if (u["style"]) {
++      require(u["style"].IsMap(), "style patch must be a map");
++      u["style"].remove("inline_preedit");
++    }
++    u["rewrite_ui/display"] = "inline";
++    u["rewrite_ui/inline_raw_input"] = true;
++    u["style/inline_preedit"] = true;
++  }
+ 
+   auto schema = load(user / L"wanxiang_pro.custom.yaml", true);
+   auto p = patch(schema);
+@@ -152,10 +165,15 @@ void prepare(const fs::path& user, const fs::path& stage) {
+   save(ui, stage / L"weasel.custom.yaml");
+   save(schema, stage / L"wanxiang_pro.custom.yaml");
+ }
+-void verify(const fs::path& user) {
++void verify(const fs::path& user, bool inlinePreview = false) {
+   auto ui = load(user / L"build" / L"weasel.yaml");
+   require(ui["rewrite_ui"]["enabled"].as<bool>(false), "Deployed rewrite_ui is not enabled");
+   require(!ui["rewrite_ui"]["debug"].as<bool>(true), "Deployed debug logging is not disabled");
++  if (inlinePreview) {
++    require(scalar(ui["rewrite_ui"]["display"], "inline"), "Inline display not deployed");
++    require(ui["rewrite_ui"]["inline_raw_input"].as<bool>(false), "Inline raw preview not deployed");
++    require(ui["style"]["inline_preedit"].as<bool>(false), "Inline preedit not deployed");
++  }
+   auto schema = load(user / L"build" / L"wanxiang_pro.schema.yaml");
+   auto procs = schema["engine"]["processors"];
+   require(procs.IsSequence() && procs.size() && scalar(procs[0], processor), "Rewrite processor is not first in deployed schema");
+@@ -180,9 +198,14 @@ void verify(const fs::path& user) {
+ int wmain(int argc, wchar_t** argv) {
+   try {
+     require(argc >= 3, "Usage: RewriteConfig.exe prepare USER STAGE | verify USER");
+-    if (std::wstring(argv[1]) == L"prepare") {
+-      require(argc == 4, "prepare requires USER STAGE"); prepare(argv[2], argv[3]);
+-    } else if (std::wstring(argv[1]) == L"verify") verify(argv[2]);
++    const std::wstring operation(argv[1]);
++    if (operation == L"prepare" || operation == L"prepare-inline") {
++      require(argc == 4, "prepare requires USER STAGE");
++      prepare(argv[2], argv[3], operation == L"prepare-inline");
++    } else if (operation == L"verify" || operation == L"verify-inline") {
++      require(argc == 3, "verify requires USER");
++      verify(argv[2], operation == L"verify-inline");
++    }
+     else throw std::runtime_error("Unknown operation");
+     std::cout << "Configuration check passed.\n";
+     return 0;
+-- 
+2.53.0.windows.2
+
