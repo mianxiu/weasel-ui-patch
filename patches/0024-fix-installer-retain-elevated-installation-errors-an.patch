@@ -1,0 +1,298 @@
+From 5c981852fcdf67b7df58b98c9e26e740c8f0b797 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Tue, 29 Sep 2026 22:50:45 +0800
+Subject: [PATCH 24/24] fix(installer): retain elevated installation errors and
+ recovery diagnostics
+
+---
+ Apply-Patch.ps1                     | 23 +++++++++++-
+ INSTALL-PATCH.md                    |  2 ++
+ Install-Binaries.ps1                | 54 +++++++++++++++++++++++++---
+ package-rewrite.ps1                 |  1 +
+ test/installer_diagnostics_test.ps1 | 55 +++++++++++++++++++++++++++++
+ 5 files changed, 130 insertions(+), 5 deletions(-)
+ create mode 100644 test/installer_diagnostics_test.ps1
+
+diff --git a/Apply-Patch.ps1 b/Apply-Patch.ps1
+index 4d0ffc7..834291f 100644
+--- a/Apply-Patch.ps1
++++ b/Apply-Patch.ps1
+@@ -40,14 +40,34 @@ function Invoke-Wait([string]$Exe, [string]$Arguments) {
+   } finally { $process.Dispose() }
+ }
+ function Invoke-BinaryInstaller([switch]$Restore) {
++  $operation = if ($Restore) { 'recovery' } else { 'install' }
++  $adminLog = Join-Path $transaction ("program-$operation.log")
++  $adminResult = Join-Path $transaction ("program-$operation-result.json")
+   $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Target "{1}" -UserSid "{2}" -BackupName "{3}"' -f
+     (Join-Path $package 'Install-Binaries.ps1'), $Target, $identity.User.Value, $backupName
++  $arguments += ' -LogPath "{0}" -ResultPath "{1}"' -f $adminLog, $adminResult
+   if ($Restore) { $arguments += ' -Restore' }
++  Write-Host "Administrator log: $adminLog"
+   $child = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -PassThru
+   $script:binaryAttempted = $true
+   try {
++    # Retain the process handle before it exits (Windows PowerShell 5.1).
++    $null = $child.Handle
+     while (!$child.WaitForExit(10000)) { Write-Host 'Waiting for administrator installer...' }
+-    if ($child.ExitCode -ne 0) { throw "Program installation/recovery failed ($($child.ExitCode)). See program backup." }
++    if ($child.ExitCode -ne 0) {
++      $details = "Administrator installer exited with code $($child.ExitCode)."
++      if (Test-Path -LiteralPath $adminResult) {
++        try {
++          $report = Get-Content -LiteralPath $adminResult -Raw | ConvertFrom-Json
++          $details += "`nStage: $($report.stage)`nError: $($report.error)`nRecovery: $($report.recovery)"
++        } catch { $details += "`nCould not read administrator result: $_" }
++      } elseif (Test-Path -LiteralPath $adminLog) {
++        $details += "`n" + ((Get-Content -LiteralPath $adminLog -Tail 20) -join "`n")
++      } else {
++        $details += "`nNo administrator log was created. The child may have failed before the script started."
++      }
++      throw "$details`nAdministrator log: $adminLog"
++    }
+   } finally { $child.Dispose() }
+ }
+ function Copy-Checked([string]$Source, [string]$Destination) {
+@@ -163,6 +183,7 @@ try {
+   exit 0
+ } catch {
+   Write-Host "INSTALL FAILED: $_" -ForegroundColor Red
++  if ($transaction) { Write-Host "Backups and installation logs: $transaction" }
+   if ($configChanged) {
+     try {
+       foreach ($saved in $savedFiles) {
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 1b149a6..3a09bef 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -39,6 +39,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Apply-Patch.ps1 -Check
+ 
+ 用户目录中的 `rewrite-backup-随机编号` 保存原 YAML、原 Lua、`files.json`、`RESTORE.txt` 和 `install.log`。程序目录中同名备份保存原二进制。
+ 
++revision 5 起，管理员阶段另外保存 `program-install.log` 与 `program-install-result.json`，主窗口会显示失败阶段、具体错误及恢复结果。若有自动恢复，另存 `program-recovery.log`。反馈故障时优先提供主窗口的 `Stage`、`Error`、`Recovery` 三行。
++
+ 配置安装或部署检查失败时，入口会尝试恢复原配置和原程序，再重新部署旧配置。恢复程序可能再次请求管理员权限。若拒绝恢复提权或恢复失败，会明确报告失败并保留备份，请按 `RESTORE.txt` 恢复。不要把失败提示当作安装成功，也不要删除备份。
+ 
+ 旧 Lua filter 文件本身不删除，只移除引用。安装不自动重启或注销 Windows。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 1394b0c..bec97c0 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -1,9 +1,16 @@
+ [CmdletBinding()]
+ param([string]$Target, [switch]$CheckOnly, [string]$UserSid,
+       [ValidatePattern('^rewrite-backup-[a-f0-9]{32}$')][string]$BackupName,
+-      [switch]$Restore)
++      [switch]$Restore, [string]$LogPath, [string]$ResultPath)
+ $ErrorActionPreference = 'Stop'
+ Set-StrictMode -Version 2
++$logStarted = $false
++$succeeded = $false
++$operationStage = 'startup'
++$failedStage = $null
++$failureMessage = $null
++$failureLocation = $null
++$recoveryStatus = 'not-needed'
+ 
+ function Read-WeaselRoot {
+   foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
+@@ -71,10 +78,16 @@ function Stop-WeaselForPatch([string]$ServerPath) {
+ }
+ 
+ try {
++  if ($LogPath) {
++    Start-Transcript -LiteralPath $LogPath -Force | Out-Null
++    $logStarted = $true
++  }
++  $operationStage = 'checking elevated identity'
+   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+   if ($UserSid -and $UserSid -ne $identity.User.Value) {
+     throw 'Elevation changed the Windows user. Sign in as the installing user and run again.'
+   }
++  $operationStage = 'validating program files'
+   $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+   if ($arch -eq 'ARM64') { throw 'This package supports x64/x86 Windows only.' }
+   if (!$Target) { $Target = Read-WeaselRoot }
+@@ -118,9 +131,9 @@ try {
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+   Write-Host "Build: rewrite-ui-one-click-20260929; profile: $profileName"
+-  Write-Host 'Program installer: revision 4 (verified registration and recovery)'
++  Write-Host 'Program installer: revision 5 (persistent administrator diagnostics)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+-  if ($CheckOnly) { Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
++  if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+ 
+   $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+   if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+@@ -128,6 +141,7 @@ try {
+   }
+ 
+   # Refuse a mixed installation instead of terminating unrelated applications.
++  $operationStage = 'checking running processes'
+   $serverPath = Join-Path $Target 'WeaselServer.exe'
+   $servers = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
+   foreach ($server in $servers) {
+@@ -137,6 +151,7 @@ try {
+   }
+   if (!$BackupName) { throw 'BackupName is required.' }
+   if ($Restore) {
++    $operationStage = 'restoring program backup'
+     $backup = Join-Path $Target $BackupName
+     if (!(Test-Path -LiteralPath (Join-Path $backup 'RESTORE.txt'))) { throw 'Backup not found.' }
+     foreach ($name in $mapping.Keys) {
+@@ -151,8 +166,10 @@ try {
+     }
+     Register-Weasel $Target $arguments[$profileName]
+     Write-Host 'Original binaries restored.'
++    $succeeded = $true
+     exit 0
+   }
++  $operationStage = 'backing up program files'
+   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+   $backup = Join-Path $Target $BackupName
+   New-Item -ItemType Directory -Path $backup | Out-Null
+@@ -168,13 +185,17 @@ try {
+   $changed = $false
+   try {
+     if ($servers.Count) {
++      $operationStage = 'stopping WeaselServer'
+       Stop-WeaselForPatch $serverPath
+     }
++    $operationStage = 'replacing program files'
+     Write-Host 'Replacing and verifying program files...'
+     $changed = $true
+     foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $package $mapping[$name]) (Join-Path $Target $name) }
+     Write-Host 'Registering input method...'
++    $operationStage = 'registering TSF input method'
+     Register-Weasel $Target $arguments[$profileName]
++    $operationStage = 'verifying installed TSF DLLs'
+     Copy-Verified (Join-Path $package 'rewrite-build.txt') (Join-Path $Target 'rewrite-build.txt')
+     # Check the actual copies used by both 32-bit and 64-bit TSF hosts.
+     $nativeSystem = if ([Environment]::Is64BitOperatingSystem -and ![Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+@@ -186,7 +207,9 @@ try {
+     Write-Host 'Program files and TSF DLLs installed and verified.'
+   } catch {
+     $failure = $_
++    $failedStage = $operationStage
+     if ($changed) {
++      $recoveryStatus = 'attempting'
+       try {
+         foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $backup $name) (Join-Path $Target $name) }
+         if (Test-Path -LiteralPath (Join-Path $backup 'rewrite-build.txt')) {
+@@ -195,15 +218,38 @@ try {
+           Remove-Item -LiteralPath (Join-Path $Target 'rewrite-build.txt') -Force
+         }
+         Register-Weasel $Target $arguments[$profileName]
++        $recoveryStatus = 'restored'
+         Write-Host 'Original binaries restored. Reboot Windows before using Weasel.'
+       } catch {
++        $recoveryStatus = "FAILED: $($_.Exception.Message)"
+         Write-Host "Automatic recovery failed. Restore files from: $backup" -ForegroundColor Red
+         Write-Host $_
+       }
+     }
+     throw $failure
+   }
++  $succeeded = $true
++  exit 0
+ } catch {
+-  Write-Host "ERROR: $_" -ForegroundColor Red
++  if (!$failedStage) { $failedStage = $operationStage }
++  $failureMessage = $_.Exception.Message
++  $failureLocation = $_.InvocationInfo.PositionMessage
++  Write-Host "ERROR during ${failedStage}: $failureMessage" -ForegroundColor Red
++  Write-Host $failureLocation
++  Write-Host "Program recovery: $recoveryStatus"
+   exit 1
++} finally {
++  if ($ResultPath) {
++    try {
++      [ordered]@{
++        success = $succeeded
++        stage = $(if ($failedStage) { $failedStage } else { $operationStage })
++        error = $failureMessage
++        location = $failureLocation
++        recovery = $recoveryStatus
++        log = $LogPath
++      } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $ResultPath -Encoding UTF8
++    } catch { Write-Host "Could not save administrator result: $_" -ForegroundColor Red }
++  }
++  if ($logStarted) { Stop-Transcript | Out-Null }
+ }
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index abf5083..345818f 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -32,6 +32,7 @@ try {
+   $files = $tracked + @(
+     'Install-Binaries.ps1', 'INSTALL-PATCH.md', 'build-rewrite-config.cmd', 'tools/rewrite-config.cpp',
+     'test/installer_config_test.ps1', 'test/installer_transaction_test.ps1',
++    'test/installer_diagnostics_test.ps1',
+     'test/installer_rime_test.cpp', 'test/installer_rime_test.ps1',
+     'include/RewriteState.h', 'WeaselUI/RewriteLayout.h', 'WeaselSetup/SetupTrace.h', 'build-rewrite.cmd',
+     'weasel.props', 'REWRITE-UI.md',
+diff --git a/test/installer_diagnostics_test.ps1 b/test/installer_diagnostics_test.ps1
+new file mode 100644
+index 0000000..f777f79
+--- /dev/null
++++ b/test/installer_diagnostics_test.ps1
+@@ -0,0 +1,55 @@
++$ErrorActionPreference = 'Stop'
++$repo = Split-Path $PSScriptRoot -Parent
++$root = Join-Path ([IO.Path]::GetTempPath()) ('rewrite-diagnostics-' + [guid]::NewGuid().ToString('N'))
++$package = Join-Path $root 'package'
++$Target = Join-Path $root 'program'
++New-Item -ItemType Directory -Path $package,(Join-Path $Target 'data') -Force | Out-Null
++Copy-Item (Join-Path $repo 'Install-Binaries.ps1') $package
++$manifest = @()
++foreach ($file in @('WeaselServer.exe','WeaselDeployer.exe','WeaselSetup.exe','weasel.dll','weaselx64.dll','rime.dll','WinSparkle.dll')) {
++  Set-Content -LiteralPath (Join-Path $package $file) -Value 'preflight fixture, never execute'
++  Copy-Item (Join-Path $package $file) $Target
++  $manifest += (Get-FileHash (Join-Path $package $file)).Hash + '  ' + $file
++}
++$manifest | Set-Content (Join-Path $package 'SHA256SUMS.txt')
++$log = Join-Path $root 'success.log'; $result = Join-Path $root 'success.json'
++& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $package 'Install-Binaries.ps1') -Target $Target -CheckOnly -LogPath $log -ResultPath $result
++if ($LASTEXITCODE -ne 0) { throw 'Preflight subprocess failed' }
++$report = Get-Content $result -Raw | ConvertFrom-Json
++if (!$report.success -or !(Test-Path $log)) { throw 'Success report/log missing' }
++Write-Host 'PASS: real Windows PowerShell success transcript/result'
++$log = Join-Path $root 'failure.log'; $result = Join-Path $root 'failure.json'
++& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $package 'Install-Binaries.ps1') -Target $Target -CheckOnly -UserSid 'S-1-0-0' -LogPath $log -ResultPath $result
++if ($LASTEXITCODE -ne 1) { throw 'Identity rejection did not fail' }
++$report = Get-Content $result -Raw | ConvertFrom-Json
++if ($report.success -or $report.stage -ne 'checking elevated identity' -or $report.error -notmatch 'Elevation changed') { throw 'Failure report incorrect' }
++if ((Get-Content $log -Raw) -notmatch 'Elevation changed') { throw 'Failure transcript incomplete' }
++Write-Host 'PASS: real failure retains stage, error and recovery status'
++
++$tokens=$null; $errors=$null
++$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'Apply-Patch.ps1'),[ref]$tokens,[ref]$errors)
++if ($errors) { throw ($errors | Out-String) }
++$function=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-BinaryInstaller'},$true)
++Invoke-Expression $function.Extent.Text
++function Start-Process {
++  param($FilePath,$Verb,$ArgumentList,[switch]$PassThru)
++  if ($ArgumentList -notmatch '-LogPath ' -or $ArgumentList -notmatch '-ResultPath ') { throw 'Diagnostic paths were not forwarded' }
++  $p=[pscustomobject]@{Handle=1; ExitCode=1}
++  $p | Add-Member ScriptMethod WaitForExit {param($milliseconds) return $true}
++  $p | Add-Member ScriptMethod Dispose { }
++  return $p
++}
++$transaction=Join-Path $root 'transaction'
++New-Item -ItemType Directory -Path $transaction | Out-Null
++$identity=[pscustomobject]@{User=[pscustomobject]@{Value='test'}}
++$backupName='rewrite-backup-' + [guid]::NewGuid().ToString('N')
++Copy-Item $result (Join-Path $transaction 'program-install-result.json')
++$message=$null
++try { Invoke-BinaryInstaller } catch { $message=$_.Exception.Message }
++if (!$message -or $message -notmatch 'Stage: checking elevated identity' -or $message -notmatch 'Elevation changed' -or $message -notmatch 'Recovery: not-needed') { throw 'Parent did not surface child error' }
++Write-Host 'PASS: parent displays precise child error'
++Remove-Item -LiteralPath (Join-Path $transaction 'program-install-result.json')
++$message=$null
++try { Invoke-BinaryInstaller } catch { $message=$_.Exception.Message }
++if (!$message -or $message -notmatch 'No administrator log') { throw 'Missing-log fallback absent' }
++Write-Host "PASS: startup failure without transcript diagnosed. Fixtures: $root"
+-- 
+2.53.0.windows.2
+
