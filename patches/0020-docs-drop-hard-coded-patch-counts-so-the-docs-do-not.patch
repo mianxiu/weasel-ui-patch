@@ -1,7 +1,7 @@
 From 19ff13e8b84d88cf6388116399f4f0cb9a9038d8 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 22:24:22 +0800
-Subject: [PATCH 20/24] docs: drop hard-coded patch counts so the docs do not
+Subject: [PATCH 20/25] docs: drop hard-coded patch counts so the docs do not
  rot
 
 ---

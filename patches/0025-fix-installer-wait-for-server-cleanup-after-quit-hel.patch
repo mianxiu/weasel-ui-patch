@@ -1,0 +1,103 @@
+From 99242e0b03af92554380876618f879e4e1cf0be4 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Tue, 29 Sep 2026 22:52:55 +0800
+Subject: [PATCH 25/25] fix(installer): wait for server cleanup after quit
+ helper exits
+
+---
+ INSTALL-PATCH.md              | 2 ++
+ Install-Binaries.ps1          | 9 ++++++++-
+ WeaselServer/WeaselServer.cpp | 6 ++++++
+ test/patch_shutdown_test.ps1  | 9 +++++----
+ 4 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 3a09bef..6848fe1 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -41,6 +41,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Apply-Patch.ps1 -Check
+ 
+ revision 5 起，管理员阶段另外保存 `program-install.log` 与 `program-install-result.json`，主窗口会显示失败阶段、具体错误及恢复结果。若有自动恢复，另存 `program-recovery.log`。反馈故障时优先提供主窗口的 `Stage`、`Error`、`Recovery` 三行。
+ 
++停止服务时，会在 `/q` 助手退出后额外等待原服务收尾（最多 10 秒），避免把正常退出误判为失败。确需强制停止时，确认接受 `yes`/`YES` 及首尾空格。新版服务也会规范化命令行首尾空白；首次安装时停止的仍是目标电脑原来的服务。
++
+ 配置安装或部署检查失败时，入口会尝试恢复原配置和原程序，再重新部署旧配置。恢复程序可能再次请求管理员权限。若拒绝恢复提权或恢复失败，会明确报告失败并保留备份，请按 `RESTORE.txt` 恢复。不要把失败提示当作安装成功，也不要删除备份。
+ 
+ 旧 Lua filter 文件本身不删除，只移除引用。安装不自动重启或注销 Windows。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index bec97c0..136c579 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -62,10 +62,17 @@ function Stop-WeaselForPatch([string]$ServerPath) {
+       throw 'A different or inaccessible Weasel process is running. No binaries were replaced.'
+     }
+   }
++  # The /q helper can exit before the original server finishes cleanup.
++  $shutdownClock = [Diagnostics.Stopwatch]::StartNew()
++  foreach ($server in $remaining) {
++    $waitMs = [Math]::Max(0, 10000 - [int]$shutdownClock.ElapsedMilliseconds)
++    if (!$server.HasExited) { $null = $server.WaitForExit($waitMs) }
++  }
++  $remaining = @($remaining | Where-Object { !$_.HasExited })
+   if ($remaining.Count) {
+     Write-Host 'Weasel did not exit normally. Save/finish any current input first.' -ForegroundColor Yellow
+     $answer = Read-Host 'Force-stop this installation? Unsaved input/learning may be lost. Type YES to continue'
+-    if ($answer -cne 'YES') { throw 'Cancelled. No binaries were replaced. Exit Weasel and retry.' }
++    if ($answer.Trim() -ine 'YES') { throw 'Cancelled. No binaries were replaced. Exit Weasel and retry.' }
+     foreach ($server in $remaining) {
+       if (!$server.HasExited) { $server.Kill() }
+       if (!$server.WaitForExit(5000)) { throw 'Weasel could not be stopped. No binaries were replaced.' }
+diff --git a/WeaselServer/WeaselServer.cpp b/WeaselServer/WeaselServer.cpp
+index b4cf8b2..27c5d35 100644
+--- a/WeaselServer/WeaselServer.cpp
++++ b/WeaselServer/WeaselServer.cpp
+@@ -22,6 +22,12 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
+                      HINSTANCE /*hPrevInstance*/,
+                      LPTSTR lpstrCmdLine,
+                      int nCmdShow) {
++  std::wstring normalized = lpstrCmdLine;
++  const auto last = normalized.find_last_not_of(L" \t\r\n");
++  normalized.erase(last == std::wstring::npos ? 0 : last + 1);
++  const auto first = normalized.find_first_not_of(L" \t\r\n");
++  if (first != std::wstring::npos) normalized.erase(0, first);
++  lpstrCmdLine = normalized.data();
+   LANGID langId = get_language_id();
+   SetThreadUILanguage(langId);
+   SetThreadLocale(langId);
+diff --git a/test/patch_shutdown_test.ps1 b/test/patch_shutdown_test.ps1
+index 6d3ba57..e22c768 100644
+--- a/test/patch_shutdown_test.ps1
++++ b/test/patch_shutdown_test.ps1
+@@ -7,7 +7,7 @@ $function = $ast.Find({param($node) $node -is [Management.Automation.Language.Fu
+ Invoke-Expression $function.Extent.Text
+ function New-FakeProcess([string]$Path, [bool]$Hung) {
+   $p = [pscustomobject]@{Path=$Path; Hung=$Hung; HasExited=$false; Killed=$false}
+-  $p | Add-Member ScriptMethod WaitForExit {param($milliseconds) if ($milliseconds -gt 10000) { throw 'Unbounded wait' }; return (!$this.Hung -or $this.HasExited)}
++  $p | Add-Member ScriptMethod WaitForExit {param($milliseconds) if ($milliseconds -gt 10000) { throw 'Unbounded wait' }; if (!$this.Hung) { $this.HasExited=$true }; return $this.HasExited}
+   $p | Add-Member ScriptMethod Kill {$this.Killed=$true; $this.HasExited=$true}
+   return $p
+ }
+@@ -17,16 +17,17 @@ function Start-WeaselCommand {
+   return $script:helper
+ }
+ function Get-Process {param($Name,$ErrorAction) $script:remaining | Where-Object { !$_.HasExited }}
+-function Read-Host {param($Prompt) return $script:answer}
++function Read-Host {param($Prompt) if ($script:case -eq 'delayed-exit') { throw 'Prompted before service finished cleanup' }; return $script:answer}
+ $path = 'C:\test\WeaselServer.exe'
+-foreach ($case in @('normal','hung-helper','refuse','force','foreign')) {
++foreach ($case in @('normal','delayed-exit','hung-helper','refuse','force','foreign')) {
+   $script:helper = New-FakeProcess $path ($case -eq 'hung-helper')
+   $script:remaining = @()
+   $script:answer = 'NO'
+   if ($case -in @('refuse','force','foreign')) {
+     $script:remaining = @(New-FakeProcess $(if ($case -eq 'foreign') {'C:\other\WeaselServer.exe'} else {$path}) $true)
+   }
+-  if ($case -eq 'force') { $script:answer = 'YES' }
++  if ($case -eq 'delayed-exit') { $script:remaining = @(New-FakeProcess $path $false) }
++  if ($case -eq 'force') { $script:answer = ' yes ' }
+   $failed = $false
+   try { Stop-WeaselForPatch $path } catch { $failed = $true }
+   if ($failed -ne ($case -in @('refuse','foreign'))) { throw "Unexpected result: $case" }
+-- 
+2.53.0.windows.2
+
