@@ -1,98 +1,28 @@
-# 小狼毫 · 万象 Pro 编码重写补丁 — v0.17.4.1-rewrite-ui
+# 小狼毫 · 万象 Pro Rewrite UI 一键安装补丁
 
-基于上游 Weasel `d73f6295`（0.17.4 时代）的定制二进制补丁，为 Windows 小狼毫
-增加「未上屏编码快速重写」的**原生 UI**。
+Build-ID：`rewrite-ui-one-click-20260929`；程序安装器 revision 5。适用于已安装小狼毫 0.17.4 与万象 Pro 的 Windows x64/x86 系统，不支持 ARM64。
 
-```text
-Build-ID:  rewrite-ui-software-render-20260928
-文件版本:  0.17.4.1（未做发行代码签名）
-适用平台:  Windows x64 与 x86（不支持 ARM64）
-```
+## 下载与安装
 
-## 下载
+下载下方附件 **Weasel-Rewrite-UI.zip**，完整解压到新文件夹，普通双击 `Apply-Patch.cmd`，按提示允许管理员提权。无需手动修改 YAML 或安装 Lua。
 
-`Weasel-Rewrite-UI.zip`（约 8.7 MB）。解压后先读包内 `README.md`。
+安装器校验包内哈希，备份原程序及配置，合并 YAML、安装 Lua、启用 Rewrite UI、关闭调试日志，然后部署并校验结果。无关 YAML 配置值会保留，注释和格式会规范化；原文件保存在备份中。
 
-## 这个包做了什么
+开头的 `CHECK ONLY` 属于安装前预检。请以最后的 `SUCCESS` 或 `INSTALL FAILED` 为准。成功后需要注销重新登录或重启 Windows，使应用加载新的输入法 DLL。
 
-**Rewrite UI（原生绘制）** —— 在未上屏的编码上按音节重写：
+## 本次修复
 
-```text
-普通输入     jxjirzbj
-Tab          jx¹   ji²   rz³   bj⁴            ← 第 1 音节高亮
-3            jx¹   ji²  [rz³]  bj⁴      ³     ← 高亮即时移动 + 索引 badge
-jm           jx¹   ji²  [jm³]  bj⁴      ³     ← replacement 即时更新
-Esc          jxjirzbj                         ← 恢复原编码
-```
+- 等待 `/q` 助手退出后，继续等待原服务收尾，避免误判退出失败；强制停止确认接受 `yes`、`YES` 和首尾空格。
+- 服务端规范化命令参数首尾空白。
+- 管理员阶段保留日志和结构化结果；失败时显示 `Stage / Error / Recovery`。
+- 终端新增中文预检说明、安装成功说明、重启及功能验证步骤。
 
-`[ ]` 是真正的圆角背景高亮（界面上不显示括号），`³` 是独立的弱背景 badge。
-关键难点是：按数字选音节时 property 变了但 `context.input` 没变，
-translation / filter / preedit 都不会重算，UI 不动 —— 纯 Lua 侧试过的几条
-刷新路线全部无效，所以改在 Weasel 侧：每次按键后主动读取属性、构造独立状态、
-原生绘制。
+## 验证与恢复
 
-**顺带的两个独立改动**：
+注销或重启后，输入拼音并按 `Tab`，检查音节高亮、数字索引选择及 `Esc` 恢复。安装结束不会自动重启 Windows。
 
-- **D2D 软件渲染**：render target 改为 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`，
-  减少新宿主进程的硬件设备初始化开销（[rime/weasel#1913](https://github.com/rime/weasel/issues/1913)）。
-- **WeaselSetup 命令行修复**：容忍参数首尾空白，修掉「尾部空格导致 `/s`
-  未被识别、进入隐藏交互窗口」的问题；另加 `WEASEL_SETUP_LOG` 门控的安装 trace。
+保留程序目录和 Rime 用户目录中的 `rewrite-backup-*`。失败时提供终端错误及 `program-install.log`，按备份内 `RESTORE.txt` 恢复；不要删除备份。
 
-## 环境要求
+已通过 x64/x86 构建、服务退出等待回归测试、配置及安装事务测试、隔离 librime 部署测试和包完整性校验。用户已反馈 revision 5 在另一台电脑安装及部署校验成功；交互功能仍需按上述步骤验收。
 
-- 已安装小狼毫 Weasel —— 本包是**覆盖式补丁**，不含词库与安装器
-- 万象 Pro + 小鹤双拼方案
-- 核心 Lua `indexed_rewrite_pro.lua`（在 `rewrite-source.zip` 的 `rime/` 里）
-- x64 或 x86 Windows；**ARM64 不支持**
-
-## 安装
-
-完整步骤见包内 `README.md`，要点：
-
-1. 覆盖程序文件，并**保留原目录的 `data`、词库和其他资源**
-2. 以管理员权限运行 `WeaselSetup.exe /s` 重新注册 TSF DLL
-   （只替换 `WeaselServer.exe` 是不够的，`System32`/`SysWOW64` 里的客户端也要换）
-3. 在 `weasel.custom.yaml` 里开启 `rewrite_ui/enabled: true`
-   （附带的 `install-rime-files.ps1 -Apply` 会装好 Lua、补上开关，并自动删掉
-   已废弃的 `lua_filter@*indexed_rewrite_tab_ui_v2` 行，不需要手工改 YAML）
-4. **重新部署（`WeaselDeployer.exe /deploy`）并重启服务**
-   —— 服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`
-5. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
-
-## 验证情况
-
-已在真实万象 Pro + 小鹤双拼 + 直接辅助配置上完成真机验收：
-
-- `Tab` 进入编辑模式 ✅
-- 按数字即时移动高亮并显示索引 badge ✅
-- 多位索引 `32` / `321` / 退格回退 ✅
-- `j` → `jm` → 退格的 replacement 实时更新 ✅
-- `Esc` 恢复原编码 ✅
-- 普通输入、候选与直接辅助未受影响 ✅
-
-**尚未覆盖**（不影响已有结论）：多位索引 badge 的肉眼确认、
-`Space`/`Enter`/标点提交后的上屏结果、`Tab` 后直接打字母的 `head_replace` 路径。
-
-## 校验
-
-包内 `SHA256SUMS.txt` 列出全部 21 个文件的 SHA256，可逐一核对：
-
-```powershell
-Get-FileHash .\WeaselServer.exe -Algorithm SHA256
-```
-
-## 源码
-
-配套源码仓库 [mianxiu/weasel-ui-patch](https://github.com/mianxiu/weasel-ui-patch)
-**只保存补丁**（约 283 KB，不含上游源码）。在补丁仓库里跑 `setup.ps1` 会从官方
-clone Weasel 并打上全部补丁，重建出与本次构建完全一致的源码树
-（用 `EXPECTED-TREE.txt` 校验 tree hash）。
-
-包内 `rewrite-source.zip` 是补丁应用后的源码快照，便于离线查阅。
-
-## 许可
-
-基于 [rime/weasel](https://github.com/rime/weasel) 修改，沿用其 **GPLv3**
-（见包内 `licenses/`）。上游作者与贡献者名单见上游仓库。
-万象 Pro 词库与方案数据不属于本项目，也不随本包分发。
-
+包内包含源代码快照和许可证；程序未作代码签名。本补丁不包含输入法原始安装器或词库。

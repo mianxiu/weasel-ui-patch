@@ -1,7 +1,7 @@
 From ea4e6224dc76d632eab97c2bf2f29db5d90f8097 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:59:51 +0800
-Subject: [PATCH 15/25] docs: record removal of the obsolete lua preedit UI
+Subject: [PATCH 15/26] docs: record removal of the obsolete lua preedit UI
  filter
 
 ---
