@@ -26,21 +26,14 @@ pwsh -NoProfile -File .\setup.ps1
 
 ```powershell
 # 1. 装好小狼毫与万象 Pro，准备好词库
-# 2. 把 Rime 侧文件装进用户目录
-pwsh -NoProfile -File ..\weasel\rime\install-rime-files.ps1 -Apply
-
-# 3. 编译并安装（构建还需要不被 git 跟踪的 weasel.props 与 deps\）
+# 2. 编译并打包（构建还需要不被 git 跟踪的 weasel.props 与 deps\）
 cd ..\weasel
 .\build-rewrite.cmd
 pwsh -NoProfile -File .\package-rewrite.ps1
-.\Apply-Patch.cmd
+# 3. 一键安装：程序、YAML、Lua、启用、部署与验证
+.\dist\Weasel-Rewrite-UI\Apply-Patch.cmd
 
-# 4. 让配置生效
-& 'C:\Program Files\Rime\weasel-0.17.4\WeaselDeployer.exe' /deploy
-& 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe' /quit
-Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
-
-# 5. 注销并重新登录 Windows
+# 4. 注销并重新登录 Windows
 ```
 
 构建依赖（`weasel.props`、`deps\boost_1_84_0`、`deps\rime-x64`、`deps\rime-x86`、

@@ -1,0 +1,73 @@
+From d6c26e0b404b688dfcf7a81ab567b62e89f3af4e Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Tue, 29 Sep 2026 19:15:14 +0800
+Subject: [PATCH 23/23] fix(installer): validate effective Rime Tab binding
+ precedence
+
+---
+ test/installer_config_test.ps1 | 8 ++++++++
+ test/installer_rime_test.ps1   | 5 ++++-
+ tools/rewrite-config.cpp       | 7 +++++--
+ 3 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/test/installer_config_test.ps1 b/test/installer_config_test.ps1
+index ff96f56..ba3a288 100644
+--- a/test/installer_config_test.ps1
++++ b/test/installer_config_test.ps1
+@@ -78,6 +78,14 @@ Put (Join-Path $build 'wanxiang_pro.schema.yaml') $deployed
+ & $helper verify (Split-Path $build -Parent)
+ Assert ($LASTEXITCODE -eq 0) 'Correct deployment rejected'
+ Write-Host 'PASS: deployed configuration verified'
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('  bindings:', "  bindings:`n    - {when: has_menu, accept: Tab, send: Down}"))
++& $helper verify (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -eq 0) 'Earlier overridden Tab binding incorrectly rejected'
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed + "`n    - {when: has_menu, accept: Tab, send: Down}`n")
++& $helper verify (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -ne 0) 'Later overriding Tab binding incorrectly accepted'
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') $deployed
++Write-Host 'PASS: actual Rime last-binding precedence'
+ Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: false, debug: false}'
+ & $helper verify (Split-Path $build -Parent)
+ Assert ($LASTEXITCODE -ne 0) 'Stale disabled deployment accepted'
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index de5dedd..e08149d 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -18,7 +18,10 @@ engine:
+ speller:
+   alphabet: abcdefghijklmnopqrstuvwxyz/
+ key_binder:
+-  bindings: []
++  bindings:
++    - {when: has_menu, accept: Tab, send: Down}
++    - {when: composing, accept: Tab, send: Down}
++    - {when: always, accept: Tab, send: Down}
+ '@
+ [IO.File]::WriteAllText((Join-Path $shared 'wanxiang_pro.schema.yaml'), $schema, $utf8)
+ $repo=Split-Path $PSScriptRoot -Parent
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index 0d3090f..a12e14f 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -165,13 +165,16 @@ void verify(const fs::path& user) {
+   require(bindings.IsSequence(), "Deployed bindings missing");
+   for (const auto& when : {"has_menu", "composing"}) {
+     bool found = false;
++    YAML::Node effective;
+     for (auto b : bindings) {
+       if (scalar(b["when"], when) && scalar(b["accept"], "Tab")) {
+-        require(scalar(b["send_sequence"], "//"), "An earlier Tab binding overrides rewrite");
+-        found = true; break;
++        // KeyBindings::Bind inserts before previous bindings of the same condition.
++        effective.reset(b);
++        found = true;
+       }
+     }
+     require(found, "Deployed Tab binding missing");
++    require(scalar(effective["send_sequence"], "//"), "Effective Tab binding does not activate rewrite");
+   }
+ }
+ int wmain(int argc, wchar_t** argv) {
+-- 
+2.53.0.windows.2
+

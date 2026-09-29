@@ -1,0 +1,1314 @@
+From df631bf337797a231ccb7687cf755cec515f02e8 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Tue, 29 Sep 2026 19:11:06 +0800
+Subject: [PATCH 22/23] feat(installer): ship one-click binary and Rime
+ configuration deployment
+
+---
+ Apply-Patch.ps1                     | 307 ++++++++++++++--------------
+ INSTALL-PATCH.md                    |  50 +++++
+ Install-Binaries.ps1                | 209 +++++++++++++++++++
+ README.md                           |   3 +
+ REWRITE-UI.md                       |   4 +
+ WeaselDeployer/Configurator.cpp     |  14 +-
+ WeaselSetup/imesetup.cpp            |   6 +
+ agent.md                            |   7 +
+ build-rewrite-config.cmd            |  11 +
+ build-rewrite.cmd                   |   2 +
+ package-rewrite.ps1                 |  31 ++-
+ rewrite-build.txt                   |   2 +-
+ test/installer_config_test.ps1      |  91 +++++++++
+ test/installer_rime_test.cpp        |  40 ++++
+ test/installer_rime_test.ps1        |  33 +++
+ test/installer_transaction_test.ps1 |  66 ++++++
+ test/patch_shutdown_test.ps1        |   2 +-
+ tools/rewrite-config.cpp            | 189 +++++++++++++++++
+ 18 files changed, 904 insertions(+), 163 deletions(-)
+ create mode 100644 INSTALL-PATCH.md
+ create mode 100644 Install-Binaries.ps1
+ create mode 100644 build-rewrite-config.cmd
+ create mode 100644 test/installer_config_test.ps1
+ create mode 100644 test/installer_rime_test.cpp
+ create mode 100644 test/installer_rime_test.ps1
+ create mode 100644 test/installer_transaction_test.ps1
+ create mode 100644 tools/rewrite-config.cpp
+
+diff --git a/Apply-Patch.ps1 b/Apply-Patch.ps1
+index 7c75488..4d0ffc7 100644
+--- a/Apply-Patch.ps1
++++ b/Apply-Patch.ps1
+@@ -1,7 +1,12 @@
++# Only the binary installer is elevated; configuration belongs to the signed-in user.
+ [CmdletBinding()]
+-param([string]$Target, [switch]$CheckOnly, [string]$UserSid)
++param([string]$Target, [string]$UserDataRoot, [switch]$CheckOnly)
+ $ErrorActionPreference = 'Stop'
+ Set-StrictMode -Version 2
++$package = $PSScriptRoot
++$binaryAttempted = $false; $binariesInstalled = $false; $configChanged = $false
++$transaction = $null; $mutex = $null; $locked = $false; $transcribing = $false
++$savedFiles = @()
+ 
+ function Read-WeaselRoot {
+   foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
+@@ -14,170 +19,172 @@ function Read-WeaselRoot {
+       }
+     } finally { $base.Dispose() }
+   }
+-  throw 'Existing Weasel installation not found. Use -Target with the installed Weasel directory.'
++  throw 'Install Weasel and Wanxiang Pro first.'
+ }
+-function Copy-Verified([string]$Source, [string]$Destination) {
+-  Copy-Item -LiteralPath $Source -Destination $Destination -Force
+-  if ((Get-FileHash -LiteralPath $Source).Hash -ne (Get-FileHash -LiteralPath $Destination).Hash) {
+-    throw "Copy verification failed: $Destination"
+-  }
++function Invoke-Wait([string]$Exe, [string]$Arguments) {
++  $info = New-Object Diagnostics.ProcessStartInfo
++  $info.FileName = $Exe; $info.Arguments = $Arguments
++  $info.WorkingDirectory = Split-Path $Exe -Parent
++  $info.UseShellExecute = $false; $info.CreateNoWindow = $true
++  $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
++  $info.StandardOutputEncoding = [Text.Encoding]::UTF8; $info.StandardErrorEncoding = [Text.Encoding]::UTF8
++  $process = [Diagnostics.Process]::Start($info)
++  try {
++    $stdout = $process.StandardOutput.ReadToEndAsync()
++    $stderr = $process.StandardError.ReadToEndAsync()
++    while (!$process.WaitForExit(10000)) { Write-Host "Waiting for $([IO.Path]::GetFileName($Exe)) (PID $($process.Id))..." }
++    $outputText = $stdout.GetAwaiter().GetResult(); $errorText = $stderr.GetAwaiter().GetResult()
++    if ($outputText) { Write-Host $outputText.TrimEnd() }
++    if ($errorText) { Write-Host $errorText.TrimEnd() }
++    if ($process.ExitCode -ne 0) { throw "$([IO.Path]::GetFileName($Exe)) failed ($($process.ExitCode)): $errorText" }
++  } finally { $process.Dispose() }
+ }
+-function Start-WeaselCommand([string]$FilePath, [string]$Argument) {
+-  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+-  $startInfo.FileName = $FilePath
+-  $startInfo.Arguments = $Argument
+-  $startInfo.WorkingDirectory = Split-Path -Parent $FilePath
+-  $startInfo.UseShellExecute = $false
+-  return [System.Diagnostics.Process]::Start($startInfo)
++function Invoke-BinaryInstaller([switch]$Restore) {
++  $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Target "{1}" -UserSid "{2}" -BackupName "{3}"' -f
++    (Join-Path $package 'Install-Binaries.ps1'), $Target, $identity.User.Value, $backupName
++  if ($Restore) { $arguments += ' -Restore' }
++  $child = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -PassThru
++  $script:binaryAttempted = $true
++  try {
++    while (!$child.WaitForExit(10000)) { Write-Host 'Waiting for administrator installer...' }
++    if ($child.ExitCode -ne 0) { throw "Program installation/recovery failed ($($child.ExitCode)). See program backup." }
++  } finally { $child.Dispose() }
+ }
+-function Register-Weasel([string]$Root, [string]$ProfileArgument) {
+-  $process = Start-WeaselCommand (Join-Path $Root 'WeaselSetup.exe') $ProfileArgument
+-  while (!$process.WaitForExit(10000)) {
+-    Write-Host "Waiting for Windows input-method registration (PID $($process.Id))... Do not run another installer."
+-  }
+-  if ($process.ExitCode -ne 0) { throw "WeaselSetup failed: $($process.ExitCode)" }
++function Copy-Checked([string]$Source, [string]$Destination) {
++  Copy-Item -LiteralPath $Source -Destination $Destination -Force
++  if ((Get-FileHash -LiteralPath $Source).Hash -ne (Get-FileHash -LiteralPath $Destination).Hash) { throw "File verification failed: $Destination" }
+ }
+-
+-function Stop-WeaselForPatch([string]$ServerPath) {
+-  Write-Host 'Stopping Weasel (up to 10 seconds)...'
+-  # Start-Process -Wait can wait for descendants, not just the /q helper.
+-  $helper = Start-WeaselCommand $ServerPath '/q'
+-  if (!$helper.WaitForExit(10000)) {
+-    # Only terminate the helper created by this script, never a process tree.
+-    $helper.Kill()
+-    if (!$helper.WaitForExit(5000)) { throw 'Shutdown helper could not be stopped. No binaries were replaced.' }
+-  }
+-  $remaining = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
+-  foreach ($server in $remaining) {
+-    if (!$server.Path -or $server.Path -ine $ServerPath) {
+-      throw 'A different or inaccessible Weasel process is running. No binaries were replaced.'
+-    }
+-  }
+-  if ($remaining.Count) {
+-    Write-Host 'Weasel did not exit normally. Save/finish any current input first.' -ForegroundColor Yellow
+-    $answer = Read-Host 'Force-stop this installation? Unsaved input/learning may be lost. Type YES to continue'
+-    if ($answer -cne 'YES') { throw 'Cancelled. No binaries were replaced. Exit Weasel and retry.' }
+-    foreach ($server in $remaining) {
+-      if (!$server.HasExited) { $server.Kill() }
+-      if (!$server.WaitForExit(5000)) { throw 'Weasel could not be stopped. No binaries were replaced.' }
+-    }
+-  }
+-  if (@(Get-Process WeaselServer -ErrorAction SilentlyContinue).Count) {
+-    throw 'Weasel restarted. Close applications using the input method, then retry. No binaries were replaced.'
+-  }
+-  Write-Host 'Weasel stopped.'
++function Start-UserServer {
++  Start-Process -FilePath (Join-Path $Target 'WeaselServer.exe') -WorkingDirectory $Target -WindowStyle Hidden
++  Start-Sleep -Seconds 2
++  $running = @(Get-Process WeaselServer -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq (Join-Path $Target 'WeaselServer.exe') })
++  if (!$running.Count) { throw 'WeaselServer did not remain running. Check the Rime log.' }
+ }
+ 
+ try {
+   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+-  if ($UserSid -and $UserSid -ne $identity.User.Value) {
+-    throw 'Elevation changed the Windows user. Sign in as the installing user and run again.'
++  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
++  if (!$CheckOnly -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
++    throw 'Double-click Apply-Patch.cmd normally, without Run as administrator. Elevation is requested for program files only.'
+   }
+-  $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+-  if ($arch -eq 'ARM64') { throw 'This package supports x64/x86 Windows only.' }
++  $mutex = New-Object Threading.Mutex($false, 'Local\WeaselRewritePatchInstaller')
++  try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
++  if (!$locked) { throw 'Another patch installer is running.' }
+   if (!$Target) { $Target = Read-WeaselRoot }
+   $Target = (Resolve-Path -LiteralPath $Target).Path.TrimEnd('\')
+-  $package = (Resolve-Path -LiteralPath $PSScriptRoot).Path.TrimEnd('\')
+-  if ($Target -eq $package -or $Target.StartsWith($package + '\', [StringComparison]::OrdinalIgnoreCase) -or
+-      $package.StartsWith($Target + '\', [StringComparison]::OrdinalIgnoreCase)) {
+-    throw 'Extract the patch outside the installed Weasel directory before running it.'
+-  }
+-  if (!(Test-Path -LiteralPath (Join-Path $Target 'data') -PathType Container)) {
+-    throw 'Target is not an existing Weasel installation (data directory missing).'
+-  }
+-  $mapping = [ordered]@{
+-    'WeaselServer.exe' = 'WeaselServer.exe'; 'WeaselDeployer.exe' = 'WeaselDeployer.exe'
+-    'WeaselSetup.exe' = 'WeaselSetup.exe'; 'weasel.dll' = 'weasel.dll'
+-    'rime.dll' = 'rime.dll'; 'WinSparkle.dll' = 'WinSparkle.dll'
+-  }
+-  if ([Environment]::Is64BitOperatingSystem) { $mapping['weaselx64.dll'] = 'weaselx64.dll' }
+-  else {
+-    foreach ($name in @('WeaselServer.exe','WeaselDeployer.exe','rime.dll','WinSparkle.dll')) { $mapping[$name] = 'Win32\' + $name }
+-  }
+-  $hashes = @{}
+-  foreach ($line in (Get-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt'))) {
+-    if ($line -match '^([a-fA-F0-9]{64})\s+(.+)$') { $hashes[$Matches[2].Replace('/', '\')] = $Matches[1] }
+-  }
+-  foreach ($name in $mapping.Keys) {
+-    if (!(Test-Path -LiteralPath (Join-Path $Target $name) -PathType Leaf)) {
+-      throw "Required original file missing: $name. Use manual replacement for this installation."
+-    }
+-    $relative = $mapping[$name]
+-    $source = Join-Path $package $relative
+-    if (!$hashes.ContainsKey($relative) -or (Get-FileHash -LiteralPath $source).Hash -ne $hashes[$relative]) {
+-      throw "Package hash check failed: $relative"
+-    }
+-  }
+-  $profile = Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction SilentlyContinue
+-  $profileName = 'hans'
+-  if ($profile -and $profile.PSObject.Properties['Profile'] -and $profile.Profile) { $profileName = $profile.Profile }
+-  elseif ($profile -and $profile.PSObject.Properties['Hant'] -and $profile.Hant) { $profileName = 'hant' }
+-  $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+-  if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+-  Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-software-render-20260928; profile: $profileName"
+-  Write-Host 'Patch installer: revision 3 (command-line whitespace fix)'
+-  Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+-  if ($CheckOnly) { Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
++  $settings = Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction SilentlyContinue
++  $registeredRoot = Join-Path $env:APPDATA 'Rime'
++  if ($settings -and $settings.PSObject.Properties['RimeUserDir'] -and $settings.RimeUserDir) {
++    $registeredRoot = [Environment]::ExpandEnvironmentVariables([string]$settings.RimeUserDir)
++  }
++  if (!$UserDataRoot) { $UserDataRoot = $registeredRoot }
++  $UserDataRoot = (Resolve-Path -LiteralPath $UserDataRoot).Path.TrimEnd('\')
++  if (!$CheckOnly -and $UserDataRoot -ine (Resolve-Path -LiteralPath $registeredRoot).Path.TrimEnd('\')) {
++    throw 'UserDataRoot differs from the registered Rime directory; deployment would target another directory.'
++  }
++  if (!(Test-Path -LiteralPath (Join-Path $UserDataRoot 'wanxiang_pro.schema.yaml')) -and
++      !(Test-Path -LiteralPath (Join-Path $Target 'data\wanxiang_pro.schema.yaml'))) {
++    throw 'Wanxiang Pro schema missing. Install its schemas and dictionaries first.'
++  }
++  if (@(Get-Process WeaselDeployer,WeaselSetup -ErrorAction SilentlyContinue).Count) { throw 'Another deployment/setup is running. Wait for it to finish.' }
++  $manifest = @{}
++  foreach ($line in Get-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt')) {
++    if ($line -notmatch '^([a-fA-F0-9]{64})\s+(.+)$') { throw 'Invalid package manifest.' }
++    $hash = $Matches[1]; $relative = $Matches[2]
++    $path = [IO.Path]::GetFullPath((Join-Path $package $relative))
++    if (!$path.StartsWith($package.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid package path.' }
++    if ($manifest.ContainsKey($relative)) { throw 'Duplicate package manifest entry.' }
++    if ((Get-FileHash -LiteralPath $path).Hash -ne $hash) { throw "Package integrity check failed: $relative" }
++    $manifest[$relative] = $hash
++  }
++  foreach ($required in @('Install-Binaries.ps1','RewriteConfig.exe','rime\lua\indexed_rewrite_pro.lua','rewrite-build.txt')) {
++    if (!$manifest.ContainsKey($required)) { throw "Manifest missing $required" }
++  }
++  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $package 'Install-Binaries.ps1') -Target $Target -CheckOnly
++  if ($LASTEXITCODE -ne 0) { throw 'Program preflight failed.' }
++  $backupName = 'rewrite-backup-' + [Guid]::NewGuid().ToString('N')
++  $stage = Join-Path ([IO.Path]::GetTempPath()) $backupName
++  New-Item -ItemType Directory -Path $stage | Out-Null
++  $inputSnapshot = @{}
++  foreach ($relative in @('weasel.custom.yaml','wanxiang_pro.custom.yaml','lua\indexed_rewrite_pro.lua')) {
++    $path = Join-Path $UserDataRoot $relative
++    $inputSnapshot[$relative] = if (Test-Path -LiteralPath $path -PathType Leaf) { (Get-FileHash -LiteralPath $path).Hash } else { $null }
++  }
++  Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('prepare "{0}" "{1}"' -f $UserDataRoot, $stage)
++  Write-Host "Program directory: $Target"
++  Write-Host "User directory: $UserDataRoot"
++  Write-Host 'Will merge YAML, install Lua, enable Rewrite UI, disable debug logging, deploy and restart.'
++  Write-Host 'Unrelated YAML values are preserved; comments/formatting are normalized. Originals are backed up.'
++  if ($CheckOnly) { Write-Host "CHECK PASSED. Installed files unchanged. Staged configuration: $stage"; exit 0 }
+ 
+-  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+-  if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+-    $scriptPath = Join-Path $package 'Apply-Patch.ps1'
+-    $elevationArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Target "{1}" -UserSid "{2}"' -f $scriptPath, $Target, $identity.User.Value
+-    $child = Start-Process powershell.exe -Verb RunAs -ArgumentList $elevationArgs -PassThru -Wait
+-    exit $child.ExitCode
+-  }
+-
+-  # Refuse a mixed installation instead of terminating unrelated applications.
+-  $serverPath = Join-Path $Target 'WeaselServer.exe'
+-  $servers = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
+-  foreach ($server in $servers) {
+-    if (!$server.Path -or $server.Path -ine $serverPath) {
+-      throw 'Another Weasel installation is running. Exit it before applying this patch.'
++  $transaction = Join-Path $UserDataRoot $backupName
++  New-Item -ItemType Directory -Path $transaction | Out-Null
++  Start-Transcript -Path (Join-Path $transaction 'install.log') | Out-Null
++  $transcribing = $true
++  foreach ($relative in @('weasel.custom.yaml','wanxiang_pro.custom.yaml','lua\indexed_rewrite_pro.lua')) {
++    $destination = Join-Path $UserDataRoot $relative
++    $saved = Join-Path $transaction $relative
++    $existed = Test-Path -LiteralPath $destination -PathType Leaf
++    $currentHash = if ($existed) { (Get-FileHash -LiteralPath $destination).Hash } else { $null }
++    if ($currentHash -ne $inputSnapshot[$relative]) { throw "Configuration changed during preflight: $relative. Retry after closing the editor." }
++    if ($existed) {
++      New-Item -ItemType Directory -Path (Split-Path $saved -Parent) -Force | Out-Null
++      Copy-Checked $destination $saved
+     }
++    $savedFiles += [pscustomobject]@{Relative=$relative; Existed=[bool]$existed}
++  }
++  $savedFiles | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $transaction 'files.json') -Encoding UTF8
++  @("Program backup: $(Join-Path $Target $backupName)", "User directory: $UserDataRoot",
++    'files.json lists original files. Restore existing files from here; remove files marked Existed=false.',
++    'Restore program files using program backup RESTORE.txt; deploy and restart Windows.') |
++    Set-Content -LiteralPath (Join-Path $transaction 'RESTORE.txt') -Encoding UTF8
++  Invoke-BinaryInstaller
++  $binariesInstalled = $true
++  # An editor may have changed a file while the elevation dialog was open.
++  foreach ($saved in $savedFiles) {
++    $destination = Join-Path $UserDataRoot $saved.Relative
++    if ($saved.Existed) {
++      if (!(Test-Path -LiteralPath $destination) -or
++          (Get-FileHash -LiteralPath $destination).Hash -ne (Get-FileHash -LiteralPath (Join-Path $transaction $saved.Relative)).Hash) {
++        throw "Configuration changed during installation: $($saved.Relative). Retry after closing the editor."
++      }
++    } elseif (Test-Path -LiteralPath $destination) { throw "File appeared during installation: $($saved.Relative)" }
++  }
++  $configChanged = $true
++  foreach ($name in @('weasel.custom.yaml','wanxiang_pro.custom.yaml')) { Copy-Checked (Join-Path $stage $name) (Join-Path $UserDataRoot $name) }
++  New-Item -ItemType Directory -Path (Join-Path $UserDataRoot 'lua') -Force | Out-Null
++  Copy-Checked (Join-Path $package 'rime\lua\indexed_rewrite_pro.lua') (Join-Path $UserDataRoot 'lua\indexed_rewrite_pro.lua')
++  Invoke-Wait (Join-Path $Target 'WeaselDeployer.exe') '/deploy'
++  Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('verify "{0}"' -f $UserDataRoot)
++  Start-UserServer
++  Write-Host 'SUCCESS: program files, Lua and YAML installed; deployment verified; Rewrite UI enabled.' -ForegroundColor Green
++  Write-Host 'Sign out and back in (or restart Windows) so applications load the new TSF DLLs.'
++  Write-Host "Backups and log: $transaction"
++  exit 0
++} catch {
++  Write-Host "INSTALL FAILED: $_" -ForegroundColor Red
++  if ($configChanged) {
++    try {
++      foreach ($saved in $savedFiles) {
++        $destination = Join-Path $UserDataRoot $saved.Relative
++        if ($saved.Existed) { Copy-Checked (Join-Path $transaction $saved.Relative) $destination }
++        elseif (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
++      }
++      Write-Host 'Original user configuration restored.'
++    } catch { Write-Host "CONFIG RECOVERY FAILED: $_. Restore from $transaction" -ForegroundColor Red }
+   }
+-  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+-  $backup = Join-Path $Target ('rewrite-backup-' + $stamp + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
+-  New-Item -ItemType Directory -Path $backup | Out-Null
+-  foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $Target $name) (Join-Path $backup $name) }
+-  if (Test-Path -LiteralPath (Join-Path $Target 'rewrite-build.txt')) {
+-    Copy-Verified (Join-Path $Target 'rewrite-build.txt') (Join-Path $backup 'rewrite-build.txt')
++  if ($binariesInstalled) {
++    try { Invoke-BinaryInstaller -Restore } catch { Write-Host "PROGRAM RECOVERY FAILED: $_" -ForegroundColor Red }
+   }
+-  @("Original directory: $Target", "Profile: $profileName", "Date: $stamp",
+-    'Restore all saved binaries to the original directory and run the saved WeaselSetup with the same profile argument.',
+-    "Registration argument: $($arguments[$profileName])", 'Reboot after restoring. User configuration was not modified.') |
+-    Set-Content -LiteralPath (Join-Path $backup 'RESTORE.txt') -Encoding UTF8
+-  Write-Host "Backup: $backup"
+-  $changed = $false
+-  try {
+-    if ($servers.Count) {
+-      Stop-WeaselForPatch $serverPath
+-    }
+-    Write-Host 'Replacing and verifying program files...'
+-    $changed = $true
+-    foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $package $mapping[$name]) (Join-Path $Target $name) }
+-    Write-Host 'Registering input method...'
+-    Register-Weasel $Target $arguments[$profileName]
+-    Copy-Verified (Join-Path $package 'rewrite-build.txt') (Join-Path $Target 'rewrite-build.txt')
+-    Write-Host 'SUCCESS. Restart Windows before testing; existing applications still hold old DLLs.' -ForegroundColor Green
+-    Write-Host 'Installed identifier: rewrite-build.txt. Rewrite UI remains opt-in in weasel.custom.yaml.'
+-  } catch {
+-    $failure = $_
+-    if ($changed) {
+-      try {
+-        foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $backup $name) (Join-Path $Target $name) }
+-        Register-Weasel $Target $arguments[$profileName]
+-        Write-Host 'Original binaries restored. Reboot Windows before using Weasel.'
+-      } catch {
+-        Write-Host "Automatic recovery failed. Restore files from: $backup" -ForegroundColor Red
+-        Write-Host $_
+-      }
+-    }
+-    throw $failure
++  if ($binaryAttempted) {
++    try {
++      if ($configChanged) { Invoke-Wait (Join-Path $Target 'WeaselDeployer.exe') '/deploy' }
++      if ($configChanged -or !@(Get-Process WeaselServer -ErrorAction SilentlyContinue).Count) { Start-UserServer }
++    } catch { Write-Host "SERVICE RECOVERY FAILED: $_. Keep backups and restart Windows." -ForegroundColor Red }
+   }
+-  Read-Host 'Press Enter to close' | Out-Null
+-} catch {
+-  Write-Host "ERROR: $_" -ForegroundColor Red
+-  if (!$CheckOnly) { Read-Host 'Press Enter to close' | Out-Null }
+   exit 1
++} finally {
++  if ($transcribing) { Stop-Transcript | Out-Null }
++  if ($locked) { $mutex.ReleaseMutex() }
++  if ($mutex) { $mutex.Dispose() }
+ }
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+new file mode 100644
+index 0000000..1b149a6
+--- /dev/null
++++ b/INSTALL-PATCH.md
+@@ -0,0 +1,50 @@
++# 小狼毫 / 万象 Pro 一键重写补丁
++
++适用于已经安装小狼毫和万象 Pro 方案、词库的 Windows x64 / x86 电脑。不支持 ARM64。
++
++## 使用
++
++1. 把 ZIP **完整解压**到小狼毫安装目录之外。不要在压缩包内直接运行。
++2. 完成正在输入的文字，双击 **Apply-Patch.cmd**。不要右键选择“以管理员身份运行”。
++3. Windows 请求管理员权限时允许。同一个 Windows 账户需要有管理员提权权限；不支持切换为另一账户安装。
++4. 等待绿色 `SUCCESS`。之后注销并重新登录，或重启 Windows，使所有应用加载新的输入法 DLL。
++
++程序会自动识别小狼毫安装目录和当前账户注册的 Rime 用户目录，并依次：
++
++- 验证分发文件哈希，解析配置，在临时目录预先生成合并结果。
++- 备份原程序及即将修改的用户文件。
++- 停止小狼毫，安装对应架构程序和 TSF DLL，检查注册结果与 DLL 哈希。
++- 安装 `lua/indexed_rewrite_pro.lua`，注册重写 processor，设置两个 Tab 绑定。
++- 移除配置中的旧 `indexed_rewrite_tab_ui_v2` filter 引用。
++- 设置 `rewrite_ui/enabled: true`、`rewrite_ui/debug: false`。
++- 执行重新部署，检查实际生成的配置，再以原用户身份启动小狼毫。
++
++既有主题、双拼、辅助码、其他快捷键及词库保留。YAML 会重新排版，注释不保留；原始文件完整保存在备份中。不会强制把你的拼音方案改成小鹤，也不会下载万象词库。请在小狼毫方案菜单中使用万象 Pro。
++
++如果已经有同一条件下的 Tab 绑定，它会改为重写入口。存在无法无歧义合并的 include、重复 YAML 键或 processor 路径操作时，会在安装前停止并显示原因，不覆盖配置。
++
++## 验证
++
++输入 `jxjirzbj`，按 `Tab`、`3`、`j`、`m`，应看到第三音节高亮并即时修改；`Esc` 恢复原编码。普通输入也应正常。首次安装后的旧应用可能仍持有旧 DLL，必须注销或重启后验收。
++
++只做预检（不安装、不提权、不部署）：
++
++```powershell
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Apply-Patch.ps1 -CheckOnly
++```
++
++程序目录识别异常时可以加 `-Target '实际安装目录'`。`-UserDataRoot` 必须与当前账户的小狼毫用户目录一致，预检模式可指定临时目录。
++
++## 失败与恢复
++
++用户目录中的 `rewrite-backup-随机编号` 保存原 YAML、原 Lua、`files.json`、`RESTORE.txt` 和 `install.log`。程序目录中同名备份保存原二进制。
++
++配置安装或部署检查失败时，入口会尝试恢复原配置和原程序，再重新部署旧配置。恢复程序可能再次请求管理员权限。若拒绝恢复提权或恢复失败，会明确报告失败并保留备份，请按 `RESTORE.txt` 恢复。不要把失败提示当作安装成功，也不要删除备份。
++
++旧 Lua filter 文件本身不删除，只移除引用。安装不自动重启或注销 Windows。
++
++## 维护
++
++安装端只需要 Windows 自带 PowerShell 5.1。`RewriteConfig.exe` 是静态链接的 x86 YAML 工具，可运行于 x86/x64 系统，无需 Python、网络或 PowerShell 模块。
++
++源码在 `rewrite-source.zip`，许可证在 `licenses/`。维护者运行 `build-rewrite.cmd` 构建，再用 PowerShell 7 执行 `package-rewrite.ps1` 生成此分发包。`SHA256SUMS.txt` 用于检测损坏，不是发行签名。程序未签名。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+new file mode 100644
+index 0000000..1394b0c
+--- /dev/null
++++ b/Install-Binaries.ps1
+@@ -0,0 +1,209 @@
++[CmdletBinding()]
++param([string]$Target, [switch]$CheckOnly, [string]$UserSid,
++      [ValidatePattern('^rewrite-backup-[a-f0-9]{32}$')][string]$BackupName,
++      [switch]$Restore)
++$ErrorActionPreference = 'Stop'
++Set-StrictMode -Version 2
++
++function Read-WeaselRoot {
++  foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
++    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
++    try {
++      $key = $base.OpenSubKey('Software\Rime\Weasel')
++      if ($key) {
++        try { $value = $key.GetValue('WeaselRoot'); if ($value) { return [string]$value } }
++        finally { $key.Dispose() }
++      }
++    } finally { $base.Dispose() }
++  }
++  throw 'Existing Weasel installation not found. Use -Target with the installed Weasel directory.'
++}
++function Copy-Verified([string]$Source, [string]$Destination) {
++  Copy-Item -LiteralPath $Source -Destination $Destination -Force
++  if ((Get-FileHash -LiteralPath $Source).Hash -ne (Get-FileHash -LiteralPath $Destination).Hash) {
++    throw "Copy verification failed: $Destination"
++  }
++}
++function Start-WeaselCommand([string]$FilePath, [string]$Argument) {
++  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
++  $startInfo.FileName = $FilePath
++  $startInfo.Arguments = $Argument
++  $startInfo.WorkingDirectory = Split-Path -Parent $FilePath
++  $startInfo.UseShellExecute = $false
++  return [System.Diagnostics.Process]::Start($startInfo)
++}
++function Register-Weasel([string]$Root, [string]$ProfileArgument) {
++  $process = Start-WeaselCommand (Join-Path $Root 'WeaselSetup.exe') $ProfileArgument
++  while (!$process.WaitForExit(10000)) {
++    Write-Host "Waiting for Windows input-method registration (PID $($process.Id))... Do not run another installer."
++  }
++  if ($process.ExitCode -ne 0) { throw "WeaselSetup failed: $($process.ExitCode)" }
++}
++
++function Stop-WeaselForPatch([string]$ServerPath) {
++  Write-Host 'Stopping Weasel (up to 10 seconds)...'
++  # Start-Process -Wait can wait for descendants, not just the /q helper.
++  $helper = Start-WeaselCommand $ServerPath '/q'
++  if (!$helper.WaitForExit(10000)) {
++    # Only terminate the helper created by this script, never a process tree.
++    $helper.Kill()
++    if (!$helper.WaitForExit(5000)) { throw 'Shutdown helper could not be stopped. No binaries were replaced.' }
++  }
++  $remaining = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
++  foreach ($server in $remaining) {
++    if (!$server.Path -or $server.Path -ine $ServerPath) {
++      throw 'A different or inaccessible Weasel process is running. No binaries were replaced.'
++    }
++  }
++  if ($remaining.Count) {
++    Write-Host 'Weasel did not exit normally. Save/finish any current input first.' -ForegroundColor Yellow
++    $answer = Read-Host 'Force-stop this installation? Unsaved input/learning may be lost. Type YES to continue'
++    if ($answer -cne 'YES') { throw 'Cancelled. No binaries were replaced. Exit Weasel and retry.' }
++    foreach ($server in $remaining) {
++      if (!$server.HasExited) { $server.Kill() }
++      if (!$server.WaitForExit(5000)) { throw 'Weasel could not be stopped. No binaries were replaced.' }
++    }
++  }
++  if (@(Get-Process WeaselServer -ErrorAction SilentlyContinue).Count) {
++    throw 'Weasel restarted. Close applications using the input method, then retry. No binaries were replaced.'
++  }
++  Write-Host 'Weasel stopped.'
++}
++
++try {
++  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
++  if ($UserSid -and $UserSid -ne $identity.User.Value) {
++    throw 'Elevation changed the Windows user. Sign in as the installing user and run again.'
++  }
++  $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
++  if ($arch -eq 'ARM64') { throw 'This package supports x64/x86 Windows only.' }
++  if (!$Target) { $Target = Read-WeaselRoot }
++  $Target = (Resolve-Path -LiteralPath $Target).Path.TrimEnd('\')
++  $package = (Resolve-Path -LiteralPath $PSScriptRoot).Path.TrimEnd('\')
++  if ($Target -eq $package -or $Target.StartsWith($package + '\', [StringComparison]::OrdinalIgnoreCase) -or
++      $package.StartsWith($Target + '\', [StringComparison]::OrdinalIgnoreCase)) {
++    throw 'Extract the patch outside the installed Weasel directory before running it.'
++  }
++  if (!(Test-Path -LiteralPath (Join-Path $Target 'data') -PathType Container)) {
++    throw 'Target is not an existing Weasel installation (data directory missing).'
++  }
++  $mapping = [ordered]@{
++    'WeaselServer.exe' = 'WeaselServer.exe'; 'WeaselDeployer.exe' = 'WeaselDeployer.exe'
++    'WeaselSetup.exe' = 'WeaselSetup.exe'; 'weasel.dll' = 'weasel.dll'
++    'rime.dll' = 'rime.dll'; 'WinSparkle.dll' = 'WinSparkle.dll'
++  }
++  if ([Environment]::Is64BitOperatingSystem) { $mapping['weaselx64.dll'] = 'weaselx64.dll' }
++  else {
++    foreach ($name in @('WeaselServer.exe','WeaselDeployer.exe','rime.dll','WinSparkle.dll')) { $mapping[$name] = 'Win32\' + $name }
++  }
++  $hashes = @{}
++  foreach ($line in (Get-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt'))) {
++    if ($line -match '^([a-fA-F0-9]{64})\s+(.+)$') { $hashes[$Matches[2].Replace('/', '\')] = $Matches[1] }
++  }
++  foreach ($name in $mapping.Keys) {
++    if (!(Test-Path -LiteralPath (Join-Path $Target $name) -PathType Leaf)) {
++      throw "Required original file missing: $name. Use manual replacement for this installation."
++    }
++    $relative = $mapping[$name]
++    $source = Join-Path $package $relative
++    if (!$hashes.ContainsKey($relative) -or (Get-FileHash -LiteralPath $source).Hash -ne $hashes[$relative]) {
++      throw "Package hash check failed: $relative"
++    }
++  }
++  $profile = Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction SilentlyContinue
++  $profileName = 'hans'
++  if ($profile -and $profile.PSObject.Properties['Profile'] -and $profile.Profile) { $profileName = $profile.Profile }
++  elseif ($profile -and $profile.PSObject.Properties['Hant'] -and $profile.Hant) { $profileName = 'hant' }
++  $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
++  if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
++  Write-Host "Target: $Target"
++  Write-Host "Build: rewrite-ui-one-click-20260929; profile: $profileName"
++  Write-Host 'Program installer: revision 4 (verified registration and recovery)'
++  Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
++  if ($CheckOnly) { Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
++
++  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
++  if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
++    throw 'This internal installer must be launched by Apply-Patch.cmd.'
++  }
++
++  # Refuse a mixed installation instead of terminating unrelated applications.
++  $serverPath = Join-Path $Target 'WeaselServer.exe'
++  $servers = @(Get-Process WeaselServer -ErrorAction SilentlyContinue)
++  foreach ($server in $servers) {
++    if (!$server.Path -or $server.Path -ine $serverPath) {
++      throw 'Another Weasel installation is running. Exit it before applying this patch.'
++    }
++  }
++  if (!$BackupName) { throw 'BackupName is required.' }
++  if ($Restore) {
++    $backup = Join-Path $Target $BackupName
++    if (!(Test-Path -LiteralPath (Join-Path $backup 'RESTORE.txt'))) { throw 'Backup not found.' }
++    foreach ($name in $mapping.Keys) {
++      if (!(Test-Path -LiteralPath (Join-Path $backup $name) -PathType Leaf)) { throw "Incomplete backup: $name" }
++    }
++    if ($servers.Count) { Stop-WeaselForPatch $serverPath }
++    foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $backup $name) (Join-Path $Target $name) }
++    if (Test-Path -LiteralPath (Join-Path $backup 'rewrite-build.txt')) {
++      Copy-Verified (Join-Path $backup 'rewrite-build.txt') (Join-Path $Target 'rewrite-build.txt')
++    } elseif (Test-Path -LiteralPath (Join-Path $Target 'rewrite-build.txt')) {
++      Remove-Item -LiteralPath (Join-Path $Target 'rewrite-build.txt') -Force
++    }
++    Register-Weasel $Target $arguments[$profileName]
++    Write-Host 'Original binaries restored.'
++    exit 0
++  }
++  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
++  $backup = Join-Path $Target $BackupName
++  New-Item -ItemType Directory -Path $backup | Out-Null
++  foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $Target $name) (Join-Path $backup $name) }
++  if (Test-Path -LiteralPath (Join-Path $Target 'rewrite-build.txt')) {
++    Copy-Verified (Join-Path $Target 'rewrite-build.txt') (Join-Path $backup 'rewrite-build.txt')
++  }
++  @("Original directory: $Target", "Profile: $profileName", "Date: $stamp",
++    'Restore all saved binaries to the original directory and run the saved WeaselSetup with the same profile argument.',
++    "Registration argument: $($arguments[$profileName])", 'Reboot after restoring. User configuration was not modified.') |
++    Set-Content -LiteralPath (Join-Path $backup 'RESTORE.txt') -Encoding UTF8
++  Write-Host "Backup: $backup"
++  $changed = $false
++  try {
++    if ($servers.Count) {
++      Stop-WeaselForPatch $serverPath
++    }
++    Write-Host 'Replacing and verifying program files...'
++    $changed = $true
++    foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $package $mapping[$name]) (Join-Path $Target $name) }
++    Write-Host 'Registering input method...'
++    Register-Weasel $Target $arguments[$profileName]
++    Copy-Verified (Join-Path $package 'rewrite-build.txt') (Join-Path $Target 'rewrite-build.txt')
++    # Check the actual copies used by both 32-bit and 64-bit TSF hosts.
++    $nativeSystem = if ([Environment]::Is64BitOperatingSystem -and ![Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
++    $nativeDll = Join-Path $env:WINDIR "$nativeSystem\weasel.dll"
++    $nativeSource = if ([Environment]::Is64BitOperatingSystem) { 'weaselx64.dll' } else { 'weasel.dll' }
++    if ((Get-FileHash $nativeDll).Hash -ne (Get-FileHash (Join-Path $package $nativeSource)).Hash) { throw 'Native TSF DLL verification failed.' }
++    if ([Environment]::Is64BitOperatingSystem -and
++        (Get-FileHash (Join-Path $env:WINDIR 'SysWOW64\weasel.dll')).Hash -ne (Get-FileHash (Join-Path $package 'weasel.dll')).Hash) { throw 'x86 TSF DLL verification failed.' }
++    Write-Host 'Program files and TSF DLLs installed and verified.'
++  } catch {
++    $failure = $_
++    if ($changed) {
++      try {
++        foreach ($name in $mapping.Keys) { Copy-Verified (Join-Path $backup $name) (Join-Path $Target $name) }
++        if (Test-Path -LiteralPath (Join-Path $backup 'rewrite-build.txt')) {
++          Copy-Verified (Join-Path $backup 'rewrite-build.txt') (Join-Path $Target 'rewrite-build.txt')
++        } elseif (Test-Path -LiteralPath (Join-Path $Target 'rewrite-build.txt')) {
++          Remove-Item -LiteralPath (Join-Path $Target 'rewrite-build.txt') -Force
++        }
++        Register-Weasel $Target $arguments[$profileName]
++        Write-Host 'Original binaries restored. Reboot Windows before using Weasel.'
++      } catch {
++        Write-Host "Automatic recovery failed. Restore files from: $backup" -ForegroundColor Red
++        Write-Host $_
++      }
++    }
++    throw $failure
++  }
++} catch {
++  Write-Host "ERROR: $_" -ForegroundColor Red
++  exit 1
++}
+diff --git a/README.md b/README.md
+index 647b457..b597058 100644
+--- a/README.md
++++ b/README.md
+@@ -1,5 +1,8 @@
+ # 小狼毫 · 万象 Pro 编码重写补丁
+ 
++> **2026-09-29 分发包更新：** 完整解压后双击 `Apply-Patch.cmd`，自动安装程序、合并 YAML、安装 Lua、启用并部署。
++> 当前安装与恢复步骤请看 [INSTALL-PATCH.md](INSTALL-PATCH.md)，下文保留旧版维护说明。
++
+ 基于 [rime/weasel](https://github.com/rime/weasel) 的个人定制，为 Windows
+ 小狼毫增加「未上屏编码快速重写」的**原生 UI**。
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index e003fdb..16e8540 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,5 +1,9 @@
+ # Rewrite UI 补丁
+ 
++> 2026-09-29：分发安装流程已更新为一键安装程序、合并 YAML、安装 Lua、启用、部署与验证。
++> **当前安装与恢复说明以 `INSTALL-PATCH.md` 为准**。下文保留原版二进制补丁的设计与验收记录；
++> 其中“安装器不修改配置、需手动启用”的描述仅适用于旧版。
++
+ 当前包标识：`rewrite-ui-software-render-20260928`。
+ 安装脚本修订版：revision 3（command-line whitespace fix）。修复启动参数尾部空格导致
+ `/s` 未识别而进入隐藏交互窗口的问题；注册程序也兼容参数两端空白。
+diff --git a/WeaselDeployer/Configurator.cpp b/WeaselDeployer/Configurator.cpp
+index 1502322..a7be30e 100644
+--- a/WeaselDeployer/Configurator.cpp
++++ b/WeaselDeployer/Configurator.cpp
+@@ -138,13 +138,9 @@ int Configurator::UpdateWorkspace(bool report_errors) {
+     client.StartMaintenance();
+   }
+ 
+-  {
+-    RimeApi* rime = rime_get_api();
+-    // initialize default config, preset schemas
+-    rime->deploy();
+-    // initialize weasel config
+-    rime->deploy_config_file("weasel.yaml", "config_version");
+-  }
++  RimeApi* rime = rime_get_api();
++  const bool workspace_ok = rime->deploy();
++  const bool weasel_ok = rime->deploy_config_file("weasel.yaml", "config_version");
+ 
+   CloseHandle(hMutex);  // should be closed before resuming service.
+ 
+@@ -152,6 +148,10 @@ int Configurator::UpdateWorkspace(bool report_errors) {
+     LOG(INFO) << "Resuming service.";
+     client.EndMaintenance();
+   }
++  if (!workspace_ok || !weasel_ok) {
++    LOG(ERROR) << "Workspace/config deployment failed.";
++    return 1;
++  }
+   return 0;
+ }
+ 
+diff --git a/WeaselSetup/imesetup.cpp b/WeaselSetup/imesetup.cpp
+index 1ad3b90..5767d38 100644
+--- a/WeaselSetup/imesetup.cpp
++++ b/WeaselSetup/imesetup.cpp
+@@ -366,7 +366,13 @@ int register_text_service(const std::wstring& tsf_path,
+   if (ShellExecuteExW(&shExInfo)) {
+     SetupTrace("waiting for regsvr32");
+     WaitForSingleObject(shExInfo.hProcess, INFINITE);
++    DWORD registration_exit = 1;
++    const BOOL got_exit = GetExitCodeProcess(shExInfo.hProcess, &registration_exit);
+     CloseHandle(shExInfo.hProcess);
++    if (!got_exit || registration_exit != 0) {
++      SetupTrace("regsvr32 failed");
++      return 1;
++    }
+   } else {
+     WCHAR msg[100];
+     CString str;
+diff --git a/agent.md b/agent.md
+index 6b4fad6..2d172c6 100644
+--- a/agent.md
++++ b/agent.md
+@@ -1,5 +1,12 @@
+ # Agent Guide — 小狼毫 / 万象 Pro 快速重写与 Rewrite UI
+ 
++> **2026-09-29 一键分发更新：** 安装现状以 `INSTALL-PATCH.md` 为准。
++> `Apply-Patch.cmd` → 普通用户 `Apply-Patch.ps1` → 仅程序替换时提权 `Install-Binaries.ps1`。
++> 静态链接的 `RewriteConfig.exe` 解析 YAML，保留无关配置值并自动启用、部署、校验；原始配置备份，注释会规范化。
++> `build-rewrite.cmd` 同时构建 YAML 工具；`package-rewrite.ps1` 把 Lua 和工具直接放入分发包。
++> Windows PowerShell 5.1 预检、配置测试、事务失败恢复测试，以及真实 librime 的隔离部署和 Tab/索引/Esc 测试已通过。
++> 本轮没有覆盖真实系统目录安装或真机 UI 验收；不能把隔离测试记作真机验收。
++
+ > **状态（2026-09-28）：本项目已完成并通过真机验收。**
+ >
+ > 本文档同时是开发记录：§0–§24 保留原始设计、约定与踩坑记录，凡是已经落地、
+diff --git a/build-rewrite-config.cmd b/build-rewrite-config.cmd
+new file mode 100644
+index 0000000..ed09523
+--- /dev/null
++++ b/build-rewrite-config.cmd
+@@ -0,0 +1,11 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++call C:\BuildTools\VC\Auxiliary\Build\vcvars32.bat
++if errorlevel 1 exit /b 1
++if not exist "deps\rewrite-config-build" mkdir "deps\rewrite-config-build"
++pushd "deps\rewrite-config-build"
++cl /nologo /std:c++17 /EHsc /O2 /MT /utf-8 /DYAML_CPP_STATIC_DEFINE /I"..\..\librime\deps\yaml-cpp\include" /I"..\..\librime\deps\yaml-cpp\src" "..\..\tools\rewrite-config.cpp" "..\..\librime\deps\yaml-cpp\src\*.cpp" /Fe:"..\..\output\RewriteConfig.exe" /link /SUBSYSTEM:CONSOLE
++set "result=%errorlevel%"
++popd
++exit /b %result%
+diff --git a/build-rewrite.cmd b/build-rewrite.cmd
+index 39f9043..6beb814 100644
+--- a/build-rewrite.cmd
++++ b/build-rewrite.cmd
+@@ -6,4 +6,6 @@ if errorlevel 1 exit /b 1
+ msbuild weasel.sln /nr:false /m:4 /t:WeaselServer,WeaselTSF,WeaselDeployer /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /v:minimal /fl /flp:logfile=build-rewrite-x64.log
+ if errorlevel 1 exit /b 1
+ msbuild weasel.sln /nr:false /m:4 /t:WeaselServer,WeaselTSF,WeaselDeployer,WeaselSetup /p:Configuration=Release /p:Platform=Win32 /p:WindowsTargetPlatformVersion=10.0 /v:minimal /fl /flp:logfile=build-rewrite-x86.log
++if errorlevel 1 exit /b 1
++call build-rewrite-config.cmd
+ exit /b %errorlevel%
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index d93d4e3..abf5083 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -1,6 +1,7 @@
+ $ErrorActionPreference = 'Stop'
+ Set-Location $PSScriptRoot
+-$destination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI'
++$finalDestination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI'
++$destination = Join-Path $PSScriptRoot ('dist/Weasel-Rewrite-UI-stage-' + [Guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Force $destination, "$destination/Win32", "$destination/licenses" | Out-Null
+ $rootFiles = @('WeaselServer.exe', 'WeaselDeployer.exe', 'WeaselSetup.exe',
+                'weasel.dll', 'weaselx64.dll', 'rime.dll', 'WinSparkle.dll')
+@@ -8,12 +9,16 @@ foreach ($name in $rootFiles) { Copy-Item "output/$name" "$destination/$name" -F
+ foreach ($name in @('WeaselServer.exe', 'WeaselDeployer.exe', 'rime.dll', 'WinSparkle.dll')) {
+   Copy-Item "output/Win32/$name" "$destination/Win32/$name" -Force
+ }
+-Copy-Item REWRITE-UI.md "$destination/README.md" -Force
++Copy-Item INSTALL-PATCH.md "$destination/README.md" -Force
+ Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
+-Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,rewrite-build.txt $destination -Force
++Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt $destination -Force
++Copy-Item output/RewriteConfig.exe $destination -Force
++New-Item -ItemType Directory -Force "$destination/rime/lua" | Out-Null
++Copy-Item rime/lua/indexed_rewrite_pro.lua "$destination/rime/lua/" -Force
+ Copy-Item LICENSE.txt "$destination/licenses/Weasel-GPL-3.0.txt" -Force
+ Copy-Item librime/LICENSE "$destination/licenses/librime-BSD.txt" -Force
+ Copy-Item deps/boost_1_84_0/LICENSE_1_0.txt "$destination/licenses/Boost.txt" -Force
++Copy-Item librime/deps/yaml-cpp/LICENSE "$destination/licenses/yaml-cpp-MIT.txt" -Force
+ Copy-Item deps/rime-x64/version-info.txt "$destination/librime-version-info.txt" -Force
+ 
+ # Package the actual working source, including files not yet committed.
+@@ -22,7 +27,12 @@ $sourceZip = Join-Path $destination 'rewrite-source.zip'
+ $sourceStream = [IO.File]::Open($sourceZip, [IO.FileMode]::Create)
+ $sourceArchive = [IO.Compression.ZipArchive]::new($sourceStream, [IO.Compression.ZipArchiveMode]::Create)
+ try {
+-  $files = @(git ls-files) + @(
++  $tracked = @(git -c "safe.directory=$($PSScriptRoot.Replace('\','/'))" ls-files)
++  if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate source files.' }
++  $files = $tracked + @(
++    'Install-Binaries.ps1', 'INSTALL-PATCH.md', 'build-rewrite-config.cmd', 'tools/rewrite-config.cpp',
++    'test/installer_config_test.ps1', 'test/installer_transaction_test.ps1',
++    'test/installer_rime_test.cpp', 'test/installer_rime_test.ps1',
+     'include/RewriteState.h', 'WeaselUI/RewriteLayout.h', 'WeaselSetup/SetupTrace.h', 'build-rewrite.cmd',
+     'weasel.props', 'REWRITE-UI.md',
+     'package-rewrite.ps1', 'Apply-Patch.cmd', 'Apply-Patch.ps1', 'rewrite-build.txt', 'test/patch_shutdown_test.ps1', 'test/rewrite_state_test.cpp',
+@@ -33,6 +43,11 @@ try {
+     [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+       $sourceArchive, (Join-Path $PSScriptRoot $file), $file.Replace('\', '/')) | Out-Null
+   }
++  # Include the parser source required to rebuild the statically linked helper offline.
++  foreach ($file in Get-ChildItem 'librime/deps/yaml-cpp/include','librime/deps/yaml-cpp/src' -Recurse -File) {
++    $relative = [IO.Path]::GetRelativePath($PSScriptRoot, $file.FullName).Replace('\','/')
++    [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($sourceArchive, $file.FullName, $relative) | Out-Null
++  }
+ } finally { $sourceArchive.Dispose(); $sourceStream.Dispose() }
+ 
+ $hashes = Get-ChildItem $destination -Recurse -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+@@ -43,4 +58,12 @@ $hashes = Get-ChildItem $destination -Recurse -File | Where-Object { $_.Name -ne
+   }
+ $hashes | Set-Content "$destination/SHA256SUMS.txt" -Encoding utf8
+ Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI.zip' -Force
++# Retain the previous unpacked package as a recoverable backup.
++if (Test-Path -LiteralPath $finalDestination) {
++  $resolved = (Resolve-Path -LiteralPath $finalDestination).Path
++  if ($resolved -ne [IO.Path]::GetFullPath($finalDestination) -or
++      (Get-Item -LiteralPath $resolved).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe package destination.' }
++  Move-Item -LiteralPath $resolved -Destination ($finalDestination + '-previous-' + [Guid]::NewGuid().ToString('N'))
++}
++Move-Item -LiteralPath $destination -Destination $finalDestination
+ Get-Item 'dist/Weasel-Rewrite-UI.zip' | Select-Object FullName, Length
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 0a31eee..411452c 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-software-render-20260928
++Build-ID: rewrite-ui-one-click-20260929
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: Rewrite UI + D2D1_RENDER_TARGET_TYPE_SOFTWARE (issue #1913)
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/installer_config_test.ps1 b/test/installer_config_test.ps1
+new file mode 100644
+index 0000000..ff96f56
+--- /dev/null
++++ b/test/installer_config_test.ps1
+@@ -0,0 +1,91 @@
++$ErrorActionPreference = 'Stop'
++$helper = Join-Path $PSScriptRoot '../output/RewriteConfig.exe'
++$root = Join-Path ([IO.Path]::GetTempPath()) ('rewrite-config-tests-' + [guid]::NewGuid().ToString('N'))
++New-Item -ItemType Directory -Path $root | Out-Null
++$utf8 = New-Object Text.UTF8Encoding($false)
++function Put([string]$Path, [string]$Text) { [IO.File]::WriteAllText($Path, $Text, $utf8) }
++function Assert([bool]$Condition, [string]$Message) { if (!$Condition) { throw $Message } }
++function Prepare([string]$Name, [string]$Ui, [string]$Schema, [bool]$Fail = $false) {
++  $dir = Join-Path $root $Name
++  New-Item -ItemType Directory -Path $dir | Out-Null
++  if ($Ui) { Put (Join-Path $dir 'weasel.custom.yaml') $Ui }
++  if ($Schema) { Put (Join-Path $dir 'wanxiang_pro.custom.yaml') $Schema }
++  & $helper prepare $dir (Join-Path $dir 'stage') | Out-Host
++  Assert (($LASTEXITCODE -ne 0) -eq $Fail) "Unexpected merge result: $Name"
++  Write-Host "PASS: $Name"
++  return $dir
++}
++$empty = Prepare 'empty' '' ''
++$ui = @'
++patch:
++  style/color_scheme: my_theme
++  rewrite_ui: {enabled: false, debug: true, future_option: 42}
++  app_options: {terminal.exe: {ascii_mode: true}}
++'@
++$schema = @'
++patch:
++  "engine/filters/@before last": "lua_filter@*indexed_rewrite_tab_ui_v2" # legacy
++  engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
++  key_binder/bindings/+:
++    - {when: composing, accept: Tab, send: Down}
++    - {when: always, accept: Control+a, send: Home}
++  speller/algebra:
++    __patch: [wanxiang_algebra:/pro/my_layout]
++  menu/page_size: 9
++'@
++$existing = Prepare 'preserve-values-and-remove-commented-filter' $ui $schema
++$mergedUi = Get-Content (Join-Path $existing 'stage/weasel.custom.yaml') -Raw
++$mergedSchema = Get-Content (Join-Path $existing 'stage/wanxiang_pro.custom.yaml') -Raw
++Assert ($mergedUi -match 'my_theme' -and $mergedUi -match 'future_option: 42' -and $mergedUi -match 'terminal.exe') 'Lost unrelated UI settings'
++Assert ($mergedUi -match 'rewrite_ui/enabled: true' -and $mergedUi -match 'rewrite_ui/debug: false') 'Switches not enabled'
++Assert ($mergedSchema -notmatch 'indexed_rewrite_tab_ui_v2' -and $mergedSchema -notmatch 'send: Down') 'Legacy filter/Tab remains'
++Assert ($mergedSchema -match 'my_layout' -and $mergedSchema -match 'Control\+a' -and $mergedSchema -match 'page_size: 9') 'Lost unrelated schema values'
++$second = Join-Path $existing 'second'
++& $helper prepare (Join-Path $existing 'stage') $second
++Assert ($LASTEXITCODE -eq 0) 'Second merge failed'
++foreach ($file in @('weasel.custom.yaml','wanxiang_pro.custom.yaml')) {
++  Assert ((Get-FileHash (Join-Path $existing "stage/$file")).Hash -eq (Get-FileHash (Join-Path $second $file)).Hash) 'Merge not idempotent'
++}
++Write-Host 'PASS: repeated install is idempotent'
++$nested = Prepare 'nested-lists' '' @'
++patch:
++  engine:
++    processors: [ascii_composer, key_binder]
++    filters: [lua_filter@*indexed_rewrite_tab_ui_v2, simplifier]
++  key_binder:
++    bindings: [{when: has_menu, accept: Tab, send: Down}]
++'@
++$nestedText = Get-Content (Join-Path $nested 'stage/wanxiang_pro.custom.yaml') -Raw
++Assert ($nestedText -match 'ascii_composer' -and $nestedText -match 'simplifier' -and $nestedText -notmatch 'indexed_rewrite_tab_ui_v2') 'Nested preservation failed'
++$null = Prepare 'duplicate-keys-rejected' "patch:`n  x: 1`n  x: 2" '' $true
++$null = Prepare 'malformed-yaml-rejected' 'patch: [' '' $true
++$null = Prepare 'conflicting-processor-rejected' '' 'patch: {engine/processors/@before 0: lua_processor@*other}' $true
++$null = Prepare 'include-rejected' 'patch: {__include: other:/patch}' '' $true
++$null = Prepare 'ambiguous-binding-lists-rejected' '' 'patch: {key_binder/bindings: [], key_binder/bindings/+: []}' $true
++$build = Join-Path $root 'deployed/build'
++New-Item -ItemType Directory -Path $build -Force | Out-Null
++Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: true, debug: false}'
++$deployed = @'
++engine:
++  processors: [lua_processor@*indexed_rewrite_pro, ascii_composer]
++  filters: [simplifier]
++key_binder:
++  bindings:
++    - {when: has_menu, accept: Tab, send_sequence: "//"}
++    - {when: composing, accept: Tab, send_sequence: "//"}
++'@
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') $deployed
++& $helper verify (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -eq 0) 'Correct deployment rejected'
++Write-Host 'PASS: deployed configuration verified'
++Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: false, debug: false}'
++& $helper verify (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -ne 0) 'Stale disabled deployment accepted'
++Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: true, debug: false}'
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('filters: [simplifier]', 'filters: [lua_filter@*indexed_rewrite_tab_ui_v2]'))
++& $helper verify (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -ne 0) 'Legacy deployed filter accepted'
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('send_sequence: "//"', 'send: Down'))
++& $helper verify (Split-Path $build -Parent)
++Assert ($LASTEXITCODE -ne 0) 'Wrong deployed Tab accepted'
++Write-Host "PASS: invalid deployments rejected. Fixtures: $root"
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+new file mode 100644
+index 0000000..4cd2bb7
+--- /dev/null
++++ b/test/installer_rime_test.cpp
+@@ -0,0 +1,40 @@
++// Runs real bundled librime in an isolated fixture, never Windows registry paths.
++#include <rime_api.h>
++#include <filesystem>
++#include <iostream>
++#include <stdexcept>
++#include <string>
++void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
++int wmain(int argc, wchar_t** argv) {
++  try {
++    check(argc == 3, "Expected shared and user fixture paths");
++    auto shared = std::filesystem::absolute(argv[1]).u8string();
++    auto user = std::filesystem::absolute(argv[2]).u8string();
++    auto logs = (std::filesystem::absolute(argv[2]) / "logs").u8string();
++    std::filesystem::create_directories(std::filesystem::u8path(logs));
++    RIME_STRUCT(RimeTraits, traits);
++    traits.shared_data_dir = shared.c_str(); traits.user_data_dir = user.c_str();
++    traits.log_dir = logs.c_str(); traits.app_name = "rime.installer-test";
++    auto api = rime_get_api();
++    api->setup(&traits); api->deployer_initialize(&traits);
++    check(api->deploy(), "Workspace deployment failed");
++    check(api->deploy_config_file("weasel.yaml", "config_version"), "UI deployment failed");
++    api->initialize(&traits);
++    auto session = api->create_session();
++    check(session != 0, "Session creation failed");
++    check(api->select_schema(session, "wanxiang_pro"), "Schema selection failed");
++    for (char key : std::string("jxjirzbj")) api->process_key(session, key, 0);
++    check(api->process_key(session, 0xff09, 0), "Tab not handled");
++    char stage[64] = {};
++    check(api->get_property(session, "_indexed_rewrite_stage", stage, sizeof(stage)), "Rewrite property missing");
++    check(std::string(stage) == "armed", "Tab did not arm rewrite");
++    api->process_key(session, '3', 0);
++    char index[64] = {};
++    check(api->get_property(session, "_indexed_rewrite_index", index, sizeof(index)) && std::string(index) == "3", "Index selection failed");
++    api->process_key(session, 0xff1b, 0);
++    check(std::string(api->get_input(session)) == "jxjirzbj", "Escape did not restore input");
++    api->destroy_session(session); api->finalize();
++    std::cout << "PASS: real deployment, Lua loading, Tab, index, Escape\n";
++    return 0;
++  } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
++}
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+new file mode 100644
+index 0000000..de5dedd
+--- /dev/null
++++ b/test/installer_rime_test.ps1
+@@ -0,0 +1,33 @@
++$ErrorActionPreference='Stop'
++$root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
++$shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
++New-Item -ItemType Directory -Path $shared,(Join-Path $user 'lua') -Force | Out-Null
++$utf8=New-Object Text.UTF8Encoding($false)
++[IO.File]::WriteAllText((Join-Path $shared 'default.yaml'), "config_version: '1'`nschema_list:`n  - schema: wanxiang_pro`n", $utf8)
++[IO.File]::WriteAllText((Join-Path $shared 'weasel.yaml'), "config_version: '1'`nstyle: {color_scheme: test_theme}`n", $utf8)
++$schema=@'
++schema:
++  schema_id: wanxiang_pro
++  name: Installer integration fixture
++  version: '1'
++engine:
++  processors: [key_binder, speller, express_editor]
++  segmentors: [abc_segmentor, fallback_segmentor]
++  translators: [echo_translator]
++  filters: []
++speller:
++  alphabet: abcdefghijklmnopqrstuvwxyz/
++key_binder:
++  bindings: []
++'@
++[IO.File]::WriteAllText((Join-Path $shared 'wanxiang_pro.schema.yaml'), $schema, $utf8)
++$repo=Split-Path $PSScriptRoot -Parent
++& (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
++if ($LASTEXITCODE) { throw 'Merge failed' }
++Copy-Item (Join-Path $stage '*.yaml') $user
++Copy-Item (Join-Path $repo 'rime/lua/indexed_rewrite_pro.lua') (Join-Path $user 'lua')
++& (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user
++if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
++& (Join-Path $repo 'output/RewriteConfig.exe') verify $user
++if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
++Write-Host "PASS: actual librime deployment and generated YAML. Fixture: $root"
+diff --git a/test/installer_transaction_test.ps1 b/test/installer_transaction_test.ps1
+new file mode 100644
+index 0000000..7a2036f
+--- /dev/null
++++ b/test/installer_transaction_test.ps1
+@@ -0,0 +1,66 @@
++# Exercise the actual transaction and catch blocks, mocking only OS-facing operations.
++$ErrorActionPreference = 'Stop'
++$tokens=$null; $errors=$null
++$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../Apply-Patch.ps1'),[ref]$tokens,[ref]$errors)
++if ($errors) { throw ($errors | Out-String) }
++$main = $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
++$body = $main.Body.Extent.Text
++$start = $body.IndexOf('$transaction = Join-Path')
++$finish = $body.LastIndexOf('exit 0')
++$install = [scriptblock]::Create($body.Substring($start, $finish - $start))
++$recovery = $main.CatchClauses[0].Body.Extent.Text
++$recovery = [scriptblock]::Create($recovery.Substring(1, $recovery.LastIndexOf('exit 1') - 1))
++$copy = $ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Copy-Checked'},$true)
++Invoke-Expression $copy.Extent.Text
++function Assert([bool]$Ok,[string]$Message) { if (!$Ok) { throw $Message } }
++function Start-Transcript { param($Path) }
++function Stop-Transcript { }
++function Invoke-BinaryInstaller {
++  param([switch]$Restore)
++  if ($Restore) { $script:events.Add('restore-binaries'); return }
++  $script:events.Add('install-binaries')
++  if ($script:scenario -eq 'uac-cancel') { throw 'Mock UAC canceled' }
++  $script:binaryAttempted = $true
++}
++function Invoke-Wait {
++  param($Exe,$Arguments)
++  if ($Exe -like '*WeaselDeployer.exe') {
++    $script:events.Add('deploy')
++    if ($script:scenario -eq 'deploy-fails' -and !$script:alreadyFailed) { $script:alreadyFailed=$true; throw 'Mock deployment error' }
++  } else {
++    $script:events.Add('verify')
++    if ($script:scenario -eq 'verify-fails') { throw 'Mock stale compiled config' }
++  }
++}
++function Start-UserServer { $script:events.Add('start-server') }
++foreach ($scenario in @('success','uac-cancel','copy-fails','deploy-fails','verify-fails')) {
++  $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('rewrite-transaction-' + [guid]::NewGuid().ToString('N'))
++  $UserDataRoot = Join-Path $testRoot 'user'
++  $package = Join-Path $testRoot 'package'
++  $stage = Join-Path $testRoot 'stage'
++  $Target = Join-Path $testRoot 'program'
++  New-Item -ItemType Directory -Path $UserDataRoot,$stage,(Join-Path $package 'rime/lua'),$Target -Force | Out-Null
++  Set-Content (Join-Path $UserDataRoot 'weasel.custom.yaml') 'original UI'
++  $originalHash = (Get-FileHash (Join-Path $UserDataRoot 'weasel.custom.yaml')).Hash
++  $inputSnapshot = @{'weasel.custom.yaml'=$originalHash; 'wanxiang_pro.custom.yaml'=$null; 'lua\indexed_rewrite_pro.lua'=$null}
++  Set-Content (Join-Path $stage 'weasel.custom.yaml') 'new UI'
++  if ($scenario -ne 'copy-fails') { Set-Content (Join-Path $stage 'wanxiang_pro.custom.yaml') 'new schema' }
++  Set-Content (Join-Path $package 'rime/lua/indexed_rewrite_pro.lua') 'new Lua'
++  $backupName='rewrite-backup-' + [guid]::NewGuid().ToString('N')
++  $binaryAttempted=$false; $binariesInstalled=$false; $configChanged=$false; $transcribing=$false
++  $savedFiles=@(); $alreadyFailed=$false
++  $events = New-Object 'System.Collections.Generic.List[string]'
++  try { . $install } catch { . $recovery }
++  if ($scenario -eq 'success') {
++    Assert (($events -join ',') -eq 'install-binaries,deploy,verify,start-server') 'Wrong successful operation order'
++    Assert ((Get-Content (Join-Path $UserDataRoot 'weasel.custom.yaml') -Raw).Trim() -eq 'new UI') 'New UI not installed'
++    Assert (Test-Path (Join-Path $UserDataRoot 'lua/indexed_rewrite_pro.lua')) 'Lua not installed'
++  } else {
++    Assert ((Get-FileHash (Join-Path $UserDataRoot 'weasel.custom.yaml')).Hash -eq $originalHash) 'Original UI not byte-exactly restored'
++    Assert (!(Test-Path (Join-Path $UserDataRoot 'wanxiang_pro.custom.yaml'))) 'New schema not removed on rollback'
++    Assert (!(Test-Path (Join-Path $UserDataRoot 'lua/indexed_rewrite_pro.lua'))) 'New Lua not removed on rollback'
++    if ($scenario -eq 'uac-cancel') { Assert (($events -join ',') -eq 'install-binaries') 'UAC cancel must not restart or deploy' }
++    else { Assert ($events.Contains('restore-binaries')) 'Binary recovery not requested' }
++  }
++  Write-Host "PASS: transaction $scenario"
++}
+diff --git a/test/patch_shutdown_test.ps1 b/test/patch_shutdown_test.ps1
+index 8431ec5..6d3ba57 100644
+--- a/test/patch_shutdown_test.ps1
++++ b/test/patch_shutdown_test.ps1
+@@ -1,7 +1,7 @@
+ $ErrorActionPreference = 'Stop'
+ $tokens = $null; $errors = $null
+ $ast = [Management.Automation.Language.Parser]::ParseFile(
+-  (Join-Path $PSScriptRoot '../Apply-Patch.ps1'), [ref]$tokens, [ref]$errors)
++  (Join-Path $PSScriptRoot '../Install-Binaries.ps1'), [ref]$tokens, [ref]$errors)
+ if ($errors.Count) { throw ($errors | Out-String) }
+ $function = $ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Stop-WeaselForPatch'}, $true)
+ Invoke-Expression $function.Extent.Text
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+new file mode 100644
+index 0000000..0d3090f
+--- /dev/null
++++ b/tools/rewrite-config.cpp
+@@ -0,0 +1,189 @@
++// Standalone, statically linked YAML merger/validator for the Windows installer.
++#include <yaml-cpp/yaml.h>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <set>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++namespace fs = std::filesystem;
++const std::string processor = "lua_processor@*indexed_rewrite_pro";
++const std::string legacy = "lua_filter@*indexed_rewrite_tab_ui_v2";
++void require(bool ok, const std::string& message) {
++  if (!ok) throw std::runtime_error(message);
++}
++bool scalar(YAML::Node n, const std::string& value) {
++  return n.IsScalar() && n.Scalar() == value;
++}
++void validate(YAML::Node n, int depth = 0) {
++  require(depth < 64, "YAML nesting/alias cycle exceeds safe limit");
++  if (n.IsMap()) {
++    std::set<std::string> keys;
++    for (auto item : n) {
++      require(item.first.IsScalar(), "Non-scalar YAML key is unsupported");
++      require(keys.insert(item.first.Scalar()).second, "Duplicate YAML key: " + item.first.Scalar());
++      require(item.first.Scalar() != "<<", "YAML merge keys require manual reconciliation");
++      validate(item.second, depth + 1);
++    }
++  } else if (n.IsSequence()) {
++    for (auto item : n) validate(item, depth + 1);
++  }
++}
++YAML::Node load(const fs::path& path, bool optional = false) {
++  if (optional && !fs::exists(path)) return YAML::Node(YAML::NodeType::Map);
++  std::ifstream input(path, std::ios::binary);
++  require(input.good(), "Cannot open YAML file");
++  auto docs = YAML::LoadAll(input);
++  require(docs.size() == 1, "Expected one YAML document");
++  auto n = docs[0];
++  if (n.IsNull()) n = YAML::Node(YAML::NodeType::Map);
++  require(n.IsMap(), "YAML root must be a map");
++  validate(n);
++  return n;
++}
++YAML::Node patch(YAML::Node root) {
++  require(!root["__include"] && !root["__patch"], "Root include/patch directives require manual reconciliation");
++  if (!root["patch"] || root["patch"].IsNull()) root["patch"] = YAML::Node(YAML::NodeType::Map);
++  require(root["patch"].IsMap(), "patch must be a YAML map");
++  auto p = root["patch"];
++  require(!p["__include"] && !p["__patch"], "Patch include directives require manual reconciliation");
++  return p;
++}
++void save(YAML::Node n, const fs::path& path) {
++  YAML::Emitter out;
++  out << n;
++  require(out.good(), "Cannot serialize YAML");
++  std::ofstream file(path, std::ios::binary | std::ios::trunc);
++  file << "# Updated by Weasel Rewrite UI installer; original retained in backup.\n" << out.c_str() << '\n';
++  file.close();
++  require(!file.fail(), "Cannot write staged YAML");
++  load(path);
++}
++// Remove the obsolete filter from both scalar patch operations and filter lists.
++void cleanLegacy(YAML::Node n) {
++  if (n.IsMap()) {
++    std::vector<std::string> erase;
++    for (auto item : n) {
++      if (scalar(item.second, legacy)) erase.push_back(item.first.Scalar());
++      else cleanLegacy(item.second);
++    }
++    for (const auto& key : erase) n.remove(key);
++  } else if (n.IsSequence()) {
++    for (size_t i = n.size(); i > 0; --i) {
++      if (scalar(n[i - 1], legacy)) n.remove(i - 1);
++      else cleanLegacy(n[i - 1]);
++    }
++  }
++}
++void prepare(const fs::path& user, const fs::path& stage) {
++  auto ui = load(user / L"weasel.custom.yaml", true);
++  auto u = patch(ui);
++  if (u["rewrite_ui"]) {
++    require(u["rewrite_ui"].IsMap(), "rewrite_ui must be a map");
++    u["rewrite_ui"].remove("enabled");
++    u["rewrite_ui"].remove("debug");
++  }
++  u["rewrite_ui/enabled"] = true;
++  u["rewrite_ui/debug"] = false;
++
++  auto schema = load(user / L"wanxiang_pro.custom.yaml", true);
++  auto p = patch(schema);
++  cleanLegacy(p);
++  // Refuse ambiguous path operations instead of destroying user configuration.
++  for (auto item : p) {
++    const auto key = item.first.Scalar();
++    if (key.rfind("engine/processors/", 0) == 0)
++      require(key == "engine/processors/@before 0" && scalar(item.second, processor),
++              "Conflicting processor patch: " + key);
++    if (key.rfind("key_binder/bindings/", 0) == 0)
++      require(key == "key_binder/bindings/+", "Conflicting binding patch: " + key);
++  }
++  YAML::Node processors;
++  int processorLists = 0;
++  if (p["engine/processors"]) { processors.reset(p["engine/processors"]); ++processorLists; }
++  if (p["engine"]) {
++    require(p["engine"].IsMap(), "engine patch must be a map");
++    if (p["engine"]["processors"]) { processors.reset(p["engine"]["processors"]); ++processorLists; }
++  }
++  require(processorLists < 2, "Multiple processor lists require manual reconciliation");
++  if (processorLists) {
++    require(processors.IsSequence(), "processors must be a list");
++    for (size_t i = processors.size(); i > 0; --i)
++      if (scalar(processors[i - 1], processor)) processors.remove(i - 1);
++    auto merged = YAML::Node(YAML::NodeType::Sequence);
++    merged.push_back(processor);
++    for (auto item : processors) merged.push_back(YAML::Clone(item));
++    processors = merged;
++    p.remove("engine/processors/@before 0");
++  } else p["engine/processors/@before 0"] = processor;
++
++  YAML::Node bindings;
++  int bindingLists = 0;
++  for (const auto& key : {"key_binder/bindings", "key_binder/bindings/+"}) {
++    if (p[key]) { bindings.reset(p[key]); ++bindingLists; }
++  }
++  if (p["key_binder"]) {
++    require(p["key_binder"].IsMap(), "key_binder patch must be a map");
++    if (p["key_binder"]["bindings"]) { bindings.reset(p["key_binder"]["bindings"]); ++bindingLists; }
++  }
++  require(bindingLists < 2, "Multiple binding lists require manual reconciliation");
++  if (!bindingLists) {
++    p["key_binder/bindings/+"] = YAML::Node(YAML::NodeType::Sequence);
++    bindings.reset(p["key_binder/bindings/+"]);
++  }
++  require(bindings.IsSequence(), "key bindings must be a list");
++  for (size_t i = bindings.size(); i > 0; --i) {
++    auto b = bindings[i - 1];
++    require(b.IsMap(), "Each binding must be a map");
++    if (scalar(b["accept"], "Tab") &&
++        (scalar(b["when"], "composing") || scalar(b["when"], "has_menu"))) bindings.remove(i - 1);
++  }
++  auto merged = YAML::Node(YAML::NodeType::Sequence);
++  for (const auto& when : {"has_menu", "composing"}) {
++    YAML::Node b;
++    b["when"] = when; b["accept"] = "Tab"; b["send_sequence"] = "//";
++    merged.push_back(b);
++  }
++  for (auto b : bindings) merged.push_back(YAML::Clone(b));
++  bindings = merged;
++  fs::create_directories(stage);
++  save(ui, stage / L"weasel.custom.yaml");
++  save(schema, stage / L"wanxiang_pro.custom.yaml");
++}
++void verify(const fs::path& user) {
++  auto ui = load(user / L"build" / L"weasel.yaml");
++  require(ui["rewrite_ui"]["enabled"].as<bool>(false), "Deployed rewrite_ui is not enabled");
++  require(!ui["rewrite_ui"]["debug"].as<bool>(true), "Deployed debug logging is not disabled");
++  auto schema = load(user / L"build" / L"wanxiang_pro.schema.yaml");
++  auto procs = schema["engine"]["processors"];
++  require(procs.IsSequence() && procs.size() && scalar(procs[0], processor), "Rewrite processor is not first in deployed schema");
++  auto filters = schema["engine"]["filters"];
++  if (filters.IsSequence()) for (auto f : filters) require(!scalar(f, legacy), "Obsolete Lua filter is still deployed");
++  auto bindings = schema["key_binder"]["bindings"];
++  require(bindings.IsSequence(), "Deployed bindings missing");
++  for (const auto& when : {"has_menu", "composing"}) {
++    bool found = false;
++    for (auto b : bindings) {
++      if (scalar(b["when"], when) && scalar(b["accept"], "Tab")) {
++        require(scalar(b["send_sequence"], "//"), "An earlier Tab binding overrides rewrite");
++        found = true; break;
++      }
++    }
++    require(found, "Deployed Tab binding missing");
++  }
++}
++int wmain(int argc, wchar_t** argv) {
++  try {
++    require(argc >= 3, "Usage: RewriteConfig.exe prepare USER STAGE | verify USER");
++    if (std::wstring(argv[1]) == L"prepare") {
++      require(argc == 4, "prepare requires USER STAGE"); prepare(argv[2], argv[3]);
++    } else if (std::wstring(argv[1]) == L"verify") verify(argv[2]);
++    else throw std::runtime_error("Unknown operation");
++    std::cout << "Configuration check passed.\n";
++    return 0;
++  } catch (const std::exception& e) {
++    std::cerr << "Configuration error: " << e.what() << '\n'; return 1;
++  }
++}
+-- 
+2.53.0.windows.2
+
