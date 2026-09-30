@@ -1,7 +1,7 @@
 From 257193ff2f5331c022835c6affbdaea45cf5a331 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 22:14:41 +0800
-Subject: [PATCH 36/44] feat(ui): detach Tab editor above or below normal
+Subject: [PATCH 36/45] feat(ui): detach Tab editor above or below normal
  candidate popup
 
 ---
