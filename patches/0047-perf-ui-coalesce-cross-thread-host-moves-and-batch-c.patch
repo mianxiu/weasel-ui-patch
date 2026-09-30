@@ -1,0 +1,357 @@
+From cd9155ec2f8b144a5baad4b2e3bedf4f59aea94d Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 01:28:36 +0800
+Subject: [PATCH 47/47] perf(ui): coalesce cross-thread host moves and batch
+ cached surfaces
+
+---
+ INSTALL-PATCH.md               |   4 ++
+ Install-Binaries.ps1           |   2 +-
+ REWRITE-UI.md                  |   4 ++
+ WeaselUI/WeaselPanel.cpp       | 128 +++++++++++++++++++++++++++------
+ WeaselUI/WeaselPanel.h         |   9 ++-
+ rewrite-build.txt              |   2 +-
+ test/rewrite_pipeline_test.cpp |  39 +++++++++-
+ 7 files changed, 160 insertions(+), 28 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 2fa59fb..542f4e3 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,7 @@
++> **2026-10-01 Notepad 跨线程跟随：** 实测主窗口与候选框由不同线程管理，同线程测试不能代表实际拖动。现在同进程跨线程也监听主窗口移动消息，最多保留一条待处理通知，读取最新位置后批量平移两个框；不会等待过时位置逐帧追赶。自动测试覆盖 UI 线程暂停期间连续 240 次移动，仅收到一条通知并对齐最终位置。窗口诊断属性 `WeaselPositionTracking`：1=同线程消息、2=跨线程合并消息、3=WinEvent、4=定时器。
++
++> **2026-10-01 快速拖动更新：** 同一显示器内直接批量平移已绘制的候选框与 Tab 标签，跳过配置/候选复制、字体检测和独立重复定位；到屏幕边缘或换显示器时回到完整定位。连续 240 次往返移动验证位置和布局保持一致。
++
+ > **2026-10-01 同步跟随更新：** 保留原版 TSF 布局通知；同线程应用通过 `WM_WINDOWPOSCHANGED` 同步定位，跨线程应用使用窗口位置事件，移除额外消息排队。仅事件注册失败时使用 16ms 轮询。窗口拖动不再套用文字光标的 1–5px 纵向抖动过滤；复用已有布局并避免重复定位和显示。
+ 
+ # 悬浮声调拼音预览版（2026-09-30）
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index c815f71..89e793c 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-sync-follow-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-coalesced-follow-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 4fe7960..4eb1f3d 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,7 @@
++> **2026-10-01 Notepad 跨线程跟随：** 实测主窗口与候选框由不同线程管理，同线程测试不能代表实际拖动。现在同进程跨线程也监听主窗口移动消息，最多保留一条待处理通知，读取最新位置后批量平移两个框；不会等待过时位置逐帧追赶。自动测试覆盖 UI 线程暂停期间连续 240 次移动，仅收到一条通知并对齐最终位置。窗口诊断属性 `WeaselPositionTracking`：1=同线程消息、2=跨线程合并消息、3=WinEvent、4=定时器。
++
++> **2026-10-01 快速拖动更新：** 同一显示器内直接批量平移已绘制的候选框与 Tab 标签，跳过配置/候选复制、字体检测和独立重复定位；到屏幕边缘或换显示器时回到完整定位。连续 240 次往返移动验证位置和布局保持一致。
++
+ > **2026-10-01 同步跟随更新：** 保留原版 TSF 布局通知；同线程应用通过 `WM_WINDOWPOSCHANGED` 同步定位，跨线程应用使用窗口位置事件，移除额外消息排队。仅事件注册失败时使用 16ms 轮询。窗口拖动不再套用文字光标的 1–5px 纵向抖动过滤；复用已有布局并避免重复定位和显示。
+ 
+  > **2026-09-30 悬浮声调版：** 已撤销行内试验代码。Tab 编辑在悬浮窗口显示词典声调拼音和独立圆角编号，末尾显示序号及替换输入。构建和测试状态以本次分发 README 为准。
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 2b47d59..b38567b 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -4,23 +4,41 @@
+ 
+ #include <utility>
+ #include <map>
++#include <mutex>
+ 
+ namespace {
+ // Out-of-context callbacks run on the registering window message thread.
+ thread_local std::map<HWINEVENTHOOK, std::pair<HWND, HWND>> positionHooks;
+-thread_local HHOOK positionMessageHook = nullptr;
+-thread_local std::map<std::pair<HWND, HWND>, bool> positionMessageTargets;
++struct PositionMessageTarget { DWORD ownerThread; bool pending = false; };
++std::mutex positionMessageMutex;
++std::map<DWORD, std::pair<HHOOK, size_t>> positionMessageHooks;
++std::map<std::pair<HWND, HWND>, PositionMessageTarget> positionMessageTargets;
+ LRESULT CALLBACK HostPositionMessage(int code, WPARAM wParam, LPARAM lParam) {
+   if (code >= 0) {
+     const auto* message = reinterpret_cast<const CWPRETSTRUCT*>(lParam);
+     if (message->message == WM_WINDOWPOSCHANGED) {
+-      // Copy targets before sending: reentrant window messages may unregister them.
+-      std::vector<HWND> targets;
+-      for (const auto& target : positionMessageTargets)
+-        if (target.first.first == message->hwnd) targets.push_back(target.first.second);
+-      for (const auto panel : targets)
+-        ::SendMessage(panel, WeaselPanel::POSITION_CHANGED,
+-                      reinterpret_cast<WPARAM>(message->hwnd), 0);
++      std::vector<std::pair<HWND, bool>> targets;
++      {
++        std::lock_guard<std::mutex> lock(positionMessageMutex);
++        for (auto& target : positionMessageTargets) {
++          if (target.first.first != message->hwnd) continue;
++          const bool synchronous = target.second.ownerThread == ::GetCurrentThreadId();
++          if (!synchronous && target.second.pending) continue;
++          if (!synchronous) target.second.pending = true;
++          targets.push_back({target.first.second, synchronous});
++        }
++      }
++      for (const auto& target : targets) {
++        if (target.second)
++          ::SendMessage(target.first, WeaselPanel::POSITION_CHANGED,
++                        reinterpret_cast<WPARAM>(message->hwnd), 0);
++        else if (!::PostMessage(target.first, WeaselPanel::POSITION_CHANGED,
++                                reinterpret_cast<WPARAM>(message->hwnd), 0)) {
++          std::lock_guard<std::mutex> lock(positionMessageMutex);
++          const auto found = positionMessageTargets.find({message->hwnd, target.first});
++          if (found != positionMessageTargets.end()) found->second.pending = false;
++        }
++      }
+     }
+   }
+   return ::CallNextHookEx(nullptr, code, wParam, lParam);
+@@ -1290,13 +1308,21 @@ LRESULT WeaselPanel::OnDpiChanged(UINT uMsg,
+ 
+ void WeaselPanel::_RemovePositionSubscription() {
+   ::KillTimer(m_hWnd, POSITION_TIMER);
++  ::RemoveProp(m_hWnd, L"WeaselPositionTracking");
+   if (m_positionMessageHook) {
+-    positionMessageTargets.erase({m_hookHost, m_hWnd});
+-    m_positionMessageHook = false;
+-    if (positionMessageTargets.empty() && positionMessageHook) {
+-      ::UnhookWindowsHookEx(positionMessageHook);
+-      positionMessageHook = nullptr;
++    HHOOK removeHook = nullptr;
++    {
++      std::lock_guard<std::mutex> lock(positionMessageMutex);
++      positionMessageTargets.erase({m_hookHost, m_hWnd});
++      auto found = positionMessageHooks.find(m_messageHostThread);
++      if (found != positionMessageHooks.end() && --found->second.second == 0) {
++        removeHook = found->second.first;
++        positionMessageHooks.erase(found);
++      }
+     }
++    if (removeHook) ::UnhookWindowsHookEx(removeHook);
++    m_positionMessageHook = nullptr;
++    m_messageHostThread = 0;
+   }
+   if (m_positionHook) {
+     positionHooks.erase(m_positionHook);
+@@ -1316,14 +1342,27 @@ void WeaselPanel::_UpdatePositionSubscription() {
+   _RemovePositionSubscription();
+   DWORD process = 0;
+   const DWORD hostThread = ::GetWindowThreadProcessId(m_positionHost, &process);
+-  if (hostThread == ::GetCurrentThreadId()) {
+-    if (!positionMessageHook)
+-      positionMessageHook = ::SetWindowsHookEx(WH_CALLWNDPROCRET,
+-          HostPositionMessage, nullptr, hostThread);
+-    if (positionMessageHook) {
+-      m_positionMessageHook = true;
+-      m_hookHost = m_positionHost;
+-      positionMessageTargets[{m_hookHost, m_hWnd}] = true;
++  if (!hostThread || !process) return;
++  if (process == ::GetCurrentProcessId()) {
++    {
++      std::lock_guard<std::mutex> lock(positionMessageMutex);
++      auto found = positionMessageHooks.find(hostThread);
++      if (found == positionMessageHooks.end()) {
++        const auto hook = ::SetWindowsHookEx(WH_CALLWNDPROCRET,
++            HostPositionMessage, nullptr, hostThread);
++        if (hook) found = positionMessageHooks.emplace(hostThread, std::make_pair(hook, 0)).first;
++      }
++      if (found != positionMessageHooks.end()) {
++        ++found->second.second;
++        m_positionMessageHook = found->second.first;
++        m_messageHostThread = hostThread;
++        m_hookHost = m_positionHost;
++        positionMessageTargets[{m_hookHost, m_hWnd}] = {::GetCurrentThreadId(), false};
++      }
++    }
++    if (m_positionMessageHook) {
++      ::SetProp(m_hWnd, L"WeaselPositionTracking", reinterpret_cast<HANDLE>(
++          static_cast<INT_PTR>(hostThread == ::GetCurrentThreadId() ? 1 : 2)));
+       _FollowHostWindow();
+       return;
+     }
+@@ -1334,9 +1373,11 @@ void WeaselPanel::_UpdatePositionSubscription() {
+   if (m_positionHook) {
+     m_hookHost = m_positionHost;
+     positionHooks[m_positionHook] = {m_hWnd, m_hookHost};
++    ::SetProp(m_hWnd, L"WeaselPositionTracking", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(3)));
+   } else {
+     // Only fall back to polling if Windows cannot register the hook.
+     ::SetTimer(m_hWnd, POSITION_TIMER, 16, nullptr);
++    ::SetProp(m_hWnd, L"WeaselPositionTracking", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(4)));
+   }
+   _FollowHostWindow();
+ }
+@@ -1346,6 +1387,11 @@ LRESULT WeaselPanel::OnPositionSetup(UINT, WPARAM, LPARAM, BOOL&) {
+ }
+ 
+ LRESULT WeaselPanel::OnPositionChanged(UINT, WPARAM host, LPARAM, BOOL&) {
++  {
++    std::lock_guard<std::mutex> lock(positionMessageMutex);
++    const auto found = positionMessageTargets.find({reinterpret_cast<HWND>(host), m_hWnd});
++    if (found != positionMessageTargets.end()) found->second.pending = false;
++  }
+   if (reinterpret_cast<HWND>(host) == m_positionHost) {
+     ++m_positionEventCount;
+     _FollowHostWindow();
+@@ -1367,10 +1413,46 @@ void WeaselPanel::_FollowHostWindow() {
+   CRect caret = m_lastCaretRect;
+   caret.OffsetRect(origin - m_hostOrigin);
+   m_followingHost = true;
+-  MoveTo(caret, m_positionHost);
++  if (!_TranslateSurfaces(origin - m_hostOrigin, caret)) MoveTo(caret, m_positionHost);
+   m_followingHost = false;
+ }
+ 
++bool WeaselPanel::_TranslateSurfaces(const CPoint& delta, const CRect& caret) {
++  // Moving existing layered surfaces needs no context copies, layout or repaint.
++  // Bounds/monitor/placement changes still use the full positioning path.
++  if (!m_layout || m_style.layout_type == UIStyle::LAYOUT_VERTICAL_FULLSCREEN ||
++      m_style.layout_type == UIStyle::LAYOUT_HORIZONTAL_FULLSCREEN ||
++      MonitorFromRect(caret, MONITOR_DEFAULTTONEAREST) != m_hMonitor ||
++      (m_sticky && (abs(delta.x) > 50 || abs(delta.y) > 50))) return false;
++  MONITORINFO monitor = {sizeof(MONITORINFO)};
++  if (!GetMonitorInfo(m_hMonitor, &monitor)) return false;
++  CRect candidate; GetWindowRect(&candidate); candidate.OffsetRect(delta);
++  CRect editor;
++  const bool moveEditor = m_editPanel && m_editPanel->IsWindow() && m_editPanel->IsWindowVisible();
++  if (m_sourceCtx.rewrite.active() && !moveEditor) return false;
++  if (moveEditor) { m_editPanel->GetWindowRect(&editor); editor.OffsetRect(delta); }
++  const auto inside = [&](const CRect& rect) {
++    return rect.left >= monitor.rcWork.left && rect.top >= monitor.rcWork.top &&
++           rect.right <= monitor.rcWork.right && rect.bottom <= monitor.rcWork.bottom;
++  };
++  if (!inside(candidate) || (moveEditor && !inside(editor))) return false;
++  const UINT flags = SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOREDRAW;
++  // Both are top-level popups; batch the two surfaces into one positioning operation.
++  HDWP batch = ::BeginDeferWindowPos(moveEditor ? 2 : 1);
++  if (batch) batch = ::DeferWindowPos(batch, m_hWnd, nullptr,
++      candidate.left, candidate.top, 0, 0, flags);
++  if (batch && moveEditor) batch = ::DeferWindowPos(batch, m_editPanel->m_hWnd, nullptr,
++      editor.left, editor.top, 0, 0, flags);
++  if (!batch || !::EndDeferWindowPos(batch)) return false;
++  m_lastCaretRect = caret;
++  m_inputPos.OffsetRect(delta);
++  m_hostOrigin += delta;
++  if (!m_lastCandidateSurface.IsRectEmpty()) m_lastCandidateSurface.OffsetRect(delta);
++  if (moveEditor) m_editPanel->m_inputPos.OffsetRect(delta);
++  ++m_positionFastMoves;
++  return true;
++}
++
+ void WeaselPanel::MoveTo(RECT const& rc, HWND host) {
+   if (!m_layout)
+     return;  // avoid handling nullptr in _RepositionWindow
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 14ce422..82e5e22 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -52,7 +52,9 @@ class WeaselPanel
+   static constexpr UINT POSITION_SETUP = WM_APP + 0x321;
+   static constexpr UINT POSITION_CHANGED = WM_APP + 0x322;
+   bool UsesPositionEvents() const { return m_positionHook != nullptr || m_positionMessageHook; }
+-  bool UsesSynchronousPositionEvents() const { return m_positionMessageHook; }
++  bool UsesWindowPositionMessages() const { return m_positionMessageHook != nullptr; }
++  bool UsesSynchronousPositionEvents() const { return m_positionMessageHook && m_messageHostThread == ::GetWindowThreadProcessId(m_hWnd, nullptr); }
++  size_t PositionFastMoveCount() const { return m_positionFastMoves; }
+   size_t PositionEventCount() const { return m_positionEventCount; }
+   LRESULT OnMouseActivate(UINT uMsg,
+                           WPARAM wParam,
+@@ -152,10 +154,13 @@ class WeaselPanel
+   HWND m_positionHost = nullptr;
+   CPoint m_hostOrigin;
+   HWINEVENTHOOK m_positionHook = nullptr;
+-  bool m_positionMessageHook = false;
++  HHOOK m_positionMessageHook = nullptr;
++  DWORD m_messageHostThread = 0;
+   bool m_followingHost = false;
+   HWND m_hookHost = nullptr;
+   size_t m_positionEventCount = 0;
++  size_t m_positionFastMoves = 0;
++  bool _TranslateSurfaces(const CPoint& delta, const CRect& caret);
+   void _UpdatePositionSubscription();
+   void _RemovePositionSubscription();
+   void _FollowHostWindow();
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 6b9743a..87836d6 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-sync-follow-20261001
++Build-ID: rewrite-ui-coalesced-follow-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: compact joined tone-pinyin label; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index f1be409..4b4adb0 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -13,6 +13,8 @@
+ #include <thread>
+ #include <future>
+ #include <atomic>
++#include <chrono>
++#include <algorithm>
+ 
+ CAppModule _Module;
+ 
+@@ -282,6 +284,26 @@ int main() {
+       assert(panel.RewriteLayoutGeneration() == layoutGeneration);
+     }
+     assert(panel.PositionEventCount() >= synchronousEvents + 24);
++    // Rapid back-and-forth drag, without sleeps or pumping away a backlog.
++    const auto fastMoves = panel.PositionFastMoveCount();
++    std::vector<double> moveTimes;
++    for (int frame = 0; frame < 240; ++frame) {
++      const int jump = frame % 2 ? 0 : 80;
++      const auto start = std::chrono::steady_clock::now();
++      SetWindowPos(inputHost, nullptr, 174 + jump, 174, 0, 0,
++                   SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
++      const auto end = std::chrono::steady_clock::now();
++      moveTimes.push_back(std::chrono::duration<double, std::milli>(end - start).count());
++      auto expectedCandidate = frameCandidate; auto expectedEditor = frameEditor;
++      expectedCandidate.OffsetRect(jump, 0); expectedEditor.OffsetRect(jump, 0);
++      assert(panel.SurfaceRect() == expectedCandidate && panel.RewriteSurfaceRect() == expectedEditor);
++      assert(panel.RewriteLayoutGeneration() == layoutGeneration);
++    }
++    assert(panel.PositionFastMoveCount() == fastMoves + 240);
++    std::sort(moveTimes.begin(), moveTimes.end());
++    std::cout << "Rapid drag " << style.layout_type << ": p50=" << moveTimes[120]
++              << "ms p95=" << moveTimes[228] << "ms max=" << moveTimes.back() << "ms\n";
++
+     for (int frame = 1; frame <= 24; ++frame)
+       panel.MoveTo(CRect(230 + frame, 201 + frame, 230 + frame, 225 + frame), inputHost);
+     assert(panel.RewriteLayoutGeneration() == layoutGeneration);
+@@ -293,7 +315,7 @@ int main() {
+     CRect after; panel.GetWindowRect(&after);
+     assert(after.Size() == before.Size());
+     assert(!IsWindowVisible(panel.RewriteWindow()));
+-    // A host on a different thread retains the WinEvent fallback, without a timer.
++    // A host on a different thread uses coalesced window messages, without WinEvent latency.
+     std::promise<HWND> ready; auto readyWindow = ready.get_future();
+     std::atomic<bool> stopWorker{false};
+     std::thread worker([&] {
+@@ -324,6 +346,21 @@ int main() {
+     };
+     pumpUntil(GetTickCount64() + 50);
+     assert(panel.UsesPositionEvents() && !panel.UsesSynchronousPositionEvents());
++    assert(panel.UsesWindowPositionMessages());
++    const auto coalescedEvents = panel.PositionEventCount();
++    auto coalescedSurface = panel.SurfaceRect();
++    for (int frame = 1; frame <= 240; ++frame)
++      SetWindowPos(otherHost, nullptr, 100 + (frame % 80), 100, 0, 0,
++                   SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
++    // Hold the UI queue during the burst: exactly one pending movement survives.
++    int pendingMoves = 0; MSG queued;
++    while (PeekMessage(&queued, panel.m_hWnd, WeaselPanel::POSITION_CHANGED,
++                        WeaselPanel::POSITION_CHANGED, PM_REMOVE)) {
++      ++pendingMoves; DispatchMessage(&queued);
++    }
++    assert(pendingMoves == 1);
++    assert(panel.PositionEventCount() == coalescedEvents + 1);
++    assert(panel.SurfaceRect() == coalescedSurface);
+     const auto fallbackEvents = panel.PositionEventCount();
+     auto fallbackSurface = panel.SurfaceRect();
+     SetWindowPos(otherHost, nullptr, 120, 125, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
+-- 
+2.53.0.windows.2
+
