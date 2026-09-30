@@ -1,7 +1,7 @@
 From 4388ca4b49ff0ef625b6fe0c8422f66c624528f7 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:57:19 +0800
-Subject: [PATCH 14/36] feat(rime): track the Rime-side runtime files and add
+Subject: [PATCH 14/37] feat(rime): track the Rime-side runtime files and add
  an installer
 
 ---
