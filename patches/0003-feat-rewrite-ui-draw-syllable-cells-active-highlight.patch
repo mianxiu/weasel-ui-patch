@@ -1,7 +1,7 @@
 From d052fb4f18d60253071ca9c21ea48927402d0868 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:40 +0800
-Subject: [PATCH 03/47] feat(rewrite-ui): draw syllable cells, active highlight
+Subject: [PATCH 03/48] feat(rewrite-ui): draw syllable cells, active highlight
  and index badge
 
 ---

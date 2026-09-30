@@ -1,0 +1,240 @@
+From bca262379e35cdeacd7fee3ba59603c55502086c Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 01:53:05 +0800
+Subject: [PATCH 48/48] style(ui): tighten Azure Pill and detached editor
+ padding
+
+---
+ INSTALL-PATCH.md                 |  4 +++-
+ Install-Binaries.ps1             |  2 +-
+ REWRITE-UI.md                    |  2 ++
+ WeaselUI/WeaselPanel.cpp         |  4 ++--
+ rewrite-build.txt                |  2 +-
+ rime/skins/README.md             |  6 +++---
+ rime/skins/azure_pill.yaml       | 14 +++++++-------
+ rime/skins/azure_pill_black.yaml | 14 +++++++-------
+ rime/skins/azure_pill_green.yaml | 14 +++++++-------
+ rime/skins/azure_pill_navy.yaml  | 14 +++++++-------
+ test/rewrite_pipeline_test.cpp   |  8 ++++----
+ 11 files changed, 44 insertions(+), 40 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 542f4e3..1a4f00d 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 紧凑皮肤：** 四种强调色共用更小留白：外框 10×8px、选中项 7×5px、候选间距 18px；Tab 标签 3×1px，首字仍与候选文字对齐。字号保持 12pt。
++
+ > **2026-10-01 Notepad 跨线程跟随：** 实测主窗口与候选框由不同线程管理，同线程测试不能代表实际拖动。现在同进程跨线程也监听主窗口移动消息，最多保留一条待处理通知，读取最新位置后批量平移两个框；不会等待过时位置逐帧追赶。自动测试覆盖 UI 线程暂停期间连续 240 次移动，仅收到一条通知并对齐最终位置。窗口诊断属性 `WeaselPositionTracking`：1=同线程消息、2=跨线程合并消息、3=WinEvent、4=定时器。
+ 
+ > **2026-10-01 快速拖动更新：** 同一显示器内直接批量平移已绘制的候选框与 Tab 标签，跳过配置/候选复制、字体检测和独立重复定位；到屏幕边缘或换显示器时回到完整定位。连续 240 次往返移动验证位置和布局保持一致。
+@@ -17,7 +19,7 @@ Tab 编辑时，独立编辑框显示万象词典提供的全拼声调；编号
+ 悬浮编码字号为候选字号的 60%（至少 8pt）；编号左间距 4px，内边距 3×1px，圆角 4px，均按 DPI 缩放。
+ 输入序号及替换字母显示在整串拼音最后。拼音固定为进入 Tab 时所选候选的读音。
+ 候选、编号和注释字号恢复为旧皮肤的 12pt。
+-Tab 编码使用独立紧凑标签，padding 6×2px、圆角 6px、无独立阴影；候选内容和高度仍使用普通布局。
++Tab 编码使用独立紧凑标签，padding 3×1px、圆角 6px、无独立阴影；候选内容和高度仍使用普通布局。
+ 标签与候选重叠 2px，连接处取消内边和圆角，外侧保留圆角，形成混合轮廓；退出 Tab 后恢复完整候选圆角。
+ 两个框左对齐：候选在行内编码上方时，编辑框放在候选上方；候选在行内编码下方时，编辑框放在候选下方。
+ 编辑框预留末尾输入区域，长拼音和长替换串在固定单行内滚动；退出 Tab 或候选窗隐藏时编辑框也隐藏。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 89e793c..f229fbd 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-coalesced-follow-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-compact-skin-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 4eb1f3d..10a0b01 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 紧凑皮肤：** 四种强调色共用更小留白：外框 10×8px、选中项 7×5px、候选间距 18px；Tab 标签 3×1px，首字仍与候选文字对齐。字号保持 12pt。
++
+ > **2026-10-01 Notepad 跨线程跟随：** 实测主窗口与候选框由不同线程管理，同线程测试不能代表实际拖动。现在同进程跨线程也监听主窗口移动消息，最多保留一条待处理通知，读取最新位置后批量平移两个框；不会等待过时位置逐帧追赶。自动测试覆盖 UI 线程暂停期间连续 240 次移动，仅收到一条通知并对齐最终位置。窗口诊断属性 `WeaselPositionTracking`：1=同线程消息、2=跨线程合并消息、3=WinEvent、4=定时器。
+ 
+ > **2026-10-01 快速拖动更新：** 同一显示器内直接批量平移已绘制的候选框与 Tab 标签，跳过配置/候选复制、字体检测和独立重复定位；到屏幕边缘或换显示器时回到完整定位。连续 240 次往返移动验证位置和布局保持一致。
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index b38567b..ab636dc 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -1630,7 +1630,7 @@ void WeaselPanel::_UpdateRewriteWindow() {
+   style.inline_preedit = false;
+   style.vertical_text_with_wrap = false;
+   style.min_width = style.min_height = style.max_height = 0;
+-  style.margin_x = 4; style.margin_y = 2;
++  style.margin_x = 3; style.margin_y = 1;
+   style.hilite_padding_x = 0; style.hilite_padding_y = 0;
+   style.round_corner_ex = 6;
+   style.shadow_radius = style.shadow_offset_x = style.shadow_offset_y = 0;
+@@ -1640,7 +1640,7 @@ void WeaselPanel::_UpdateRewriteWindow() {
+   const int available = (std::max)(80, (int)(monitor.rcWork.right - monitor.rcWork.left) - 2 * m_layout->offsetX);
+   if (m_candidateCount)
+     m_editLeadingInset = m_layout->GetCandidateTextRect(0).left - m_layout->GetContentRect().left;
+-  const int editorOffset = (std::max)(0, m_editLeadingInset - DPI_SCALE(4));
++  const int editorOffset = (std::max)(0, m_editLeadingInset - DPI_SCALE(3));
+   style.max_width = (int)((available - editorOffset) / dpiScaleLayout);
+   m_editUI->status() = m_status;
+   m_editUI->ctx() = m_sourceCtx;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 87836d6..d4a387d 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-coalesced-follow-20261001
++Build-ID: rewrite-ui-compact-skin-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: compact joined tone-pinyin label; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 3cfe142..d4770d7 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,9 +1,9 @@
+ # Azure Pill / 蓝白圆角
+ 
+ 参考用户提供的截图：白色横排候选窗、蓝色圆角选中项、灰色编号、细灰边框与柔和阴影。
+-候选、编号和注释均为旧皮肤的 12pt；外框圆角 16px、选中项圆角 13px、内边距 10×8px，按 DPI 缩放。
+-Tab 编辑框为紧凑标签：左右 padding 6px、上下 2px，圆角 6px，无独立阴影。
+-标签与候选左边缘对齐并重叠 2px，连接处取消圆角和内部横边，外侧圆角保留，形成组合轮廓。
++候选、编号和注释均为旧皮肤的 12pt；外框圆角 16px、选中项圆角 13px、内边距 7×5px，外框留白 10×8px、候选间距 18px，按 DPI 缩放。
++Tab 编辑框为紧凑标签：左右 padding 3px、上下 1px，圆角 6px，无独立阴影。
++标签首字与第一候选的文字对齐并重叠 2px，连接处取消圆角和内部横边，外侧圆角保留，形成组合轮廓。
+ 
+ 打开独立皮肤包 `Weasel-Azure-Pill`，普通双击 `Apply-Skin.cmd`。
+ 当前 `dist` 只保留完整包 `Weasel-Rewrite-UI-Floating-Preview` 及其 ZIP；完整包根目录包含相同的皮肤切换脚本。
+diff --git a/rime/skins/azure_pill.yaml b/rime/skins/azure_pill.yaml
+index 7a2e4ef..564228e 100644
+--- a/rime/skins/azure_pill.yaml
++++ b/rime/skins/azure_pill.yaml
+@@ -24,13 +24,13 @@ patch:
+   style/layout/min_height: 0
+   style/layout/max_height: 0
+   style/layout/border: 1
+-  style/layout/margin_x: 14
+-  style/layout/margin_y: 12
+-  style/layout/spacing: 8
+-  style/layout/candidate_spacing: 24
+-  style/layout/hilite_spacing: 6
+-  style/layout/hilite_padding_x: 10
+-  style/layout/hilite_padding_y: 8
++  style/layout/margin_x: 10
++  style/layout/margin_y: 8
++  style/layout/spacing: 6
++  style/layout/candidate_spacing: 18
++  style/layout/hilite_spacing: 4
++  style/layout/hilite_padding_x: 7
++  style/layout/hilite_padding_y: 5
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/rime/skins/azure_pill_black.yaml b/rime/skins/azure_pill_black.yaml
+index 838e7e8..c32e168 100644
+--- a/rime/skins/azure_pill_black.yaml
++++ b/rime/skins/azure_pill_black.yaml
+@@ -24,13 +24,13 @@ patch:
+   style/layout/min_height: 0
+   style/layout/max_height: 0
+   style/layout/border: 1
+-  style/layout/margin_x: 14
+-  style/layout/margin_y: 12
+-  style/layout/spacing: 8
+-  style/layout/candidate_spacing: 24
+-  style/layout/hilite_spacing: 6
+-  style/layout/hilite_padding_x: 10
+-  style/layout/hilite_padding_y: 8
++  style/layout/margin_x: 10
++  style/layout/margin_y: 8
++  style/layout/spacing: 6
++  style/layout/candidate_spacing: 18
++  style/layout/hilite_spacing: 4
++  style/layout/hilite_padding_x: 7
++  style/layout/hilite_padding_y: 5
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/rime/skins/azure_pill_green.yaml b/rime/skins/azure_pill_green.yaml
+index e3ccaed..bdc4b12 100644
+--- a/rime/skins/azure_pill_green.yaml
++++ b/rime/skins/azure_pill_green.yaml
+@@ -24,13 +24,13 @@ patch:
+   style/layout/min_height: 0
+   style/layout/max_height: 0
+   style/layout/border: 1
+-  style/layout/margin_x: 14
+-  style/layout/margin_y: 12
+-  style/layout/spacing: 8
+-  style/layout/candidate_spacing: 24
+-  style/layout/hilite_spacing: 6
+-  style/layout/hilite_padding_x: 10
+-  style/layout/hilite_padding_y: 8
++  style/layout/margin_x: 10
++  style/layout/margin_y: 8
++  style/layout/spacing: 6
++  style/layout/candidate_spacing: 18
++  style/layout/hilite_spacing: 4
++  style/layout/hilite_padding_x: 7
++  style/layout/hilite_padding_y: 5
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/rime/skins/azure_pill_navy.yaml b/rime/skins/azure_pill_navy.yaml
+index 02b98a7..3616ef5 100644
+--- a/rime/skins/azure_pill_navy.yaml
++++ b/rime/skins/azure_pill_navy.yaml
+@@ -24,13 +24,13 @@ patch:
+   style/layout/min_height: 0
+   style/layout/max_height: 0
+   style/layout/border: 1
+-  style/layout/margin_x: 14
+-  style/layout/margin_y: 12
+-  style/layout/spacing: 8
+-  style/layout/candidate_spacing: 24
+-  style/layout/hilite_spacing: 6
+-  style/layout/hilite_padding_x: 10
+-  style/layout/hilite_padding_y: 8
++  style/layout/margin_x: 10
++  style/layout/margin_y: 8
++  style/layout/spacing: 6
++  style/layout/candidate_spacing: 18
++  style/layout/hilite_spacing: 4
++  style/layout/hilite_padding_x: 7
++  style/layout/hilite_padding_y: 5
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 4b4adb0..a17c677 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -229,8 +229,8 @@ int main() {
+       assert(panel.RewriteWindow() != nullptr);
+       CRect editRect; GetWindowRect(panel.RewriteWindow(), &editRect);
+       assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
+-      assert(panel.RewriteTextRect().left - panel.RewriteSurfaceRect().left == 4);
+-      assert(panel.RewriteSurfaceRect().right - panel.RewriteTextRect().right == 4);
++      assert(panel.RewriteTextRect().left - panel.RewriteSurfaceRect().left == 3);
++      assert(panel.RewriteSurfaceRect().right - panel.RewriteTextRect().right == 3);
+       assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
+       assert(panel.RewriteSurfaceRect().top == panel.SurfaceRect().bottom - 2 ||
+              panel.RewriteSurfaceRect().bottom == panel.SurfaceRect().top + 2);
+@@ -383,8 +383,8 @@ int main() {
+     assert(candidateAbove.top < bottomCaret.top);
+     assert(panel.RewriteSurfaceRect().top < panel.SurfaceRect().top);
+     assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
+-      assert(panel.RewriteTextRect().left - panel.RewriteSurfaceRect().left == 4);
+-      assert(panel.RewriteSurfaceRect().right - panel.RewriteTextRect().right == 4);
++      assert(panel.RewriteTextRect().left - panel.RewriteSurfaceRect().left == 3);
++      assert(panel.RewriteSurfaceRect().right - panel.RewriteTextRect().right == 3);
+     panel.ShowWindow(SW_SHOWNA);
+     assert(IsWindowVisible(panel.RewriteWindow()));
+     auto empty = editing; empty.cinfo.clear(); empty.preedit.clear();
+-- 
+2.53.0.windows.2
+
