@@ -1,7 +1,7 @@
 From ff7a862f6d8016df8c7d2bedae4112f8966aa861 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 19:50:29 +0800
-Subject: [PATCH 29/48] Revert "feat(rewrite): merge inline syllable labels and
+Subject: [PATCH 29/49] Revert "feat(rewrite): merge inline syllable labels and
  remove duplicate panel row"
 
 This reverts commit d1a7f61b85aafb30b638b0e9c352557c50a1e4e9.
