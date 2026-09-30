@@ -1,7 +1,7 @@
 From d356b4790a14d37be492e41bd4d4cc0a432e351e Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:37:31 +0800
-Subject: [PATCH 09/27] docs(rewrite-ui): correct config reload path
+Subject: [PATCH 09/28] docs(rewrite-ui): correct config reload path
  (build/weasel.yaml needs a redeploy)
 
 ---
