@@ -1,7 +1,7 @@
 From 5c981852fcdf67b7df58b98c9e26e740c8f0b797 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Tue, 29 Sep 2026 22:50:45 +0800
-Subject: [PATCH 24/49] fix(installer): retain elevated installation errors and
+Subject: [PATCH 24/50] fix(installer): retain elevated installation errors and
  recovery diagnostics
 
 ---
