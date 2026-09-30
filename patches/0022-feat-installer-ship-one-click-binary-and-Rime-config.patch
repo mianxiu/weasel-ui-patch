@@ -1,7 +1,7 @@
 From df631bf337797a231ccb7687cf755cec515f02e8 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Tue, 29 Sep 2026 19:11:06 +0800
-Subject: [PATCH 22/28] feat(installer): ship one-click binary and Rime
+Subject: [PATCH 22/31] feat(installer): ship one-click binary and Rime
  configuration deployment
 
 ---

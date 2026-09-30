@@ -1,3 +1,5 @@
+> **2026-09-30 悬浮声调预览版：** 已撤销行内编号与高亮试验，恢复旧版行内 composition。Tab 时在候选窗显示万象词典声调全拼、小字号、带间距和圆角背景的上标编号；序号及替换输入位于整串拼音末尾。运行 weasel/dist/Weasel-Rewrite-UI-Floating-Preview/Apply-Patch.cmd。缺少可靠拼音或音节无法对齐时回退原始编码。32/64 位构建、真实 librime 隔离测试、布局与 DPI、配置合并/恢复及分发包预检通过；实际应用视觉验收待完成。当前分支为本地预览，稳定 Release 保持原有版本。
+
 # weasel-ui-patch
 
 为 Windows 小狼毫（Weasel）加「未上屏编码快速重写」**原生 UI** 的个人补丁集。

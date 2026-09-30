@@ -1,0 +1,841 @@
+From e299d8d39007956a9043fb134ec21da37815a960 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 20:09:36 +0800
+Subject: [PATCH 31/31] feat(rewrite): show dictionary tone pinyin and rounded
+ index badges in floating panel
+
+---
+ Apply-Patch.ps1                     |  6 ++--
+ INSTALL-PATCH.md                    | 11 +++++++
+ Install-Binaries.ps1                |  4 +--
+ REWRITE-UI.md                       |  2 ++
+ RimeWithWeasel/RimeWithWeasel.cpp   |  2 +-
+ TODO.md                             | 10 ++++++
+ WeaselIPC/ContextUpdater.cpp        |  1 +
+ WeaselUI/DirectWriteResources.cpp   |  2 ++
+ WeaselUI/RewriteLayout.h            | 46 +++++++++++++++++-----------
+ WeaselUI/WeaselPanel.cpp            | 19 ++++++++----
+ agent.md                            |  2 ++
+ include/RewriteState.h              | 23 +++++++++++---
+ include/WeaselUI.h                  |  1 +
+ package-rewrite.ps1                 |  8 ++---
+ rewrite-build.txt                   |  4 +--
+ rime/lua/indexed_rewrite_pro.lua    | 47 ++++++++++++++++++++++++++++-
+ rime/wanxiang_pro.custom.yaml       |  1 +
+ rime/weasel.custom.yaml             |  6 ++--
+ test-floating-rewrite.cmd           | 27 +++++++++++++++++
+ test/installer_config_test.ps1      |  8 +++--
+ test/installer_rime_test.cpp        |  8 +++++
+ test/installer_rime_test.ps1        | 18 +++++++++--
+ test/installer_transaction_test.ps1 |  1 +
+ test/rewrite_pipeline_test.cpp      | 15 +++++++--
+ test/rewrite_state_test.cpp         | 26 +++++++++++-----
+ tools/rewrite-config.cpp            | 30 ++++++++++++++++++
+ 26 files changed, 266 insertions(+), 62 deletions(-)
+ create mode 100644 TODO.md
+ create mode 100644 test-floating-rewrite.cmd
+
+diff --git a/Apply-Patch.ps1 b/Apply-Patch.ps1
+index 827c3e0..26cc800 100644
+--- a/Apply-Patch.ps1
++++ b/Apply-Patch.ps1
+@@ -184,13 +184,13 @@ try {
+   Invoke-Wait (Join-Path $package 'RewriteConfig.exe') ('verify "{0}"' -f $UserDataRoot)
+   Start-UserServer
+   Write-Host 'SUCCESS: program files, Lua and YAML installed; deployment verified; Rewrite UI enabled.' -ForegroundColor Green
+-  Write-Host 'Sign out and back in (or restart Windows) so applications load the new TSF DLLs.'
++  Write-Host 'Fully exit and reopen applications (including background processes) to load the new TSF DLLs. Sign out or restart Windows if they do not refresh.'
+   Write-Host "Backups and log: $transaction"
+   Write-Host ''
+   Write-Host '安装成功：程序文件、Lua 和 YAML 已安装，部署校验通过，Rewrite UI 已启用。' -ForegroundColor Green
+   Write-Host '下一步：'
+-  Write-Host '  1. 注销后重新登录，或重启 Windows，让应用加载新版输入法 DLL。'
+-  Write-Host '  2. 输入拼音后按 Tab，检查音节高亮、数字索引选择，以及 Esc 恢复是否正常。'
++  Write-Host '  1. 完全退出并重新打开测试应用（包括后台进程），加载新版输入法 DLL；仍未刷新再注销或重启。'
++  Write-Host '  2. 输入拼音后按 Tab，检查悬浮声调全拼、圆角序号、末尾编辑字符及 Esc 恢复。'
+   Write-Host '开头的 CHECK ONLY 只是安装前预检；本次安装已完成。'
+   Write-Host '备份已保留，无需删除。按任意键只关闭此窗口，不会自动重启 Windows。'
+   exit 0
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 6848fe1..275d114 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,14 @@
++# 悬浮声调拼音预览版（2026-09-30）
++
++运行 `Apply-Patch.cmd`。本包恢复普通行内输入，不再向输入框写入音节编号或额外高亮。
++Tab 编辑时，候选窗口显示万象词典提供的全拼声调；编号紧随音节，以独立圆角底色包裹。
++悬浮编码字号为候选字号的 60%（至少 8pt）；编号左间距 4px，内边距 3×1px，圆角 4px，均按 DPI 缩放。
++输入序号及替换字母显示在整串拼音最后。拼音固定为进入 Tab 时所选候选的读音。
++没有词典拼音、无法与音节范围对应时，回退到原始编码，避免标错声调或索引。
++安装器会移除上一版 `rewrite_ui/display`、`inline_raw_input`、`inline_labels` 试验设置。
++安装后完全退出并重新打开测试应用（包括后台进程）；仍未刷新时再注销登录或重启。
++自动测试覆盖真实 librime 的拼音读取与行内输入保持、布局和 DPI；真实应用视觉效果仍需实测。
++
+ # 小狼毫 / 万象 Pro 一键重写补丁
+ 
+ 适用于已经安装小狼毫和万象 Pro 方案、词库的 Windows x64 / x86 电脑。不支持 ARM64。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 136c579..8edb801 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -1,4 +1,4 @@
+-[CmdletBinding()]
++﻿[CmdletBinding()]
+ param([string]$Target, [switch]$CheckOnly, [string]$UserSid,
+       [ValidatePattern('^rewrite-backup-[a-f0-9]{32}$')][string]$BackupName,
+       [switch]$Restore, [string]$LogPath, [string]$ResultPath)
+@@ -137,7 +137,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-one-click-20260929; profile: $profileName"
++  Write-Host "Build: rewrite-ui-floating-tone-preview-20260930; profile: $profileName"
+   Write-Host 'Program installer: revision 5 (persistent administrator diagnostics)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 16e8540..17ca637 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,5 @@
++ > **2026-09-30 悬浮声调版：** 已撤销行内试验代码。Tab 编辑在悬浮窗口显示词典声调拼音和独立圆角编号，末尾显示序号及替换输入。构建和测试状态以本次分发 README 为准。
++
+ # Rewrite UI 补丁
+ 
+ > 2026-09-29：分发安装流程已更新为一键安装程序、合并 YAML、安装 Lua、启用、部署与验证。
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index fdd82a8..2327ca7 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -925,7 +925,7 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
+     std::wstring rewrite_body;
+     // Keep raw state separate from ctx.preedit, which TSF inserts inline.
+     // A bounded buffer with an extra sentinel detects truncated properties.
+-    const char* names[] = {"stage", "original", "index", "ranges", "replacement"};
++    const char* names[] = {"stage", "original", "index", "ranges", "replacement", "pinyin"};
+     for (auto name : names) {
+       std::array<char, 8193> value{};
+       std::string key = std::string("_indexed_rewrite_") + name;
+diff --git a/TODO.md b/TODO.md
+new file mode 100644
+index 0000000..484c032
+--- /dev/null
++++ b/TODO.md
+@@ -0,0 +1,10 @@
++# 待办
++
++- [x] 撤销行内音节编号和高亮试验，恢复旧版 composition 显示。
++- [x] Tab 模式悬浮显示万象词典的声调全拼，编号独立圆角背景和间距。
++- [x] 悬浮编码缩小字号；序号和替换字母显示在整串拼音末尾。
++- [x] 自动测试：原始候选声调读取、注释被下游清理后的保留、行内 preedit 不被修改、IPC、布局、DPI、配置和事务恢复。
++- [ ] 真机视觉验收：记事本、浏览器、VS Code、聊天窗口；多音节、选中候选、换行、多位序号、替换、退格、Esc、提交及焦点切换。
++- [ ] 根据真机反馈确定字体比例、间距及圆角是否开放为 YAML 配置。
++- [ ] 将全部候选列表放进应用输入框：保留为后续研究，需处理分页、按键冲突、提交取消、鼠标与可访问性。
++- [ ] 清理历史 Lua/UI 和旧版文档说明。
+diff --git a/WeaselIPC/ContextUpdater.cpp b/WeaselIPC/ContextUpdater.cpp
+index b61b915..210e613 100644
+--- a/WeaselIPC/ContextUpdater.cpp
++++ b/WeaselIPC/ContextUpdater.cpp
+@@ -32,6 +32,7 @@ void ContextUpdater::Store(Deserializer::KeyType const& k,
+     else if (k[2] == L"index") r.index = v;
+     else if (k[2] == L"ranges") r.ranges = v;
+     else if (k[2] == L"replacement") r.replacement = v;
++    else if (k[2] == L"pinyin") r.pinyin = v;
+     else if (k[2] == L"input") r.input = v;
+     return;
+   }
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index b98a16d..d051974 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -137,6 +137,8 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   };
+   init_font(font_face, font_point, pTextFormat, wrapping);
+   init_font(font_face, font_point, pPreeditTextFormat, wrapping_preedit);
++  init_font(font_face, (std::max)(8, (int)(font_point * 0.60f)),
++            pRewriteTextFormat, wrapping_preedit);
+   init_font(label_font_face, label_font_point, pLabelTextFormat, wrapping);
+   init_font(comment_font_face, comment_font_point, pCommentTextFormat,
+             wrapping);
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 6d8eabb..065f853 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -4,42 +4,52 @@
+ namespace weasel {
+ struct RewriteCell {
+   RewriteState::Unit unit;
+-  CRect back, text;
++  CRect back, text, labelBack, label;
+ };
+ struct RewriteLayout {
+   CSize size = CSize(0, 0);
+   std::vector<RewriteCell> cells;
+ };
+-// Used by both measurement and paint, including DPI and wrapping decisions.
++// Keep pronunciation and its superscript badge together when wrapping.
+ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+                                     PDWR dwr) {
+   RewriteLayout result;
+   const auto& style = layout._style;
+   const bool vertical = style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
+-  const int px = (std::max)(1, style.hilite_padding_x);
+-  const int py = (std::max)(1, style.hilite_padding_y);
+-  const int gap = (std::max)(2, style.hilite_spacing);
++  const int px = (std::max)(1, (int)(3 * dwr->dpiScaleLayout));
++  const int py = (std::max)(1, (int)(1 * dwr->dpiScaleLayout));
++  const int margin = (std::max)(2, (int)(4 * dwr->dpiScaleLayout));
++  const int gap = margin * 2;
+   const int limit = vertical ? style.max_height : style.max_width;
+   int advance = 0, cross = 0, line = 0;
+   for (const auto& unit : state.Units()) {
+-    CSize text(0, 0);
+-    layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pPreeditTextFormat,
+-                         dwr, &text);
+-    const int w = text.cx + px * 2, h = text.cy + py * 2;
++    CSize text(0, 0), label(0, 0);
++    layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pRewriteTextFormat,
++                        dwr, &text);
++    if (!unit.label.empty())
++      layout.GetTextSizeDW(unit.label, unit.label.size(), dwr->pRewriteTextFormat,
++                          dwr, &label);
++    const int lw = unit.label.empty() ? 0 : label.cx + px * 2;
++    const int lh = unit.label.empty() ? 0 : label.cy + py * 2;
++    const int w = vertical ? (std::max<LONG>)(text.cx, lw) : text.cx + (lw ? margin + lw : 0);
++    const int h = vertical ? text.cy + (lh ? margin + lh : 0) : (std::max<LONG>)(text.cy, lh);
+     const int span = vertical ? h : w;
+     if (limit > 0 && advance > 0 && advance + span > limit) {
+-      cross += line + gap;
+-      advance = 0;
+-      line = 0;
++      cross += line + gap; advance = 0; line = 0;
+     }
+-    const int x = vertical ? cross : advance;
+-    const int y = vertical ? advance : cross;
+-    result.cells.push_back({unit, CRect(x, y, x + w, y + h),
+-                           CRect(x + px, y + py, x + px + text.cx, y + py + text.cy)});
++    const int x = vertical ? cross : advance, y = vertical ? advance : cross;
++    CRect tr(x, y, x + text.cx, y + text.cy), lb, lr;
++    lb.SetRectEmpty(); lr.SetRectEmpty();
++    if (lw) {
++      const int bx = vertical ? x : x + text.cx + margin;
++      const int by = vertical ? y + text.cy + margin : y;
++      lb.SetRect(bx, by, bx + lw, by + lh);
++      lr.SetRect(bx + px, by + py, bx + px + label.cx, by + py + label.cy);
++    }
++    result.cells.push_back({unit, CRect(x, y, x + w, y + h), tr, lb, lr});
+     result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
+     result.size.cy = (std::max<LONG>)(result.size.cy, y + h);
+-    advance += span + gap;
+-    line = (std::max)(line, vertical ? w : h);
++    advance += span + gap; line = (std::max)(line, vertical ? w : h);
+   }
+   return result;
+ }
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 5530562..19a6e9d 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -790,20 +790,27 @@ bool WeaselPanel::_DrawPreeditBack(const Text& text,
+ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+   auto layout = MeasureRewrite(*m_layout, m_ctx.rewrite, pDWR);
+   for (auto cell : layout.cells) {
+-    cell.back.OffsetRect(rc.left, rc.top);
+     cell.text.OffsetRect(rc.left, rc.top);
++    cell.labelBack.OffsetRect(rc.left, rc.top);
++    cell.label.OffsetRect(rc.left, rc.top);
+     if (background) {
+-      if (cell.unit.active || cell.unit.badge) {
++      if (!cell.unit.label.empty()) {
+         unsigned int color = m_style.hilited_back_color;
+-        if (cell.unit.badge)
++        if (!cell.unit.active)
+           color = (color & 0x00ffffff) | (((color >> 24) / 3) << 24);
+-        _HighlightText(dc, cell.back, color, 0, DPI_SCALE(m_style.round_corner),
++        const int radius = (std::max)(1, (std::min)(DPI_SCALE(4),
++                                    (std::min)(cell.labelBack.Width(), cell.labelBack.Height()) / 2));
++        _HighlightText(dc, cell.labelBack, color, 0, radius,
+                        BackType::TEXT, IsToRoundStruct());
+       }
+     } else {
+       int color = cell.unit.active ? m_style.hilited_text_color : m_style.text_color;
+-      _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), color,
+-               pDWR->pPreeditTextFormat.Get());
++      // Only badges carry a background; pronunciation remains unobtrusive.
++      _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), m_style.text_color,
++               pDWR->pRewriteTextFormat.Get());
++      if (!cell.unit.label.empty())
++        _TextOut(cell.label, cell.unit.label, cell.unit.label.size(), color,
++                 pDWR->pRewriteTextFormat.Get());
+     }
+   }
+   return !layout.cells.empty();
+diff --git a/agent.md b/agent.md
+index 2d172c6..506dc24 100644
+--- a/agent.md
++++ b/agent.md
+@@ -1,3 +1,5 @@
++ > **2026-09-30 当前决策：** 恢复旧版行内输入，取消行内编号/高亮试验。悬浮编码改为万象原始词典拼音，小字号和独立圆角序号；新增只读 `lua_filter@*indexed_rewrite_pro*hint`，必须在万象注释处理前运行。
++
+ # Agent Guide — 小狼毫 / 万象 Pro 快速重写与 Rewrite UI
+ 
+ > **2026-09-29 一键分发更新：** 安装现状以 `INSTALL-PATCH.md` 为准。
+diff --git a/include/RewriteState.h b/include/RewriteState.h
+index 9b9b9bd..11884ee 100644
+--- a/include/RewriteState.h
++++ b/include/RewriteState.h
+@@ -6,15 +6,16 @@
+ namespace weasel {
+ // UI-only snapshot. Ranges are ASCII raw-input byte offsets, never preedit offsets.
+ struct RewriteState {
+-  std::wstring stage, original, index, ranges, replacement, input;
++  std::wstring stage, original, index, ranges, replacement, input, pinyin;
+   struct Unit {
+     std::wstring text;
+     bool active = false;
+     bool badge = false;
++    std::wstring label;
+   };
+   bool operator==(const RewriteState& r) const {
+     return stage == r.stage && original == r.original && index == r.index &&
+-           ranges == r.ranges && replacement == r.replacement && input == r.input;
++           ranges == r.ranges && replacement == r.replacement && input == r.input && pinyin == r.pinyin;
+   }
+   void clear() { *this = RewriteState(); }
+   static std::wstring Superscript(const std::wstring& digits) {
+@@ -66,6 +67,16 @@ struct RewriteState {
+       for (size_t i = 0; i < spans.size(); ++i)
+         if (replacement.size() <= spans[i].second) { target = i + 1; break; }
+     }
++    std::vector<std::wstring> pronunciations;
++    std::wstring token;
++    for (auto c : pinyin + L"|") {
++      if (c == L'|') { if (token.empty()) { pronunciations.clear(); break; }
++        pronunciations.push_back(token); token.clear(); }
++      else if ((c >= L'a' && c <= L'z') || (c >= 0xc0 && c <= 0x24f) ||
++               (c >= 0x300 && c <= 0x36f)) token += c;
++      else { pronunciations.clear(); break; }
++    }
++    const bool full = pronunciations.size() == spans.size();
+     const auto& source = stage == L"head_replace" ? input : original;
+     std::vector<Unit> out;
+     for (size_t i = 0; i < spans.size(); ++i) {
+@@ -75,10 +86,12 @@ struct RewriteState {
+       else if (a < source.size()) text = source.substr(a, b - a);
+       if (stage == L"head_replace" && i + 1 == spans.size() && source.size() > b)
+         text += source.substr(b);
+-      text += Superscript(std::to_wstring(i + 1));
+-      out.push_back({text, i + 1 == target, false});
++      if (full) text = pronunciations[i];
++      out.push_back({text, i + 1 == target, false,
++                     Superscript(std::to_wstring(i + 1))});
+     }
+-    if (!index.empty()) out.push_back({Superscript(index), false, true});
++    if (!index.empty() || !replacement.empty())
++      out.push_back({index + replacement, false, true, L""});
+     return out;
+   }
+   bool active() const { return !Units().empty(); }
+diff --git a/include/WeaselUI.h b/include/WeaselUI.h
+index 77bb3b4..ee16176 100755
+--- a/include/WeaselUI.h
++++ b/include/WeaselUI.h
+@@ -151,6 +151,7 @@ class DirectWriteResources {
+   ComPtr<IDWriteFactory2> pDWFactory;
+   ComPtr<ID2D1DCRenderTarget> pRenderTarget;
+   ComPtr<IDWriteTextFormat1> pPreeditTextFormat;
++  ComPtr<IDWriteTextFormat1> pRewriteTextFormat;
+   ComPtr<IDWriteTextFormat1> pTextFormat;
+   ComPtr<IDWriteTextFormat1> pLabelTextFormat;
+   ComPtr<IDWriteTextFormat1> pCommentTextFormat;
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index 345818f..ea7f65f 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -1,7 +1,7 @@
+ $ErrorActionPreference = 'Stop'
+ Set-Location $PSScriptRoot
+-$finalDestination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI'
+-$destination = Join-Path $PSScriptRoot ('dist/Weasel-Rewrite-UI-stage-' + [Guid]::NewGuid().ToString('N'))
++$finalDestination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI-Floating-Preview'
++$destination = Join-Path $PSScriptRoot ('dist/Weasel-Rewrite-UI-Floating-Preview-stage-' + [Guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Force $destination, "$destination/Win32", "$destination/licenses" | Out-Null
+ $rootFiles = @('WeaselServer.exe', 'WeaselDeployer.exe', 'WeaselSetup.exe',
+                'weasel.dll', 'weaselx64.dll', 'rime.dll', 'WinSparkle.dll')
+@@ -58,7 +58,7 @@ $hashes = Get-ChildItem $destination -Recurse -File | Where-Object { $_.Name -ne
+     "$hash  $relative"
+   }
+ $hashes | Set-Content "$destination/SHA256SUMS.txt" -Encoding utf8
+-Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI.zip' -Force
++Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI-Floating-Preview.zip' -Force
+ # Retain the previous unpacked package as a recoverable backup.
+ if (Test-Path -LiteralPath $finalDestination) {
+   $resolved = (Resolve-Path -LiteralPath $finalDestination).Path
+@@ -67,4 +67,4 @@ if (Test-Path -LiteralPath $finalDestination) {
+   Move-Item -LiteralPath $resolved -Destination ($finalDestination + '-previous-' + [Guid]::NewGuid().ToString('N'))
+ }
+ Move-Item -LiteralPath $destination -Destination $finalDestination
+-Get-Item 'dist/Weasel-Rewrite-UI.zip' | Select-Object FullName, Length
++Get-Item 'dist/Weasel-Rewrite-UI-Floating-Preview.zip' | Select-Object FullName, Length
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 411452c..176fe8b 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,5 +1,5 @@
+-Build-ID: rewrite-ui-one-click-20260929
++Build-ID: rewrite-ui-floating-tone-preview-20260930
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+-Features: Rewrite UI + D2D1_RENDER_TARGET_TYPE_SOFTWARE (issue #1913)
++Features: floating dictionary tone pinyin + rounded superscript badges; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+ This file identifies the installed package. Check SHA256SUMS.txt to verify binaries.
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+index 2bbcd6d..5cd6b5f 100644
+--- a/rime/lua/indexed_rewrite_pro.lua
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -31,6 +31,9 @@ local PROP_STAGE = "_indexed_rewrite_stage"
+ local PROP_ORIGINAL = "_indexed_rewrite_original"
+ local PROP_INDEX = "_indexed_rewrite_index"
+ local PROP_RANGES = "_indexed_rewrite_ranges"
++local PROP_PINYIN = "_indexed_rewrite_pinyin"
++local PROP_PENDING = "_indexed_rewrite_pending"
++local PROP_HINTS = "_indexed_rewrite_hints"
+ local PROP_REPLACEMENT = "_indexed_rewrite_replacement"
+ 
+ local function set_prop(ctx, key, value)
+@@ -53,6 +56,8 @@ end
+ 
+ 
+ local function clear_props(ctx)
++    set_prop(ctx, PROP_PINYIN, "")
++    set_prop(ctx, PROP_PENDING, "")
+     set_prop(ctx, PROP_STAGE, "")
+     set_prop(ctx, PROP_ORIGINAL, "")
+     set_prop(ctx, PROP_INDEX, "")
+@@ -368,6 +373,7 @@ function M.func(key, env)
+                 set_prop(ctx, PROP_INDEX, current)
+             else
+                 set_prop(ctx, PROP_INDEX, "")
++                set_prop(ctx, PROP_PINYIN, get_prop(ctx, PROP_PENDING))
+                 set_prop(ctx, PROP_STAGE, "armed")
+             end
+ 
+@@ -449,7 +455,8 @@ function M.func(key, env)
+                 if typed == "" then
+                     ctx.input = original
+                     ctx.caret_pos = #original
+-                    set_prop(ctx, PROP_STAGE, "armed")
++                    set_prop(ctx, PROP_PINYIN, get_prop(ctx, PROP_PENDING))
++                set_prop(ctx, PROP_STAGE, "armed")
+                 else
+                     local new_input = overwrite_from_start(original, typed)
+                     ctx.input = new_input
+@@ -569,6 +576,16 @@ function M.func(key, env)
+ 
+     if is_slash(repr) then
+         local raw = ctx.input or ""
++        if raw:match("^[a-z0-9]+$") then
++            local selected = ctx:get_selected_candidate()
++            local found = ""
++            if selected then
++                for text, pinyin in get_prop(ctx, PROP_HINTS):gmatch("([^\n\t]+)\t([^\n]+)\n") do
++                    if text == selected.text then found = pinyin; break end
++                end
++            end
++            set_prop(ctx, PROP_PENDING, found)
++        end
+ 
+         if raw:match("^[a-z0-9]+/$")
+             and not ctx:get_option("ascii_mode")
+@@ -579,6 +596,7 @@ function M.func(key, env)
+             if original ~= "" then
+                 local ranges = get_ranges(ctx, original)
+ 
++                set_prop(ctx, PROP_PINYIN, get_prop(ctx, PROP_PENDING))
+                 set_prop(ctx, PROP_STAGE, "armed")
+                 set_prop(ctx, PROP_ORIGINAL, original)
+                 set_prop(ctx, PROP_INDEX, "")
+@@ -598,4 +616,31 @@ function M.func(key, env)
+     return NOOP
+ end
+ 
++-- Install before Wanxiang's comment/preedit filter. Read original dictionary
++-- pronunciation; never alter the candidate, preedit, options or input.
++M.hint = { func = function(input, env)
++    local ctx = env.engine.context
++    local records, count = "", 0
++    local delimiter = env.engine.schema.config:get_string("speller/delimiter") or " '"
++    local pattern = "[^" .. delimiter:gsub("([%%%]%^%-])", "%%%1") .. "]+"
++    set_prop(ctx, PROP_HINTS, "")
++    for cand in input:iter() do
++        if count < 32 then
++            local genuine = cand:get_genuine()
++            local parts = {}
++            for token in (genuine.comment or ""):gmatch(pattern) do
++                token = token:gsub("[%[%]]", ""):match("^[^;]+") or ""
++                if token ~= "" then parts[#parts + 1] = token end
++            end
++            local line = cand.text .. "\t" .. table.concat(parts, "|") .. "\n"
++            if #parts > 0 and #records + #line <= 8000 then
++                records = records .. line
++                set_prop(ctx, PROP_HINTS, records)
++            end
++            count = count + 1
++        end
++        yield(cand)
++    end
++end }
++
+ return M
+diff --git a/rime/wanxiang_pro.custom.yaml b/rime/wanxiang_pro.custom.yaml
+index b421257..af31e23 100644
+--- a/rime/wanxiang_pro.custom.yaml
++++ b/rime/wanxiang_pro.custom.yaml
+@@ -1,6 +1,7 @@
+ # 本文件的工作目录是在用户根目录，本目录携带是因为如果放外面就会更新的时候覆盖你的修改，因此我只能藏起来。
+ # 如果没有按初始化说明进行初始化那么你需要手动复制本文件到上层目录，请知悉。
+ patch:
++  engine/filters/@before 0: lua_filter@*indexed_rewrite_pro*hint
+   engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
+ 
+   key_binder/bindings/+:
+diff --git a/rime/weasel.custom.yaml b/rime/weasel.custom.yaml
+index f904329..940d2e1 100644
+--- a/rime/weasel.custom.yaml
++++ b/rime/weasel.custom.yaml
+@@ -7,9 +7,9 @@ patch:
+   rewrite_ui/enabled: true
+   rewrite_ui/debug: false
+ 
+-# 原生绘制用到的颜色 / 圆角 / 间距全部复用当前主题，不在这里配置：
+-#   hilited_back_color      当前音节背景
+-#   hilited_text_color      当前音节文字
++# 悬浮声调拼音的字号为候选字号的 60%；序号采用 4px 间距、3×1px 内边距和 4px 圆角（DPI 缩放）。
++#   hilited_back_color      当前序号背景
++#   hilited_text_color      当前序号文字
+ #   text_color              普通音节文字
+ #   style/layout/corner_radius、hilite_padding_x/y、hilite_spacing
+ # index badge 的背景取高亮背景透明度的 1/3，不单独配置。
+diff --git a/test-floating-rewrite.cmd b/test-floating-rewrite.cmd
+new file mode 100644
+index 0000000..6d35e49
+--- /dev/null
++++ b/test-floating-rewrite.cmd
+@@ -0,0 +1,27 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\rewrite_state_test.cpp /Fodeps\rewrite_state_test.obj /Fedeps\rewrite_state_test.exe
++if errorlevel 1 exit /b 1
++deps\rewrite_state_test.exe
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /DUNICODE /D_UNICODE /Iinclude /Ideps\boost_1_84_0 /Ideps\WTL\include test\rewrite_pipeline_test.cpp /Fodeps\rewrite_pipeline_test.obj /Fedeps\rewrite_pipeline_test.exe /link /LIBPATH:deps\boost_1_84_0\stage\lib msbuild\Release\x64\WeaselUI.lib msbuild\Release\x64\WeaselIPC.lib d2d1.lib dwrite.lib user32.lib gdi32.lib ole32.lib shell32.lib imm32.lib comctl32.lib dwmapi.lib msimg32.lib
++if errorlevel 1 exit /b 1
++deps\rewrite_pipeline_test.exe
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\installer_rime_test.cpp /Fodeps\installer_rime_test.obj /Fedeps\installer_rime_test.exe /link deps\rime-x64\dist\lib\rime.lib
++if errorlevel 1 exit /b 1
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_rime_test.ps1
++if errorlevel 1 exit /b 1
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_config_test.ps1
++if errorlevel 1 exit /b 1
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_transaction_test.ps1
++if errorlevel 1 exit /b 1
++call C:\BuildTools\VC\Auxiliary\Build\vcvars32.bat
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\rewrite_state_test.cpp /Fodeps\rewrite_state_x86.obj /Fedeps\rewrite_state_x86.exe
++if errorlevel 1 exit /b 1
++deps\rewrite_state_x86.exe
++exit /b %errorlevel%
+diff --git a/test/installer_config_test.ps1 b/test/installer_config_test.ps1
+index ba3a288..f3652d3 100644
+--- a/test/installer_config_test.ps1
++++ b/test/installer_config_test.ps1
+@@ -1,4 +1,5 @@
+ $ErrorActionPreference = 'Stop'
++if ($PSVersionTable.PSEdition -eq 'Desktop') { Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') }
+ $helper = Join-Path $PSScriptRoot '../output/RewriteConfig.exe'
+ $root = Join-Path ([IO.Path]::GetTempPath()) ('rewrite-config-tests-' + [guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Path $root | Out-Null
+@@ -19,7 +20,7 @@ $empty = Prepare 'empty' '' ''
+ $ui = @'
+ patch:
+   style/color_scheme: my_theme
+-  rewrite_ui: {enabled: false, debug: true, future_option: 42}
++  rewrite_ui: {enabled: false, debug: true, future_option: 42, display: inline, inline_raw_input: true, inline_labels: true}
+   app_options: {terminal.exe: {ascii_mode: true}}
+ '@
+ $schema = @'
+@@ -37,6 +38,7 @@ $existing = Prepare 'preserve-values-and-remove-commented-filter' $ui $schema
+ $mergedUi = Get-Content (Join-Path $existing 'stage/weasel.custom.yaml') -Raw
+ $mergedSchema = Get-Content (Join-Path $existing 'stage/wanxiang_pro.custom.yaml') -Raw
+ Assert ($mergedUi -match 'my_theme' -and $mergedUi -match 'future_option: 42' -and $mergedUi -match 'terminal.exe') 'Lost unrelated UI settings'
++Assert ($mergedUi -notmatch 'display: inline|inline_raw_input|inline_labels') 'Stale inline trial remains'
+ Assert ($mergedUi -match 'rewrite_ui/enabled: true' -and $mergedUi -match 'rewrite_ui/debug: false') 'Switches not enabled'
+ Assert ($mergedSchema -notmatch 'indexed_rewrite_tab_ui_v2' -and $mergedSchema -notmatch 'send: Down') 'Legacy filter/Tab remains'
+ Assert ($mergedSchema -match 'my_layout' -and $mergedSchema -match 'Control\+a' -and $mergedSchema -match 'page_size: 9') 'Lost unrelated schema values'
+@@ -68,7 +70,7 @@ Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: true, debug: false}'
+ $deployed = @'
+ engine:
+   processors: [lua_processor@*indexed_rewrite_pro, ascii_composer]
+-  filters: [simplifier]
++  filters: [lua_filter@*indexed_rewrite_pro*hint, simplifier]
+ key_binder:
+   bindings:
+     - {when: has_menu, accept: Tab, send_sequence: "//"}
+@@ -90,7 +92,7 @@ Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: false, debug: false}
+ & $helper verify (Split-Path $build -Parent)
+ Assert ($LASTEXITCODE -ne 0) 'Stale disabled deployment accepted'
+ Put (Join-Path $build 'weasel.yaml') 'rewrite_ui: {enabled: true, debug: false}'
+-Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('filters: [simplifier]', 'filters: [lua_filter@*indexed_rewrite_tab_ui_v2]'))
++Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('filters: [lua_filter@*indexed_rewrite_pro*hint, simplifier]', 'filters: [lua_filter@*indexed_rewrite_tab_ui_v2]'))
+ & $helper verify (Split-Path $build -Parent)
+ Assert ($LASTEXITCODE -ne 0) 'Legacy deployed filter accepted'
+ Put (Join-Path $build 'wanxiang_pro.schema.yaml') ($deployed.Replace('send_sequence: "//"', 'send: Down'))
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index 4cd2bb7..a43f8b5 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -28,9 +28,17 @@ int wmain(int argc, wchar_t** argv) {
+     char stage[64] = {};
+     check(api->get_property(session, "_indexed_rewrite_stage", stage, sizeof(stage)), "Rewrite property missing");
+     check(std::string(stage) == "armed", "Tab did not arm rewrite");
++    char pinyin[256] = {};
++    check(api->get_property(session, "_indexed_rewrite_pinyin", pinyin, sizeof(pinyin)) &&
++          std::string(pinyin) == u8"jiǎng", "Original tone pronunciation was not captured");
++    RIME_STRUCT(RimeContext, context);
++    check(api->get_context(session, &context), "Context missing");
++    check(std::string(context.composition.preedit) == "jxjirzbj", "Pronunciation filter changed inline preedit");
++    api->free_context(&context);
+     api->process_key(session, '3', 0);
+     char index[64] = {};
+     check(api->get_property(session, "_indexed_rewrite_index", index, sizeof(index)) && std::string(index) == "3", "Index selection failed");
++    check(std::string(api->get_input(session)) == "jxjirzbj", "Index leaked into raw input");
+     api->process_key(session, 0xff1b, 0);
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Escape did not restore input");
+     api->destroy_session(session); api->finalize();
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index e08149d..e3f6b89 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,4 +1,4 @@
+-$ErrorActionPreference='Stop'
++﻿$ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+ New-Item -ItemType Directory -Path $shared,(Join-Path $user 'lua') -Force | Out-Null
+@@ -13,8 +13,8 @@ schema:
+ engine:
+   processors: [key_binder, speller, express_editor]
+   segmentors: [abc_segmentor, fallback_segmentor]
+-  translators: [echo_translator]
+-  filters: []
++  translators: [lua_translator@*tone_fixture]
++  filters: [lua_filter@*tone_fixture*clear_comment]
+ speller:
+   alphabet: abcdefghijklmnopqrstuvwxyz/
+ key_binder:
+@@ -28,6 +28,18 @@ $repo=Split-Path $PSScriptRoot -Parent
+ & (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
+ if ($LASTEXITCODE) { throw 'Merge failed' }
+ Copy-Item (Join-Path $stage '*.yaml') $user
++[IO.File]::WriteAllText((Join-Path $user 'lua/tone_fixture.lua'), @'
++local M = {}
++M.func = function(input, seg)
++  local cand = Candidate("test", seg.start, seg._end, "测试", "jiǎng;ab")
++  cand.preedit = input
++  yield(cand)
++end
++M.clear_comment = {func = function(input)
++  for cand in input:iter() do cand.comment = ""; yield(cand) end
++end}
++return M
++'@, $utf8)
+ Copy-Item (Join-Path $repo 'rime/lua/indexed_rewrite_pro.lua') (Join-Path $user 'lua')
+ & (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user
+ if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
+diff --git a/test/installer_transaction_test.ps1 b/test/installer_transaction_test.ps1
+index 7a2036f..bd40685 100644
+--- a/test/installer_transaction_test.ps1
++++ b/test/installer_transaction_test.ps1
+@@ -1,3 +1,4 @@
++if ($PSVersionTable.PSEdition -eq 'Desktop') { Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') }
+ # Exercise the actual transaction and catch blocks, mocking only OS-facing operations.
+ $ErrorActionPreference = 'Stop'
+ $tokens=$null; $errors=$null
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 0d486f2..48ab413 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -22,19 +22,21 @@ weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
+   parser.Feed(L"ctx.rewrite.input=jxjirzbj");
+   parser.Feed(L"ctx.rewrite.index=" + index);
+   parser.Feed(L"ctx.rewrite.replacement=" + replacement);
++  parser.Feed(L"ctx.rewrite.pinyin=jiǎng|jī|rén|běi");
+   return ctx;
+ }
+ 
+ int main() {
+   auto armed = snapshot(L"armed", L"");
+   auto indexed = snapshot(L"index", L"3");
++  assert(indexed.rewrite.Units()[2].text == L"rén");
+   assert(armed.preedit == indexed.preedit && armed != indexed);
+   assert(indexed.rewrite.Units()[2].active);
+   auto replaced = snapshot(L"index_replace", L"3", L"jm");
+   assert(replaced.preedit == armed.preedit);
+-  assert(replaced.rewrite.Units()[2].text == L"jm³");
+-  assert(snapshot(L"index", L"12").rewrite.Units().back().text == L"¹²");
+-  assert(snapshot(L"index", L"1").rewrite.Units().back().text == L"¹");
++  assert(replaced.rewrite.Units()[2].text == L"rén");
++  assert(snapshot(L"index", L"12").rewrite.Units().back().text == L"12");
++  assert(snapshot(L"index", L"1").rewrite.Units().back().text == L"1");
+   auto exited = snapshot(L"", L"");
+   assert(!exited.rewrite.active());
+   weasel::UI ui;
+@@ -70,6 +72,13 @@ int main() {
+       assert(!layout->IsInlinePreedit());
+       auto measured = weasel::MeasureRewrite(*layout, indexed.rewrite, dwr);
+       assert(measured.cells.size() == 5);
++      assert(dwr->pRewriteTextFormat->GetFontSize() < dwr->pPreeditTextFormat->GetFontSize());
++      for (const auto& cell : measured.cells) if (!cell.unit.label.empty()) {
++        if (mode == 2) assert(cell.labelBack.top > cell.text.bottom);
++        else assert(cell.labelBack.left > cell.text.right);
++        assert(cell.label.left > cell.labelBack.left);
++        assert(cell.labelBack.right <= cell.back.right);
++      }
+       assert(layout->GetPreeditRect().Width() >= measured.size.cx);
+       assert(layout->GetPreeditRect().Height() >= measured.size.cy);
+       for (size_t i = 0; i < measured.cells.size(); ++i) {
+diff --git a/test/rewrite_state_test.cpp b/test/rewrite_state_test.cpp
+index c9fc6c0..7f8cadf 100644
+--- a/test/rewrite_state_test.cpp
++++ b/test/rewrite_state_test.cpp
+@@ -9,35 +9,36 @@ int main() {
+   r.original = r.input = L"jxjirzbj";
+   r.ranges = L"0-2,2-4,4-6,6-8";
+   auto u = r.Units();
+-  assert(u.size() == 4 && u[0].active && u[0].text == L"jx¹");
++  assert(u.size() == 4 && u[0].active && u[0].text == L"jx" && u[0].label == L"¹");
+   const auto original = r;
+   r.stage = L"index";
+   r.index = L"3";
+   u = r.Units();
+   assert(!(r == original) && r.input == original.input);
+   assert(u.size() == 5 && u[2].active && !u[0].active);
+-  assert(u[4].badge && u[4].text == L"³");
++  assert(u[4].badge && u[4].text == L"3");
+   r.stage = L"index_replace";
+   r.replacement = L"jm";
+   u = r.Units();
+-  assert(u[2].text == L"jm³" && u[4].text == L"³");
++  assert(u[2].text == L"jm" && u[4].text == L"3jm");
+   r.replacement = L"j";
+-  assert(r.Units()[2].text == L"j³");
++  assert(r.Units()[2].text == L"j");
+   r.stage = L"index";
++  r.replacement.clear();
+   r.index = L"12";
+-  assert(r.Units().back().text == L"¹²");
++  assert(r.Units().back().text == L"12");
+   for (auto cell : r.Units()) assert(!cell.active);
+   r.index = L"1";
+-  assert(r.Units()[0].active && r.Units().back().text == L"¹");
++  assert(r.Units()[0].active && r.Units().back().text == L"1");
+   r.index.clear();
+   assert(r.Units().size() == 4);
+   r.stage = L"head_replace";
+   r.replacement = L"jmj";
+   r.input = L"jmjirzbj";
+-  assert(r.Units()[0].text == L"jm¹" && r.Units()[1].active);
++  assert(r.Units()[0].text == L"jm" && r.Units()[1].active);
+   r = original;
+   r.ranges = L"0-3,3-8";
+-  assert(r.Units().size() == 2 && r.Units()[0].text == L"jxj¹");
++  assert(r.Units().size() == 2 && r.Units()[0].text == L"jxj");
+   for (auto bad : {L"", L"0-2,", L"0-99", L"2-1", L"0-3,2-4", L"0-x",
+                    L"99999999999999-2"}) {
+     r.ranges = bad;
+@@ -50,6 +51,15 @@ int main() {
+   r.original = L"中文";
+   assert(!r.active());
+   r = original;
++  r.pinyin = L"jiǎng|jī|rén|běi";
++  assert(r.Units()[0].text == L"jiǎng" && r.Units()[3].label == L"⁴");
++  r.stage = L"index_replace"; r.index = L"3"; r.replacement = L"jm";
++  assert(r.Units()[2].text == L"rén" && r.Units().back().text == L"3jm");
++  r.pinyin = L"wrong|count";
++  assert(r.Units()[2].text == L"jm");
++  r.pinyin = L"汉字|jī|rén|běi";
++  assert(r.Units()[0].text == L"jx");
++  r = original;
+   r.clear();
+   assert(!r.active() && r.original.empty());
+   std::cout << "RewriteState tests passed\n";
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index a12e14f..b74d98e 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -10,6 +10,7 @@
+ 
+ namespace fs = std::filesystem;
+ const std::string processor = "lua_processor@*indexed_rewrite_pro";
++const std::string hint = "lua_filter@*indexed_rewrite_pro*hint";
+ const std::string legacy = "lua_filter@*indexed_rewrite_tab_ui_v2";
+ void require(bool ok, const std::string& message) {
+   if (!ok) throw std::runtime_error(message);
+@@ -85,6 +86,11 @@ void prepare(const fs::path& user, const fs::path& stage) {
+     u["rewrite_ui"].remove("enabled");
+     u["rewrite_ui"].remove("debug");
+   }
++  // Remove stale inline trial settings when restoring the floating UI.
++  for (const auto& key : {"display", "inline_raw_input", "inline_labels"}) {
++    if (u["rewrite_ui"]) u["rewrite_ui"].remove(key);
++    u.remove(std::string("rewrite_ui/") + key);
++  }
+   u["rewrite_ui/enabled"] = true;
+   u["rewrite_ui/debug"] = false;
+ 
+@@ -119,6 +125,29 @@ void prepare(const fs::path& user, const fs::path& stage) {
+     p.remove("engine/processors/@before 0");
+   } else p["engine/processors/@before 0"] = processor;
+ 
++  // Prepend the read-only pronunciation filter before Wanxiang clears comments.
++  YAML::Node filters;
++  int filterLists = 0;
++  if (p["engine/filters"]) { filters.reset(p["engine/filters"]); ++filterLists; }
++  if (p["engine"] && p["engine"]["filters"]) {
++    filters.reset(p["engine"]["filters"]); ++filterLists;
++  }
++  require(filterLists < 2, "Multiple filter lists require manual reconciliation");
++  for (auto item : p) {
++    const auto key = item.first.Scalar();
++    if (key == "engine/filters/@before 0")
++      require(key == "engine/filters/@before 0" && scalar(item.second, hint),
++              "Conflicting filter patch: " + key);
++  }
++  if (filterLists) {
++    require(filters.IsSequence(), "filters must be a list");
++    auto mergedFilters = YAML::Node(YAML::NodeType::Sequence);
++    mergedFilters.push_back(hint);
++    for (auto item : filters) if (!scalar(item, hint)) mergedFilters.push_back(YAML::Clone(item));
++    filters = mergedFilters;
++    p.remove("engine/filters/@before 0");
++  } else p["engine/filters/@before 0"] = hint;
++
+   YAML::Node bindings;
+   int bindingLists = 0;
+   for (const auto& key : {"key_binder/bindings", "key_binder/bindings/+"}) {
+@@ -160,6 +189,7 @@ void verify(const fs::path& user) {
+   auto procs = schema["engine"]["processors"];
+   require(procs.IsSequence() && procs.size() && scalar(procs[0], processor), "Rewrite processor is not first in deployed schema");
+   auto filters = schema["engine"]["filters"];
++  require(filters.IsSequence() && filters.size() && scalar(filters[0], hint), "Pronunciation filter is not first in deployed schema");
+   if (filters.IsSequence()) for (auto f : filters) require(!scalar(f, legacy), "Obsolete Lua filter is still deployed");
+   auto bindings = schema["key_binder"]["bindings"];
+   require(bindings.IsSequence(), "Deployed bindings missing");
+-- 
+2.53.0.windows.2
+
