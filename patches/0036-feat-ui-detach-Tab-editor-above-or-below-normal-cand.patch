@@ -1,0 +1,925 @@
+From 257193ff2f5331c022835c6affbdaea45cf5a331 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 22:14:41 +0800
+Subject: [PATCH 36/36] feat(ui): detach Tab editor above or below normal
+ candidate popup
+
+---
+ INSTALL-PATCH.md                 |   9 +-
+ Install-Binaries.ps1             |   2 +-
+ WeaselUI/DetachedRewriteLayout.h |  57 +++++
+ WeaselUI/StableRewriteLayout.h   | 115 ---------
+ WeaselUI/WeaselPanel.cpp         | 121 ++++++----
+ WeaselUI/WeaselPanel.h           |  20 +-
+ rewrite-build.txt                |   4 +-
+ test/rewrite_pipeline_test.cpp   | 393 +++++++++++++++++--------------
+ 8 files changed, 364 insertions(+), 357 deletions(-)
+ create mode 100644 WeaselUI/DetachedRewriteLayout.h
+ delete mode 100644 WeaselUI/StableRewriteLayout.h
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index e230e9f..0d4b215 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -7,12 +7,13 @@
+ 皮肤定义及详细说明见 `skins/azure_pill.yaml` 和 `skins/README.md`。
+ 
+ 运行 `Apply-Patch.cmd`。本包恢复普通行内输入，不再向输入框写入音节编号或额外高亮。
+-Tab 编辑时，候选窗口显示万象词典提供的全拼声调；编号紧随音节，以独立圆角底色包裹。
++Tab 编辑时，独立编辑框显示万象词典提供的全拼声调；编号紧随音节，以独立圆角底色包裹。
+ 悬浮编码字号为候选字号的 60%（至少 8pt）；编号左间距 4px，内边距 3×1px，圆角 4px，均按 DPI 缩放。
+ 输入序号及替换字母显示在整串拼音最后。拼音固定为进入 Tab 时所选候选的读音。
+-进入 Tab 不新增一行：编辑区置于候选旁边，保留进入前的窗口高度。
+-预留末尾编辑区域，长拼音、长替换串及候选在各自固定区域滚动，不因输入而增高。
+-进入时可向右扩展一次宽度，受屏幕工作区限制；随后同一编辑会话保持尺寸和位置，换行或跨屏时重新定位。
++Tab 编码使用独立悬浮编辑框，不再塞入候选框；候选使用普通布局，保留皮肤圆角、内边距及候选高度。
++两个框左对齐：候选在行内编码上方时，编辑框放在候选上方；候选在行内编码下方时，编辑框放在候选下方。
++编辑框预留末尾输入区域，长拼音和长替换串在固定单行内滚动；退出 Tab 或候选窗隐藏时编辑框也隐藏。
++屏幕边缘会整体调整两个框的位置，保持左右对齐和上下顺序，不让编辑框跑出屏幕。
+ 没有词典拼音、无法与音节范围对应时，回退到原始编码，避免标错声调或索引。
+ 安装器会移除上一版 `rewrite_ui/display`、`inline_raw_input`、`inline_labels` 试验设置。
+ 安装后完全退出并重新打开测试应用（包括后台进程）；仍未刷新时再注销登录或重启。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 8edb801..f42eec9 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -137,7 +137,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-floating-tone-preview-20260930; profile: $profileName"
++  Write-Host "Build: rewrite-ui-detached-editor-20260930; profile: $profileName"
+   Write-Host 'Program installer: revision 5 (persistent administrator diagnostics)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/WeaselUI/DetachedRewriteLayout.h b/WeaselUI/DetachedRewriteLayout.h
+new file mode 100644
+index 0000000..38cf151
+--- /dev/null
++++ b/WeaselUI/DetachedRewriteLayout.h
+@@ -0,0 +1,57 @@
++#pragma once
++#include "HorizontalLayout.h"
++#include "RewriteLayout.h"
++
++namespace weasel {
++// An independent, single-line edit window. Candidate geometry is untouched.
++class DetachedRewriteLayout : public HorizontalLayout {
++ public:
++  using HorizontalLayout::HorizontalLayout;
++  void DoLayout(CDCHandle, PDWR dwr) override {
++    auto original = _context.rewrite;
++    original.stage = L"armed"; original.index.clear(); original.replacement.clear();
++    const auto measured = MeasureRewrite(*this, original, dwr, true);
++    const int reserve = (int)(90 * dwr->dpiScaleLayout);
++    const int limit = _style.max_width > 0 ? _style.max_width : (int)(1000 * dwr->dpiScaleLayout);
++    const int width = (std::min)(limit, (int)measured.size.cx + reserve + 2 * real_margin_x);
++    const int height = (std::max)(1, (int)measured.size.cy);
++    _preeditRect.SetRect(offsetX + real_margin_x, offsetY + real_margin_y,
++                        offsetX + (std::max)(real_margin_x + 1, width - real_margin_x),
++                        offsetY + real_margin_y + height);
++    _contentSize = CSize(width + 2 * offsetX, height + 2 * (offsetY + real_margin_y));
++    _contentRect.SetRect(offsetX, offsetY, _contentSize.cx - offsetX, _contentSize.cy - offsetY);
++    _auxiliaryRect.SetRectEmpty(); _statusIconRect.SetRectEmpty();
++    _prePageRect.SetRectEmpty(); _nextPageRect.SetRectEmpty();
++  }
++  bool IsInlinePreedit() const override { return false; }
++  bool IsStableRewrite() const override { return true; }
++  bool ShouldDisplayStatusIcon() const override { return false; }
++};
++
++struct DetachedRewritePosition { CRect candidate, editor; };
++// Rectangles describe visible surfaces, excluding translucent shadow padding.
++inline DetachedRewritePosition PositionDetachedRewrite(CRect candidate, CSize editor,
++                                                        CRect caret, CRect work, int gap) {
++  bool above = candidate.bottom <= caret.top ||
++      (candidate.top < caret.top && candidate.CenterPoint().y < caret.CenterPoint().y);
++  const int combined = candidate.Height() + editor.cy + gap * 2;
++  if (above && candidate.top - gap - editor.cy < work.top &&
++      work.bottom - caret.bottom >= combined) {
++    candidate.OffsetRect(0, caret.bottom + gap - candidate.top);
++    above = false;
++  } else if (!above && candidate.bottom + gap + editor.cy > work.bottom &&
++             caret.top - work.top >= combined) {
++    candidate.OffsetRect(0, caret.top - gap - candidate.bottom);
++    above = true;
++  }
++  const int top = above ? candidate.top - gap - editor.cy : candidate.bottom + gap;
++  CRect edit(candidate.left, top, candidate.left + editor.cx, top + editor.cy);
++  CRect group; group.UnionRect(candidate, edit);
++  const int dx = group.right > work.right ? work.right - group.right :
++                 group.left < work.left ? work.left - group.left : 0;
++  const int dy = group.top < work.top ? work.top - group.top :
++                 group.bottom > work.bottom ? work.bottom - group.bottom : 0;
++  candidate.OffsetRect(dx, dy); edit.OffsetRect(dx, dy);
++  return {candidate, edit};
++}
++}  // namespace weasel
+diff --git a/WeaselUI/StableRewriteLayout.h b/WeaselUI/StableRewriteLayout.h
+deleted file mode 100644
+index db10d2e..0000000
+--- a/WeaselUI/StableRewriteLayout.h
++++ /dev/null
+@@ -1,115 +0,0 @@
+-#pragma once
+-#include "HorizontalLayout.h"
+-#include "VerticalLayout.h"
+-#include "VHorizontalLayout.h"
+-#include <array>
+-#include <memory>
+-
+-namespace weasel {
+-// Put the rewrite rail beside the existing candidate area, never above it.
+-// The entry size is captured before Tab, including margins and shadow padding.
+-class StableRewriteLayout : public Layout {
+- public:
+-  StableRewriteLayout(const UIStyle& style, const Context& context,
+-                      const Status& status, PDWR dwr, CSize entry,
+-                      int workWidth)
+-      : Layout(style, context, status, dwr), normal_(context), entry_(entry),
+-        workWidth_(workWidth) {
+-    normal_.rewrite.clear();
+-    normal_.preedit.clear();
+-    auto plain = style;
+-    plain.inline_preedit = true;
+-    // Keep a single horizontal candidate strip; scroll it to the selected item.
+-    // Vertical lists retain their original orientation and scroll vertically.
+-    plain.max_width = plain.max_height = 0;
+-    if (style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT)
+-      base_.reset(new VHorizontalLayout(plain, normal_, status, dwr));
+-    else if (style.layout_type == UIStyle::LAYOUT_VERTICAL ||
+-             style.layout_type == UIStyle::LAYOUT_VERTICAL_FULLSCREEN)
+-      base_.reset(new VerticalLayout(plain, normal_, status, dwr));
+-    else base_.reset(new HorizontalLayout(plain, normal_, status, dwr));
+-  }
+-  void DoLayout(CDCHandle dc, PDWR dwr) override {
+-    const std::array<ComPtr<IDWriteTextFormat1>, 3> formats = {
+-        dwr->pTextFormat, dwr->pLabelTextFormat, dwr->pCommentTextFormat};
+-    std::array<DWRITE_WORD_WRAPPING, 3> wraps{};
+-    for (size_t i = 0; i < formats.size(); ++i) if (formats[i]) {
+-      wraps[i] = formats[i]->GetWordWrapping();
+-      formats[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+-    }
+-    base_->DoLayout(dc, dwr);
+-    for (size_t i = 0; i < formats.size(); ++i) if (formats[i])
+-      formats[i]->SetWordWrapping(wraps[i]);
+-    auto natural = base_->GetContentSize();
+-    const int scaleRail = (std::max)(48, (int)(240 * dwr->dpiScaleLayout));
+-    const int gap = (std::max)(_style.hilite_padding_x * 2,
+-                              (int)(12 * dwr->dpiScaleLayout));
+-    const int oldWidth = entry_.cx > 0 ? entry_.cx : natural.cx;
+-    const int oldHeight = entry_.cy > 0 ? entry_.cy : natural.cy;
+-    const int limit = workWidth_ > 0 ? workWidth_ : oldWidth + scaleRail + gap;
+-    size_ = CSize((std::min)(limit, oldWidth + scaleRail + gap), oldHeight);
+-    const int innerWidth = (std::max<LONG>)(2, size_.cx - 2 * (offsetX + real_margin_x));
+-    const int rail = (std::min)(scaleRail, (std::max)(1, innerWidth / 2 - gap));
+-    const int top = offsetY + real_margin_y;
+-    const int bottom = (std::max<LONG>)(top + 1, size_.cy - offsetY - real_margin_y);
+-    rail_.SetRect(offsetX + real_margin_x, top,
+-                  offsetX + real_margin_x + rail, bottom);
+-    viewport_.SetRect(rail_.right + gap, top,
+-                      (std::max)(rail_.right + gap + 1, size_.cx - offsetX - real_margin_x), bottom);
+-    dx_ = rail + gap; dy_ = 0;
+-    mark_width = base_->mark_width;
+-    mark_gap = base_->mark_gap;
+-    mark_height = base_->mark_height;
+-    if (candidates_count > 0 && id >= 0 && id < candidates_count && id < MAX_CANDIDATES_COUNT) {
+-      auto selected = base_->GetCandidateRect(id);
+-      selected.OffsetRect(dx_, 0);
+-      if (selected.Width() > viewport_.Width() || selected.left < viewport_.left)
+-        dx_ += viewport_.left - selected.left;
+-      else if (selected.right > viewport_.right) dx_ -= selected.right - viewport_.right;
+-      if (selected.Height() > viewport_.Height() || selected.top < viewport_.top)
+-        dy_ += viewport_.top - selected.top;
+-      else if (selected.bottom > viewport_.bottom) dy_ -= selected.bottom - viewport_.bottom;
+-    }
+-    content_.SetRect(offsetX, offsetY, size_.cx - offsetX, size_.cy - offsetY);
+-  }
+-  bool IsStableRewrite() const override { return true; }
+-  bool IsInlinePreedit() const override { return false; }
+-  CSize GetContentSize() const override { return size_; }
+-  CRect GetPreeditRect() const override { return rail_; }
+-  CRect GetContentRect() override { return content_; }
+-  CRect GetCandidateViewport() override { return viewport_; }
+-  CRect GetCandidateRect(int i) const override { return clipped(base_->GetCandidateRect(i)); }
+-  CRect GetHighlightRect() const override { return clipped(base_->GetHighlightRect()); }
+-  CRect GetCandidateLabelRect(int i) const override { return shifted(base_->GetCandidateLabelRect(i)); }
+-  CRect GetCandidateTextRect(int i) const override { return shifted(base_->GetCandidateTextRect(i)); }
+-  CRect GetCandidateCommentRect(int i) const override { return shifted(base_->GetCandidateCommentRect(i)); }
+-  CRect GetAuxiliaryRect() const override { return clipped(base_->GetAuxiliaryRect()); }
+-  CRect GetStatusIconRect() const override { return clipped(base_->GetStatusIconRect()); }
+-  CRect GetPrepageRect() override { return clipped(base_->GetPrepageRect()); }
+-  CRect GetNextpageRect() override { return clipped(base_->GetNextpageRect()); }
+-  bool ShouldDisplayStatusIcon() const override { return base_->ShouldDisplayStatusIcon(); }
+-  IsToRoundStruct GetRoundInfo(int i) override { return base_->GetRoundInfo(i); }
+-  IsToRoundStruct GetTextRoundInfo() override { return base_->GetTextRoundInfo(); }
+-  TextRange GetPreeditRange() override { return {}; }
+-  CSize GetBeforeSize() override { return {}; }
+-  CSize GetHilitedSize() override { return {}; }
+-  CSize GetAfterSize() override { return {}; }
+-  std::wstring GetLabelText(const std::vector<Text>& labels, int i, const wchar_t* format) const override {
+-    return base_->GetLabelText(labels, i, format);
+-  }
+-  void GetTextSizeDW(const std::wstring& text, size_t count,
+-                    ComPtr<IDWriteTextFormat1>& format, PDWR dwr, LPSIZE size) const override {
+-    base_->GetTextSizeDW(text, count, format, dwr, size);
+-  }
+- private:
+-  CRect shifted(CRect rc) const { rc.OffsetRect(dx_, dy_); return rc; }
+-  CRect clipped(CRect rc) const {
+-    rc = shifted(rc); CRect result; result.IntersectRect(rc, viewport_); return result;
+-  }
+-  Context normal_;
+-  std::unique_ptr<Layout> base_;
+-  CSize entry_, size_;
+-  int workWidth_, dx_ = 0, dy_ = 0;
+-  CRect rail_, viewport_, content_;
+-};
+-}  // namespace weasel
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 3d0331c..bd826a3 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -12,7 +12,7 @@
+ #include "HorizontalLayout.h"
+ #include "FullScreenLayout.h"
+ #include "VHorizontalLayout.h"
+-#include "StableRewriteLayout.h"
++#include "DetachedRewriteLayout.h"
+ #include "CandidateTextColors.h"
+ 
+ // for IDI_ZH, IDI_EN
+@@ -53,9 +53,11 @@ static inline void ReconfigRoundInfo(IsToRoundStruct& rd,
+   }
+ }
+ 
+-WeaselPanel::WeaselPanel(weasel::UI& ui)
++WeaselPanel::WeaselPanel(weasel::UI& ui, bool editOnly)
+     : m_layout(NULL),
++      m_sourceCtx(ui.ctx()),
+       m_ctx(ui.ctx()),
++      m_editOnly(editOnly),
+       m_octx(ui.octx()),
+       m_status(ui.status()),
+       m_in_server(ui.InServer()),
+@@ -115,13 +117,8 @@ void WeaselPanel::_CreateLayout() {
+     delete m_layout;
+ 
+   Layout* layout = NULL;
+-  if (m_rewriteLocked && m_ctx.rewrite.active()) {
+-    MONITORINFO info = {sizeof(MONITORINFO)};
+-    const auto monitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
+-    const int available = GetMonitorInfo(monitor, &info)
+-        ? (std::max<LONG>)(1, info.rcWork.right - m_rewriteAnchor.x) : 0;
+-    m_layout = new StableRewriteLayout(m_style, m_ctx, m_status, pDWR,
+-                                      m_rewriteEntrySize, available);
++  if (m_editOnly) {
++    m_layout = new DetachedRewriteLayout(m_style, m_ctx, m_status, pDWR);
+     return;
+   }
+   if (m_style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT) {
+@@ -145,18 +142,8 @@ void WeaselPanel::_CreateLayout() {
+ 
+ // 更新界面
+ void WeaselPanel::Refresh() {
+-  const bool editing = m_status.composing && m_ctx.rewrite.active();
+-  if (editing && (!m_rewriteLocked || m_rewriteOriginal != m_ctx.rewrite.original)) {
+-    m_rewriteEntrySize = m_layout ? m_layout->GetContentSize() : CSize(0, 0);
+-    CRect window; GetWindowRect(&window);
+-    m_rewriteAnchor = window.TopLeft();
+-    m_rewriteOriginal = m_ctx.rewrite.original;
+-    m_rewriteDpi = dpi;
+-    m_rewriteLocked = true;
+-  } else if (!editing) {
+-    m_rewriteLocked = false;
+-    m_rewriteOriginal.clear();
+-  }
++  m_ctx = m_sourceCtx;
++  if (!m_editOnly) m_ctx.rewrite.clear();
+   bool should_show_icon =
+       (m_status.ascii_mode || !m_status.composing || !m_ctx.aux.empty());
+   m_candidateCount = min(m_ctx.cinfo.candies.size(), MAX_CANDIDATES_COUNT);
+@@ -190,11 +177,6 @@ void WeaselPanel::Refresh() {
+   // inline_no_candidates
+   if (!hide_candidates || inline_no_candidates) {
+     _InitFontRes();
+-    if (m_rewriteLocked && dpi != m_rewriteDpi) {
+-      m_rewriteEntrySize.cx = MulDiv(m_rewriteEntrySize.cx, dpi, m_rewriteDpi);
+-      m_rewriteEntrySize.cy = MulDiv(m_rewriteEntrySize.cy, dpi, m_rewriteDpi);
+-      m_rewriteDpi = dpi;
+-    }
+     _CreateLayout();
+ 
+     CDCHandle dc = GetDC();
+@@ -207,6 +189,7 @@ void WeaselPanel::Refresh() {
+       RedrawWindow();
+     }
+   }
++  _UpdateRewriteWindow();
+ }
+ 
+ void WeaselPanel::_InitFontRes(bool forced) {
+@@ -1236,8 +1219,7 @@ LRESULT WeaselPanel::OnDestroy(UINT uMsg,
+   m_hoverIndex = -1;
+   m_lastMousePos = {-1, -1};
+   m_sticky = false;
+-  m_rewriteLocked = false;
+-  m_rewriteOriginal.clear();
++  if (m_editPanel && m_editPanel->IsWindow()) m_editPanel->DestroyWindow();
+   delete m_layout;
+   m_layout = NULL;
+   return 0;
+@@ -1254,17 +1236,6 @@ LRESULT WeaselPanel::OnDpiChanged(UINT uMsg,
+ void WeaselPanel::MoveTo(RECT const& rc) {
+   if (!m_layout)
+     return;  // avoid handling nullptr in _RepositionWindow
+-  if (m_rewriteLocked && m_layout->IsStableRewrite()) {
+-    const bool monitorChanged = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST) != m_hMonitor;
+-    if ((!m_lastCaretRect.IsRectEmpty() && abs(rc.top - m_lastCaretRect.top) > 6) || monitorChanged) {
+-      m_rewriteAnchor.Offset(rc.left - m_lastCaretRect.left, rc.top - m_lastCaretRect.top);
+-      m_inputPos = rc; m_inputPos.OffsetRect(0, 6);
+-      Refresh();
+-    }
+-    m_lastCaretRect = rc;
+-    _RepositionWindow();
+-    return;
+-  }
+   m_lastCaretRect = rc;
+   m_redraw_by_monitor_change = false;
+   // The conditions for resetting the sticky state:
+@@ -1332,13 +1303,7 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
+   GetWindowRect(&rcWindow);
+   int width = (rcWindow.right - rcWindow.left);
+   int height = (rcWindow.bottom - rcWindow.top);
+-  if (m_rewriteLocked && m_layout->IsStableRewrite()) {
+-    const int x = (std::max)(rcWorkArea.left, (std::min)(m_rewriteAnchor.x, rcWorkArea.right - width));
+-    const int y = (std::max)(rcWorkArea.top, (std::min)(m_rewriteAnchor.y, rcWorkArea.bottom - height));
+-    m_rewriteAnchor = CPoint(x, y); m_istorepos = false;
+-    SetWindowPos(HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+-    return;
+-  }
++  if (m_editOnly) return;  // The owning candidate window positions this window.
+   // keep panel visible
+   rcWorkArea.right -= width;
+   rcWorkArea.bottom -= height;
+@@ -1390,6 +1355,70 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
+   m_inputPos.bottom = y;
+   SetWindowPos(HWND_TOPMOST, x, y, 0, 0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
++  _UpdateRewriteWindow();
++}
++
++LRESULT WeaselPanel::OnShowWindow(UINT, WPARAM visible, LPARAM, BOOL& handled) {
++  handled = FALSE;
++  if (m_editOnly) return 0;
++  if (visible) _UpdateRewriteWindow();
++  if (m_editPanel && m_editPanel->IsWindow())
++    m_editPanel->ShowWindow(visible && m_sourceCtx.rewrite.active() &&
++        m_status.composing ? SW_SHOWNA : SW_HIDE);
++  return 0;
++}
++
++void WeaselPanel::_UpdateRewriteWindow() {
++  if (m_editOnly || !IsWindow() || !m_layout) return;
++  if (!m_status.composing || !m_sourceCtx.rewrite.active()) {
++    m_lastCandidateSurface.SetRectEmpty();
++    if (m_editPanel && m_editPanel->IsWindow()) m_editPanel->ShowWindow(SW_HIDE);
++    return;
++  }
++  if (!m_editUI) m_editUI.reset(new weasel::UI());
++  m_editUI->style() = m_style;
++  auto& style = m_editUI->style();
++  style.layout_type = UIStyle::LAYOUT_HORIZONTAL;
++  style.inline_preedit = false;
++  style.vertical_text_with_wrap = false;
++  style.min_width = style.min_height = style.max_height = 0;
++  MONITORINFO monitor = {sizeof(MONITORINFO)};
++  GetMonitorInfo(m_hMonitor, &monitor);
++  const int available = (std::max)(80, (int)(monitor.rcWork.right - monitor.rcWork.left) - 2 * m_layout->offsetX);
++  style.max_width = (int)(available / dpiScaleLayout);
++  m_editUI->status() = m_status;
++  m_editUI->ctx() = m_sourceCtx;
++  m_editUI->ctx().cinfo.clear(); m_editUI->ctx().aux.clear();
++  if (!m_editPanel) m_editPanel.reset(new WeaselPanel(*m_editUI, true));
++  if (!m_editPanel->IsWindow()) {
++    m_editPanel->Create(m_hWnd);
++    m_editPanel->ModifyStyleEx(0, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
++  }
++  m_editPanel->m_inputPos = m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect;
++  m_editPanel->Refresh();
++  CRect candidate; GetWindowRect(&candidate);
++  CRect visible = m_layout->GetContentRect(); visible.OffsetRect(candidate.TopLeft());
++  if (m_candidateCount) m_lastCandidateSurface = visible;
++  else if (!m_lastCandidateSurface.IsRectEmpty()) visible = m_lastCandidateSurface;
++  const auto childContent = m_editPanel->m_layout->GetContentRect();
++  CRect work = monitor.rcWork;
++  work.DeflateRect((std::max)(m_layout->offsetX, m_editPanel->m_layout->offsetX),
++                   (std::max)(m_layout->offsetY, m_editPanel->m_layout->offsetY));
++  const auto placement = PositionDetachedRewrite(visible, childContent.Size(),
++      m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect, work, DPI_SCALE(6));
++  const auto caret = m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect;
++  m_sticky = placement.candidate.bottom <= caret.top;
++  const bool reverse = m_sticky && m_style.vertical_auto_reverse &&
++                       m_style.layout_type == UIStyle::LAYOUT_VERTICAL;
++  const bool repaint = reverse != m_istorepos;
++  m_istorepos = reverse;
++  const CPoint delta = placement.candidate.TopLeft() - visible.TopLeft();
++  if (m_candidateCount) SetWindowPos(HWND_TOPMOST, candidate.left + delta.x, candidate.top + delta.y, 0, 0,
++                                    SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
++  m_editPanel->SetWindowPos(HWND_TOPMOST, placement.editor.left - childContent.left,
++      placement.editor.top - childContent.top, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
++  m_editPanel->ShowWindow(IsWindowVisible() ? SW_SHOWNA : SW_HIDE);
++  if (repaint && m_candidateCount) RedrawWindow();
+ }
+ 
+ void WeaselPanel::_TextOut(const CRect& rc,
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 9f4af52..3cd6869 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -29,6 +29,7 @@ class WeaselPanel
+   MESSAGE_HANDLER(WM_CREATE, OnCreate)
+   MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+   MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
++  MESSAGE_HANDLER(WM_SHOWWINDOW, OnShowWindow)
+   MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
+   MESSAGE_HANDLER(WM_LBUTTONUP, OnLeftClickedUp)
+   MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLeftClickedDown)
+@@ -41,6 +42,7 @@ class WeaselPanel
+   LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+   LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+   LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
++  LRESULT OnShowWindow(UINT, WPARAM, LPARAM, BOOL&);
+   LRESULT OnMouseActivate(UINT uMsg,
+                           WPARAM wParam,
+                           LPARAM lParam,
+@@ -57,7 +59,7 @@ class WeaselPanel
+   LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+   LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+ 
+-  WeaselPanel(weasel::UI& ui);
++  WeaselPanel(weasel::UI& ui, bool editOnly = false);
+   ~WeaselPanel();
+ 
+   void MoveTo(RECT const& rc);
+@@ -65,6 +67,7 @@ class WeaselPanel
+   void DoPaint(CDCHandle dc);
+   bool GetIsReposition() { return m_istorepos; }
+   void RedrawWindow();
++  HWND RewriteWindow() const { return m_editPanel ? m_editPanel->m_hWnd : nullptr; }
+ 
+   static VOID CALLBACK OnTimer(_In_ HWND hwnd,
+                                _In_ UINT uMsg,
+@@ -85,6 +88,7 @@ class WeaselPanel
+   void _CreateLayout();
+   void _ResizeWindow();
+   void _RepositionWindow(const bool& adj = false);
++  void _UpdateRewriteWindow();
+   bool _DrawPreedit(const Text& text, CDCHandle dc, const CRect& rc);
+   bool _DrawRewrite(CDCHandle dc, const CRect& rc, bool background);
+   bool _DrawPreeditBack(const Text& text, CDCHandle dc, const CRect& rc);
+@@ -106,7 +110,8 @@ class WeaselPanel
+   void _LayerUpdate(const CRect& rc, CDCHandle dc);
+ 
+   weasel::Layout* m_layout;
+-  weasel::Context& m_ctx;
++  const weasel::Context& m_sourceCtx;
++  weasel::Context m_ctx;
+   weasel::Context& m_octx;
+   weasel::Status& m_status;
+   weasel::UIStyle& m_style;
+@@ -115,16 +120,15 @@ class WeaselPanel
+ 
+   CRect m_inputPos;
+   CRect m_lastCaretRect;
+-  CSize m_rewriteEntrySize;
+-  CPoint m_rewriteAnchor;
+-  bool m_rewriteLocked = false;
+-  std::wstring m_rewriteOriginal;
+-  UINT m_rewriteDpi = 96;
++  CRect m_lastCandidateSurface;
++  const bool m_editOnly;
++  std::unique_ptr<weasel::UI> m_editUI;
++  std::unique_ptr<WeaselPanel> m_editPanel;
+   int m_offsetys[MAX_CANDIDATES_COUNT];  // offset y for candidates when
+                                          // vertical layout over bottom
+   int m_offsety_preedit;
+   int m_offsety_aux;
+-  bool m_istorepos;
++  bool m_istorepos = false;
+ 
+   CIcon m_iconDisabled;
+   CIcon m_iconEnabled;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 4bebe04..00e45a3 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,5 +1,5 @@
+-Build-ID: rewrite-ui-floating-tone-preview-20260930
++Build-ID: rewrite-ui-detached-editor-20260930
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+-Features: floating dictionary tone pinyin + rounded superscript badges; fixed edit height; original inline composition
++Features: detached tone-pinyin editor above/below candidates; preserved skin corners; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+ This file identifies the installed package. Check SHA256SUMS.txt to verify binaries.
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 8a16202..f5a1af2 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -1,181 +1,212 @@
+-#include "../WeaselUI/stdafx.h"
+-#include <ResponseParser.h>
+-#include <WeaselUI.h>
+-#include "../WeaselUI/VerticalLayout.h"
+-#include "../WeaselUI/HorizontalLayout.h"
+-#include "../WeaselUI/VHorizontalLayout.h"
+-#include "../WeaselUI/RewriteLayout.h"
+-#include "../WeaselUI/StableRewriteLayout.h"
+-#include "../WeaselUI/WeaselPanel.h"
+-#include "../WeaselUI/CandidateTextColors.h"
+-#include <cassert>
+-#include <iostream>
+-
+-CAppModule _Module;
+-
+-weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
+-                         const std::wstring& replacement = L"") {
+-  weasel::Context ctx;
+-  weasel::ResponseParser parser(nullptr, &ctx);
+-  parser.Feed(L"action=ctx");
+-  parser.Feed(L"ctx.preedit=jx ji rz bj");
+-  parser.Feed(L"ctx.rewrite.stage=" + stage);
+-  parser.Feed(L"ctx.rewrite.original=jxjirzbj");
+-  parser.Feed(L"ctx.rewrite.ranges=0-2,2-4,4-6,6-8");
+-  parser.Feed(L"ctx.rewrite.input=jxjirzbj");
+-  parser.Feed(L"ctx.rewrite.index=" + index);
+-  parser.Feed(L"ctx.rewrite.replacement=" + replacement);
+-  parser.Feed(L"ctx.rewrite.pinyin=jiǎng|jī|rén|běi");
+-  return ctx;
+-}
+-
+-int main() {
+-  CoInitialize(nullptr);
+-  _Module.Init(nullptr, GetModuleHandle(nullptr));
+-  auto armed = snapshot(L"armed", L"");
+-  auto indexed = snapshot(L"index", L"3");
+-  assert(indexed.rewrite.Units()[2].text == L"rén");
+-  assert(armed.preedit == indexed.preedit && armed != indexed);
+-  assert(indexed.rewrite.Units()[2].active);
+-  auto replaced = snapshot(L"index_replace", L"3", L"jm");
+-  assert(replaced.preedit == armed.preedit);
+-  assert(replaced.rewrite.Units()[2].text == L"rén");
+-  assert(snapshot(L"index", L"12").rewrite.Units().back().text == L"12");
+-  assert(snapshot(L"index", L"1").rewrite.Units().back().text == L"1");
+-  auto exited = snapshot(L"", L"");
+-  assert(!exited.rewrite.active());
+-  weasel::UI ui;
+-  weasel::Status status;
+-  status.composing = true;
+-  ui.Update(armed, status);
+-  ui.Update(indexed, status);
+-  assert(ui.ctx().rewrite.index == L"3");
+-  ui.Update(exited, status);
+-  assert(!ui.ctx().rewrite.active());
+-
+-  weasel::UIStyle style;
+-  style.font_face = style.label_font_face = style.comment_font_face = L"Microsoft YaHei";
+-  style.font_point = 16;
+-  style.label_font_point = style.comment_font_point = 12;
+-  style.hilite_padding_x = 5; style.hilite_padding_y = 2;
+-  style.hilite_spacing = 8; style.spacing = 8;
+-  style.margin_x = style.margin_y = 10;
+-  style.inline_preedit = true;
+-  style.client_caps = weasel::INLINE_PREEDIT_CAPABLE;
+-  // Selected text stays white; secondary hover uses the readable theme accent.
+-  for (int accent : {0xff7a3614, 0xff512610, 0xff191615, 0xff293e10}) {
+-    style.candidate_text_color = accent;
+-    style.hilited_candidate_text_color = 0xffffffff;
+-    style.hilited_label_text_color = style.hilited_comment_text_color = 0xffffffff;
+-    const auto hover = weasel::GetCandidateTextColors(style, false, true);
+-    const auto selected = weasel::GetCandidateTextColors(style, true, true);
+-    assert(hover.text == accent && hover.label == accent && hover.comment == accent);
+-    assert(selected.text == (int)0xffffffff && selected.label == (int)0xffffffff);
+-  }
+-  HDC dc = CreateCompatibleDC(nullptr);
+-  for (UINT dpi : {96u, 144u, 192u}) {
+-    for (int mode = 0; mode < 3; ++mode) {
+-      style.layout_type = static_cast<weasel::UIStyle::LayoutType>(mode);
+-      style.max_width = 180;
+-      style.max_height = 180;
+-      auto dwr = std::make_shared<weasel::DirectWriteResources>(style, dpi);
+-      std::unique_ptr<weasel::Layout> layout;
+-      if (mode == 0) layout.reset(new weasel::VerticalLayout(style, indexed, status, dwr));
+-      if (mode == 1) layout.reset(new weasel::HorizontalLayout(style, indexed, status, dwr));
+-      if (mode == 2) layout.reset(new weasel::VHorizontalLayout(style, indexed, status, dwr));
+-      layout->DoLayout(dc, dwr);
+-      assert(!layout->IsInlinePreedit());
+-      auto measured = weasel::MeasureRewrite(*layout, indexed.rewrite, dwr);
+-      assert(measured.cells.size() == 5);
+-      assert(dwr->pRewriteTextFormat->GetFontSize() < dwr->pPreeditTextFormat->GetFontSize());
+-      for (const auto& cell : measured.cells) if (!cell.unit.label.empty()) {
+-        if (mode == 2) assert(cell.labelBack.top > cell.text.bottom);
+-        else assert(cell.labelBack.left > cell.text.right);
+-        assert(cell.label.left > cell.labelBack.left);
+-        assert(cell.labelBack.right <= cell.back.right);
+-      }
+-      assert(layout->GetPreeditRect().Width() >= measured.size.cx);
+-      assert(layout->GetPreeditRect().Height() >= measured.size.cy);
+-      for (size_t i = 0; i < measured.cells.size(); ++i) {
+-        for (size_t j = i + 1; j < measured.cells.size(); ++j) {
+-          RECT overlap;
+-          assert(!IntersectRect(&overlap, &measured.cells[i].back, &measured.cells[j].back));
+-        }
+-      }
+-      // Candidate size before Tab is the height budget for the whole edit session.
+-      auto normal = exited;
+-      for (int n = 0; n < 5; ++n) {
+-        normal.cinfo.candies.push_back(weasel::Text{L"测试候选文本"});
+-        normal.cinfo.comments.push_back(weasel::Text{L"注释"});
+-        normal.cinfo.labels.push_back(weasel::Text{std::to_wstring(n + 1)});
+-      }
+-      std::unique_ptr<weasel::Layout> before;
+-      if (mode == 0) before.reset(new weasel::VerticalLayout(style, normal, status, dwr));
+-      if (mode == 1) before.reset(new weasel::HorizontalLayout(style, normal, status, dwr));
+-      if (mode == 2) before.reset(new weasel::VHorizontalLayout(style, normal, status, dwr));
+-      before->DoLayout(dc, dwr);
+-      auto entrySize = before->GetContentSize();
+-      CSize locked;
+-      for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
+-        editing.cinfo = normal.cinfo;
+-        editing.cinfo.highlighted = 4;
+-        weasel::StableRewriteLayout stable(style, editing, status, dwr, entrySize, 1600);
+-        stable.DoLayout(dc, dwr);
+-        assert(stable.GetContentSize().cy == entrySize.cy);
+-        if (!locked.cx) locked = stable.GetContentSize();
+-        assert(stable.GetContentSize() == locked);
+-        assert(!stable.GetCandidateRect(4).IsRectEmpty());
+-        CRect pronunciations, tail;
+-        auto rail = weasel::MeasureStableRewrite(stable, editing.rewrite, dwr,
+-                        stable.GetPreeditRect().Size(), pronunciations, tail);
+-        assert(rail.size == stable.GetPreeditRect().Size());
+-        assert(tail.Width() > 0 && tail.Height() > 0);
+-        RECT overlap;
+-        assert(!IntersectRect(&overlap, &pronunciations, &tail));
+-      }
+-    }
+-  }
+-  DeleteDC(dc);
+-  // Exercise real HWND resizing and painting, rather than just measurement.
+-  {
+-    weasel::UI host;
+-    style.layout_type = weasel::UIStyle::LAYOUT_HORIZONTAL;
+-    style.max_width = 700;
+-    style.max_height = 0;
+-    style.back_color = 0xffffffff;
+-    style.text_color = style.candidate_text_color = 0xff333333;
+-    style.hilited_back_color = 0xfff46c28;
+-    style.hilited_text_color = style.hilited_candidate_text_color = 0xffffffff;
+-    host.style() = style;
+-    host.status() = status;
+-    auto normal = exited;
+-    for (int n = 0; n < 5; ++n) {
+-      normal.cinfo.candies.push_back(weasel::Text{L"测试候选文本"});
+-      normal.cinfo.comments.push_back(weasel::Text{L""});
+-      normal.cinfo.labels.push_back(weasel::Text{std::to_wstring(n + 1)});
+-    }
+-    host.ctx() = normal;
+-    WeaselPanel panel(host);
+-    assert(panel.Create(nullptr) != nullptr);
+-    panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
+-    CRect before; panel.GetWindowRect(&before);
+-    CRect locked;
+-    for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
+-      editing.cinfo = normal.cinfo;
+-      host.ctx() = editing;
+-      panel.Refresh(); panel.MoveTo(CRect(250, 200, 251, 224));
+-      CRect actual; panel.GetWindowRect(&actual);
+-      assert(actual.Height() == before.Height());
+-      assert(actual.top == before.top && actual.left == before.left);
+-      if (locked.IsRectEmpty()) locked = actual;
+-      assert(actual == locked);
+-    }
+-    host.ctx() = normal; panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
+-    CRect after; panel.GetWindowRect(&after);
+-    assert(after.Size() == before.Size());
+-    panel.DestroyWindow();
+-  }
+-  std::cout << "IPC, property-only UI update, exit, layout and DPI tests passed\n";
+-  _Module.Term();
+-  CoUninitialize();
+-}
++#include "../WeaselUI/stdafx.h"
++#include <ResponseParser.h>
++#include <WeaselUI.h>
++#include "../WeaselUI/VerticalLayout.h"
++#include "../WeaselUI/HorizontalLayout.h"
++#include "../WeaselUI/VHorizontalLayout.h"
++#include "../WeaselUI/RewriteLayout.h"
++#include "../WeaselUI/DetachedRewriteLayout.h"
++#include "../WeaselUI/WeaselPanel.h"
++#include "../WeaselUI/CandidateTextColors.h"
++#include <cassert>
++#include <iostream>
++
++CAppModule _Module;
++
++weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
++                         const std::wstring& replacement = L"") {
++  weasel::Context ctx;
++  weasel::ResponseParser parser(nullptr, &ctx);
++  parser.Feed(L"action=ctx");
++  parser.Feed(L"ctx.preedit=jx ji rz bj");
++  parser.Feed(L"ctx.rewrite.stage=" + stage);
++  parser.Feed(L"ctx.rewrite.original=jxjirzbj");
++  parser.Feed(L"ctx.rewrite.ranges=0-2,2-4,4-6,6-8");
++  parser.Feed(L"ctx.rewrite.input=jxjirzbj");
++  parser.Feed(L"ctx.rewrite.index=" + index);
++  parser.Feed(L"ctx.rewrite.replacement=" + replacement);
++  parser.Feed(L"ctx.rewrite.pinyin=jiǎng|jī|rén|běi");
++  return ctx;
++}
++
++int main() {
++  CoInitialize(nullptr);
++  _Module.Init(nullptr, GetModuleHandle(nullptr));
++  auto armed = snapshot(L"armed", L"");
++  auto indexed = snapshot(L"index", L"3");
++  assert(indexed.rewrite.Units()[2].text == L"rén");
++  assert(armed.preedit == indexed.preedit && armed != indexed);
++  assert(indexed.rewrite.Units()[2].active);
++  auto replaced = snapshot(L"index_replace", L"3", L"jm");
++  assert(replaced.preedit == armed.preedit);
++  assert(replaced.rewrite.Units()[2].text == L"rén");
++  assert(snapshot(L"index", L"12").rewrite.Units().back().text == L"12");
++  assert(snapshot(L"index", L"1").rewrite.Units().back().text == L"1");
++  auto exited = snapshot(L"", L"");
++  assert(!exited.rewrite.active());
++  weasel::UI ui;
++  weasel::Status status;
++  status.composing = true;
++  ui.Update(armed, status);
++  ui.Update(indexed, status);
++  assert(ui.ctx().rewrite.index == L"3");
++  ui.Update(exited, status);
++  assert(!ui.ctx().rewrite.active());
++
++  weasel::UIStyle style;
++  style.font_face = style.label_font_face = style.comment_font_face = L"Microsoft YaHei";
++  style.font_point = 16;
++  style.label_font_point = style.comment_font_point = 12;
++  style.hilite_padding_x = 5; style.hilite_padding_y = 2;
++  style.hilite_spacing = 8; style.spacing = 8;
++  style.margin_x = style.margin_y = 10;
++  style.inline_preedit = true;
++  style.client_caps = weasel::INLINE_PREEDIT_CAPABLE;
++  // Selected text stays white; secondary hover uses the readable theme accent.
++  for (int accent : {0xff7a3614, 0xff512610, 0xff191615, 0xff293e10}) {
++    style.candidate_text_color = accent;
++    style.hilited_candidate_text_color = 0xffffffff;
++    style.hilited_label_text_color = style.hilited_comment_text_color = 0xffffffff;
++    const auto hover = weasel::GetCandidateTextColors(style, false, true);
++    const auto selected = weasel::GetCandidateTextColors(style, true, true);
++    assert(hover.text == accent && hover.label == accent && hover.comment == accent);
++    assert(selected.text == (int)0xffffffff && selected.label == (int)0xffffffff);
++  }
++  HDC dc = CreateCompatibleDC(nullptr);
++  for (UINT dpi : {96u, 144u, 192u}) {
++    for (int mode = 0; mode < 3; ++mode) {
++      style.layout_type = static_cast<weasel::UIStyle::LayoutType>(mode);
++      style.max_width = 180;
++      style.max_height = 180;
++      auto dwr = std::make_shared<weasel::DirectWriteResources>(style, dpi);
++      std::unique_ptr<weasel::Layout> layout;
++      if (mode == 0) layout.reset(new weasel::VerticalLayout(style, indexed, status, dwr));
++      if (mode == 1) layout.reset(new weasel::HorizontalLayout(style, indexed, status, dwr));
++      if (mode == 2) layout.reset(new weasel::VHorizontalLayout(style, indexed, status, dwr));
++      layout->DoLayout(dc, dwr);
++      assert(!layout->IsInlinePreedit());
++      auto measured = weasel::MeasureRewrite(*layout, indexed.rewrite, dwr);
++      assert(measured.cells.size() == 5);
++      assert(dwr->pRewriteTextFormat->GetFontSize() < dwr->pPreeditTextFormat->GetFontSize());
++      for (const auto& cell : measured.cells) if (!cell.unit.label.empty()) {
++        if (mode == 2) assert(cell.labelBack.top > cell.text.bottom);
++        else assert(cell.labelBack.left > cell.text.right);
++        assert(cell.label.left > cell.labelBack.left);
++        assert(cell.labelBack.right <= cell.back.right);
++      }
++      assert(layout->GetPreeditRect().Width() >= measured.size.cx);
++      assert(layout->GetPreeditRect().Height() >= measured.size.cy);
++      for (size_t i = 0; i < measured.cells.size(); ++i) {
++        for (size_t j = i + 1; j < measured.cells.size(); ++j) {
++          RECT overlap;
++          assert(!IntersectRect(&overlap, &measured.cells[i].back, &measured.cells[j].back));
++        }
++      }
++      auto editorStyle = style;
++      editorStyle.layout_type = weasel::UIStyle::LAYOUT_HORIZONTAL;
++      editorStyle.max_width = 500;
++      auto editorDwr = std::make_shared<weasel::DirectWriteResources>(editorStyle, dpi);
++      CSize locked(0, 0);
++      for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
++        weasel::DetachedRewriteLayout editor(editorStyle, editing, status, editorDwr);
++        editor.DoLayout(dc, editorDwr);
++        if (!locked.cx) locked = editor.GetContentSize();
++        assert(editor.GetContentSize() == locked);
++        CRect pronunciations, tail;
++        auto rail = weasel::MeasureStableRewrite(editor, editing.rewrite, editorDwr,
++                        editor.GetPreeditRect().Size(), pronunciations, tail);
++        assert(rail.size == editor.GetPreeditRect().Size());
++        assert(tail.Width() > 0 && tail.Height() > 0);
++      }
++
++    }
++  }
++  DeleteDC(dc);
++  for (bool above : {false, true}) {
++    const CRect caret(100, 400, 101, 420);
++    const CRect candidate(100, above ? 300 : 430, 600, above ? 390 : 520);
++    auto pos = weasel::PositionDetachedRewrite(candidate, CSize(600, 40), caret,
++                                                CRect(0, 0, 1920, 1080), 6);
++    assert(pos.editor.left == pos.candidate.left);
++    assert(above ? pos.editor.bottom < pos.candidate.top : pos.editor.top > pos.candidate.bottom);
++    assert(pos.candidate == candidate);
++  }
++  // Exercise real HWND resizing and painting, rather than just measurement.
++  {
++    auto top = weasel::PositionDetachedRewrite(CRect(10, 5, 210, 35), CSize(300, 40),
++                  CRect(10, 45, 11, 65), CRect(0, 0, 800, 600), 6);
++    assert(top.candidate.top > 65 && top.editor.top > top.candidate.bottom);
++    auto bottom = weasel::PositionDetachedRewrite(CRect(10, 560, 210, 590), CSize(300, 40),
++                  CRect(10, 535, 11, 555), CRect(0, 0, 800, 600), 6);
++    assert(bottom.candidate.bottom < 535 && bottom.editor.bottom < bottom.candidate.top);
++  }
++  {
++    weasel::UI host;
++    style.layout_type = weasel::UIStyle::LAYOUT_HORIZONTAL;
++    style.max_width = 700;
++    style.max_height = 0;
++    style.round_corner_ex = 16; style.round_corner = 13;
++    style.shadow_radius = 12; style.shadow_offset_y = 5;
++    style.margin_x = 14; style.margin_y = 12;
++    style.hilite_padding_x = 10; style.hilite_padding_y = 8;
++    style.back_color = 0xffffffff;
++    style.text_color = style.candidate_text_color = 0xff333333;
++    style.hilited_back_color = 0xfff46c28;
++    style.hilited_text_color = style.hilited_candidate_text_color = 0xffffffff;
++    host.style() = style;
++    host.status() = status;
++    auto normal = exited;
++    for (int n = 0; n < 5; ++n) {
++      normal.cinfo.candies.push_back(weasel::Text{L"测试候选文本"});
++      normal.cinfo.comments.push_back(weasel::Text{L""});
++      normal.cinfo.labels.push_back(weasel::Text{std::to_wstring(n + 1)});
++    }
++    host.ctx() = normal;
++    WeaselPanel panel(host);
++    assert(panel.Create(nullptr) != nullptr);
++    panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
++    CRect before; panel.GetWindowRect(&before);
++    CRect locked;
++    for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
++      editing.cinfo = normal.cinfo;
++      host.ctx() = editing;
++      panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
++      CRect actual; panel.GetWindowRect(&actual);
++      assert(actual.Size() == before.Size());
++      assert(panel.RewriteWindow() != nullptr);
++      CRect editRect; GetWindowRect(panel.RewriteWindow(), &editRect);
++      assert(editRect.left == actual.left);
++      assert(editRect.top > actual.top);
++      assert(actual.top == before.top && actual.left == before.left);
++      if (locked.IsRectEmpty()) locked = actual;
++      assert(actual == locked);
++    }
++    host.ctx() = normal; panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
++    CRect after; panel.GetWindowRect(&after);
++    assert(after.Size() == before.Size());
++    assert(!IsWindowVisible(panel.RewriteWindow()));
++    // Force normal placement above a caret near the bottom of the work area.
++    MONITORINFO monitor = {sizeof(MONITORINFO)};
++    GetMonitorInfo(MonitorFromWindow(panel.m_hWnd, MONITOR_DEFAULTTONEAREST), &monitor);
++    CRect bottomCaret(200, monitor.rcWork.bottom - 25, 201, monitor.rcWork.bottom - 5);
++    panel.MoveTo(bottomCaret);
++    auto editing = indexed; editing.cinfo = normal.cinfo;
++    host.ctx() = editing; panel.Refresh(); panel.MoveTo(bottomCaret);
++    CRect candidateAbove, editAbove;
++    panel.GetWindowRect(&candidateAbove); GetWindowRect(panel.RewriteWindow(), &editAbove);
++    assert(candidateAbove.top < bottomCaret.top);
++    assert(editAbove.top < candidateAbove.top);
++    assert(editAbove.left == candidateAbove.left);
++    panel.ShowWindow(SW_SHOWNA);
++    assert(IsWindowVisible(panel.RewriteWindow()));
++    auto empty = editing; empty.cinfo.clear(); empty.preedit.clear();
++    host.ctx() = empty; panel.Refresh();
++    assert(IsWindowVisible(panel.RewriteWindow()));
++    panel.ShowWindow(SW_HIDE);
++    assert(!IsWindowVisible(panel.RewriteWindow()));
++    panel.DestroyWindow();
++  }
++  std::cout << "IPC, property-only UI update, exit, layout and DPI tests passed\n";
++  _Module.Term();
++  CoUninitialize();
++}
+-- 
+2.53.0.windows.2
+
