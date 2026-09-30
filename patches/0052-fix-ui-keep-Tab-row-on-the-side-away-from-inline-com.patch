@@ -1,0 +1,373 @@
+From 288596ffe7ec0ef7f8d10d9dc25463880e66bc41 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 02:43:05 +0800
+Subject: [PATCH 52/52] fix(ui): keep Tab row on the side away from inline
+ composition
+
+---
+ INSTALL-PATCH.md               |   2 +-
+ Install-Binaries.ps1           |   2 +-
+ REWRITE-UI.md                  |   2 +-
+ WeaselUI/Layout.h              |   1 +
+ WeaselUI/StandardLayout.cpp    |  34 +++++++
+ WeaselUI/StandardLayout.h      | 181 +++++++++++++++++----------------
+ WeaselUI/WeaselPanel.cpp       |   3 +
+ rewrite-build.txt              |   2 +-
+ rime/skins/README.md           |   2 +-
+ test/rewrite_pipeline_test.cpp |  14 ++-
+ 10 files changed, 147 insertions(+), 96 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 530aa6d..a283dea 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
++> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+ 
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 1a401ae..912dad3 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-integrated-tab-row-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-integrated-tab-placement-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 8e4d6e3..c580f7d 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
++> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+ 
+diff --git a/WeaselUI/Layout.h b/WeaselUI/Layout.h
+index 30e2178..7433ea0 100644
+--- a/WeaselUI/Layout.h
++++ b/WeaselUI/Layout.h
+@@ -97,6 +97,7 @@ class Layout {
+                                     const wchar_t* format) const = 0;
+   virtual bool IsInlinePreedit() const = 0;
+   virtual bool IsStableRewrite() const { return false; }
++  virtual bool ArrangeRewriteRow(bool below) { return false; }
+   virtual CRect GetCandidateViewport() { return GetContentRect(); }
+   virtual bool ShouldDisplayStatusIcon() const = 0;
+   virtual void GetTextSizeDW(const std::wstring& text,
+diff --git a/WeaselUI/StandardLayout.cpp b/WeaselUI/StandardLayout.cpp
+index 50f39a8..ec8ce09 100644
+--- a/WeaselUI/StandardLayout.cpp
++++ b/WeaselUI/StandardLayout.cpp
+@@ -399,3 +399,37 @@ bool StandardLayout::ShouldDisplayStatusIcon() const {
+             _style.layout_type == UIStyle::LAYOUT_VERTICAL_FULLSCREEN) &&
+            !_context.aux.empty());
+ }
++
++// Move the measured row inside the existing body without resizing or reflowing.
++// Ordinary composition is unaffected; the Tab row occupies the far side of the caret.
++bool StandardLayout::ArrangeRewriteRow(bool below) {
++  if (!_context.rewrite.active() || candidates_count == 0 ||
++      _style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT || below == _rewriteBelow)
++    return false;
++  if (below) {
++    int first = _candidateRects[0].top, last = _candidateRects[0].bottom;
++    for (int i = 1; i < candidates_count && i < MAX_CANDIDATES_COUNT; ++i) {
++      first = (std::min)(first, (int)_candidateRects[i].top);
++      last = (std::max)(last, (int)_candidateRects[i].bottom);
++    }
++    if (!_auxiliaryRect.IsRectEmpty()) first = (std::min)(first, (int)_auxiliaryRect.top);
++    _rewriteCandidateShift = first - _preeditRect.top;
++    _rewriteTextShift = last - _preeditRect.bottom;
++  }
++  const int candidateDelta = below ? -_rewriteCandidateShift : _rewriteCandidateShift;
++  const int textDelta = below ? _rewriteTextShift : -_rewriteTextShift;
++  _preeditRect.OffsetRect(0, textDelta);
++  _prePageRect.OffsetRect(0, textDelta); _nextPageRect.OffsetRect(0, textDelta);
++  if (!_auxiliaryRect.IsRectEmpty()) _auxiliaryRect.OffsetRect(0, candidateDelta);
++  for (int i = 0; i < candidates_count && i < MAX_CANDIDATES_COUNT; ++i) {
++    _candidateRects[i].OffsetRect(0, candidateDelta);
++    _candidateLabelRects[i].OffsetRect(0, candidateDelta);
++    _candidateTextRects[i].OffsetRect(0, candidateDelta);
++    _candidateCommentRects[i].OffsetRect(0, candidateDelta);
++  }
++  _highlightRect.OffsetRect(0, candidateDelta);
++  if (!_statusIconRect.IsRectEmpty()) _statusIconRect.OffsetRect(0, textDelta);
++  // The shared body keeps its full corner radii; all highlights stay inset.
++  _rewriteBelow = below;
++  return true;
++}
+diff --git a/WeaselUI/StandardLayout.h b/WeaselUI/StandardLayout.h
+index 23eef35..8ef3b64 100644
+--- a/WeaselUI/StandardLayout.h
++++ b/WeaselUI/StandardLayout.h
+@@ -1,89 +1,92 @@
+-#pragma once
+-
+-#include "Layout.h"
+-#include <d2d1.h>
+-#include <dwrite.h>
+-#pragma comment(lib, "d2d1.lib")
+-#pragma comment(lib, "dwrite.lib")
+-
+-namespace weasel {
+-const int MAX_CANDIDATES_COUNT = 100;
+-const int STATUS_ICON_SIZE = GetSystemMetrics(SM_CXICON);
+-
+-class StandardLayout : public Layout {
+- public:
+-  StandardLayout(const UIStyle& style,
+-                 const Context& context,
+-                 const Status& status,
+-                 PDWR pDWR)
+-      : Layout(style, context, status, pDWR) {}
+-
+-  /* Layout */
+-
+-  virtual void DoLayout(CDCHandle dc, PDWR pDWR = NULL) = 0;
+-  virtual CSize GetContentSize() const { return _contentSize; }
+-  virtual CRect GetPreeditRect() const { return _preeditRect; }
+-  virtual CRect GetAuxiliaryRect() const { return _auxiliaryRect; }
+-  virtual CRect GetHighlightRect() const { return _highlightRect; }
+-  virtual CRect GetCandidateLabelRect(int id) const {
+-    return _candidateLabelRects[id];
+-  }
+-  virtual CRect GetCandidateTextRect(int id) const {
+-    return _candidateTextRects[id];
+-  }
+-  virtual CRect GetCandidateCommentRect(int id) const {
+-    return _candidateCommentRects[id];
+-  }
+-  virtual CRect GetCandidateRect(int id) const { return _candidateRects[id]; }
+-  virtual CRect GetStatusIconRect() const { return _statusIconRect; }
+-  virtual std::wstring GetLabelText(const std::vector<Text>& labels,
+-                                    int id,
+-                                    const wchar_t* format) const;
+-  virtual bool IsInlinePreedit() const;
+-  virtual bool ShouldDisplayStatusIcon() const;
+-  virtual IsToRoundStruct GetRoundInfo(int id) { return _roundInfo[id]; }
+-  virtual IsToRoundStruct GetTextRoundInfo() { return _textRoundInfo; }
+-  virtual CRect GetContentRect() { return _contentRect; }
+-  virtual CRect GetPrepageRect() { return _prePageRect; }
+-  virtual CRect GetNextpageRect() { return _nextPageRect; }
+-  virtual CSize GetBeforeSize() { return _beforesz; }
+-  virtual CSize GetHilitedSize() { return _hilitedsz; }
+-  virtual CSize GetAfterSize() { return _aftersz; }
+-  virtual weasel::TextRange GetPreeditRange() { return _range; }
+-
+-  void GetTextSizeDW(const std::wstring& text,
+-                     size_t nCount,
+-                     ComPtr<IDWriteTextFormat1>& pTextFormat,
+-                     PDWR pDWR,
+-                     LPSIZE lpSize) const;
+-
+- protected:
+-  /* Utility functions */
+-  CSize GetPreeditSize(CDCHandle dc,
+-                       const weasel::Text& text,
+-                       ComPtr<IDWriteTextFormat1> pTextFormat = NULL,
+-                       PDWR pDWR = NULL);
+-  bool _IsHighlightOverCandidateWindow(CRect& rc, CDCHandle& dc);
+-  void _PrepareRoundInfo(CDCHandle& dc);
+-
+-  void UpdateStatusIconLayout(int* width, int* height);
+-
+-  CSize _beforesz, _hilitedsz, _aftersz;
+-  weasel::TextRange _range;
+-  CSize _contentSize;
+-  CRect _preeditRect, _auxiliaryRect, _highlightRect;
+-  CRect _candidateRects[MAX_CANDIDATES_COUNT];
+-  CRect _candidateLabelRects[MAX_CANDIDATES_COUNT];
+-  CRect _candidateTextRects[MAX_CANDIDATES_COUNT];
+-  CRect _candidateCommentRects[MAX_CANDIDATES_COUNT];
+-  CRect _statusIconRect;
+-  CRect _bgRect;
+-  CRect _contentRect;
+-  IsToRoundStruct _roundInfo[MAX_CANDIDATES_COUNT];
+-  IsToRoundStruct _textRoundInfo;
+-  CRect _prePageRect;
+-  CRect _nextPageRect;
+-  const std::wstring pre = L"<";
+-  const std::wstring next = L">";
+-};
+-};  // namespace weasel
++#pragma once
++
++#include "Layout.h"
++#include <d2d1.h>
++#include <dwrite.h>
++#pragma comment(lib, "d2d1.lib")
++#pragma comment(lib, "dwrite.lib")
++
++namespace weasel {
++const int MAX_CANDIDATES_COUNT = 100;
++const int STATUS_ICON_SIZE = GetSystemMetrics(SM_CXICON);
++
++class StandardLayout : public Layout {
++ public:
++  StandardLayout(const UIStyle& style,
++                 const Context& context,
++                 const Status& status,
++                 PDWR pDWR)
++      : Layout(style, context, status, pDWR) {}
++
++  /* Layout */
++
++  virtual void DoLayout(CDCHandle dc, PDWR pDWR = NULL) = 0;
++  virtual CSize GetContentSize() const { return _contentSize; }
++  virtual CRect GetPreeditRect() const { return _preeditRect; }
++  virtual CRect GetAuxiliaryRect() const { return _auxiliaryRect; }
++  virtual CRect GetHighlightRect() const { return _highlightRect; }
++  virtual CRect GetCandidateLabelRect(int id) const {
++    return _candidateLabelRects[id];
++  }
++  virtual CRect GetCandidateTextRect(int id) const {
++    return _candidateTextRects[id];
++  }
++  virtual CRect GetCandidateCommentRect(int id) const {
++    return _candidateCommentRects[id];
++  }
++  virtual CRect GetCandidateRect(int id) const { return _candidateRects[id]; }
++  virtual CRect GetStatusIconRect() const { return _statusIconRect; }
++  virtual std::wstring GetLabelText(const std::vector<Text>& labels,
++                                    int id,
++                                    const wchar_t* format) const;
++  virtual bool IsInlinePreedit() const;
++  virtual bool ArrangeRewriteRow(bool below);
++  virtual bool ShouldDisplayStatusIcon() const;
++  virtual IsToRoundStruct GetRoundInfo(int id) { return _roundInfo[id]; }
++  virtual IsToRoundStruct GetTextRoundInfo() { return _textRoundInfo; }
++  virtual CRect GetContentRect() { return _contentRect; }
++  virtual CRect GetPrepageRect() { return _prePageRect; }
++  virtual CRect GetNextpageRect() { return _nextPageRect; }
++  virtual CSize GetBeforeSize() { return _beforesz; }
++  virtual CSize GetHilitedSize() { return _hilitedsz; }
++  virtual CSize GetAfterSize() { return _aftersz; }
++  virtual weasel::TextRange GetPreeditRange() { return _range; }
++
++  void GetTextSizeDW(const std::wstring& text,
++                     size_t nCount,
++                     ComPtr<IDWriteTextFormat1>& pTextFormat,
++                     PDWR pDWR,
++                     LPSIZE lpSize) const;
++
++ protected:
++  /* Utility functions */
++  CSize GetPreeditSize(CDCHandle dc,
++                       const weasel::Text& text,
++                       ComPtr<IDWriteTextFormat1> pTextFormat = NULL,
++                       PDWR pDWR = NULL);
++  bool _IsHighlightOverCandidateWindow(CRect& rc, CDCHandle& dc);
++  void _PrepareRoundInfo(CDCHandle& dc);
++
++  void UpdateStatusIconLayout(int* width, int* height);
++
++  bool _rewriteBelow = false;
++  int _rewriteCandidateShift = 0, _rewriteTextShift = 0;
++  CSize _beforesz, _hilitedsz, _aftersz;
++  weasel::TextRange _range;
++  CSize _contentSize;
++  CRect _preeditRect, _auxiliaryRect, _highlightRect;
++  CRect _candidateRects[MAX_CANDIDATES_COUNT];
++  CRect _candidateLabelRects[MAX_CANDIDATES_COUNT];
++  CRect _candidateTextRects[MAX_CANDIDATES_COUNT];
++  CRect _candidateCommentRects[MAX_CANDIDATES_COUNT];
++  CRect _statusIconRect;
++  CRect _bgRect;
++  CRect _contentRect;
++  IsToRoundStruct _roundInfo[MAX_CANDIDATES_COUNT];
++  IsToRoundStruct _textRoundInfo;
++  CRect _prePageRect;
++  CRect _nextPageRect;
++  const std::wstring pre = L"<";
++  const std::wstring next = L">";
++};
++};  // namespace weasel
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 0f98d10..9e9cd11 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -1624,11 +1624,14 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
+   }
+   if (y < rcWorkArea.top)
+     y = rcWorkArea.top;  // over workarea top
++  const bool rowChanged = m_layout->ArrangeRewriteRow(!m_sticky);
++  if (m_ctx.rewrite.active()) m_istorepos = false;
+   // memorize adjusted position (to avoid window bouncing on height change)
+   m_inputPos.bottom = y;
+   SetWindowPos(HWND_TOPMOST, x, y, 0, 0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+   _UpdateRewriteWindow();
++  if (rowChanged) RedrawWindow();
+ }
+ 
+ LRESULT WeaselPanel::OnShowWindow(UINT, WPARAM visible, LPARAM, BOOL& handled) {
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 32395a3..4bfd5a8 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-integrated-tab-row-20261001
++Build-ID: rewrite-ui-integrated-tab-placement-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 22c56fd..266958e 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
++> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+ 
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 49c116b..233a5fc 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -285,7 +285,7 @@ int main() {
+       assert(actual.Height() > before.Height());
+       assert(panel.RewriteWindow() == panel.m_hWnd);
+       assert(panel.RewriteSurfaceRect().top >= panel.SurfaceRect().top);
+-      assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
++      assert(panel.RewriteSurfaceRect().top > panel.CandidateTextRect().bottom);
+       assert(actual.top == before.top && actual.left == before.left);
+ 
+     }
+@@ -433,6 +433,16 @@ int main() {
+     assert(candidateAbove.top < bottomCaret.top);
+     assert(panel.RewriteSurfaceRect().top >= panel.SurfaceRect().top);
+     assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
++    // Crossing the screen boundary must reorder rows without remeasuring text.
++    const auto sideGeneration = panel.RewriteLayoutGeneration();
++    const auto aboveSize = panel.SurfaceRect().Size();
++    panel.MoveTo(CRect(200, 200, 200, 224));
++    assert(panel.RewriteSurfaceRect().top > panel.CandidateTextRect().bottom);
++    assert(panel.SurfaceRect().Size() == aboveSize);
++    assert(panel.RewriteLayoutGeneration() == sideGeneration);
++    panel.MoveTo(bottomCaret);
++    assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
++    assert(panel.RewriteLayoutGeneration() == sideGeneration);
+     panel.ShowWindow(SW_SHOWNA);
+     assert(IsWindowVisible(panel.RewriteWindow()));
+     auto empty = editing; empty.cinfo.clear(); empty.preedit.clear();
+@@ -442,7 +452,7 @@ int main() {
+     panel.MoveTo(CRect(bottomCaret.left + 30, bottomCaret.top - 1,
+                        bottomCaret.right + 30, bottomCaret.bottom - 1));
+     emptyEditor.OffsetRect(30, -1);
+-    assert(panel.RewriteSurfaceRect() == emptyEditor);
++    assert(panel.RewriteSurfaceRect() == emptyEditor);
+     panel.ShowWindow(SW_HIDE);
+     assert(!IsWindowVisible(panel.RewriteWindow()));
+     DestroyWindow(inputHost);
+-- 
+2.53.0.windows.2
+

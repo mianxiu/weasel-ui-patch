@@ -1,7 +1,7 @@
 From 5e51b86a21dbb3d69ec162e33e6b315224c1c580 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 22:17:16 +0800
-Subject: [PATCH 18/51] docs: restructure documentation for patch-only
+Subject: [PATCH 18/52] docs: restructure documentation for patch-only
  maintenance
 
 ---

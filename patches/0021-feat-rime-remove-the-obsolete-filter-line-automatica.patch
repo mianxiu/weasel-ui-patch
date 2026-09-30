@@ -1,7 +1,7 @@
 From e87329bd7e4380e9ddfab4f62321b7769a0534f2 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 22:53:23 +0800
-Subject: [PATCH 21/51] feat(rime): remove the obsolete filter line
+Subject: [PATCH 21/52] feat(rime): remove the obsolete filter line
  automatically and warn when rewrite_ui is disabled
 
 ---
