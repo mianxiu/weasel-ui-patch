@@ -1,0 +1,353 @@
+From fe357e85b2e38185f53ffe4ba2796d7d206b97c5 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 23:35:57 +0800
+Subject: [PATCH 41/41] fix(ui): track host window movement and compact inset
+ Tab label
+
+---
+ Install-Binaries.ps1             |  2 +-
+ WeaselUI/DetachedRewriteLayout.h | 15 +++++----
+ WeaselUI/RewriteLayout.h         |  2 +-
+ WeaselUI/WeaselPanel.cpp         | 55 ++++++++++++++++++++++++++------
+ WeaselUI/WeaselPanel.h           |  8 ++++-
+ rewrite-build.txt                |  2 +-
+ test/rewrite_pipeline_test.cpp   | 31 ++++++++++++++++--
+ 7 files changed, 94 insertions(+), 21 deletions(-)
+
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 90019d5..1be3384 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-follow-aligned-editor-20260930; profile: $profileName"
++  Write-Host "Build: rewrite-ui-host-follow-compact-editor-20260930; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/WeaselUI/DetachedRewriteLayout.h b/WeaselUI/DetachedRewriteLayout.h
+index 06f1762..6e07c70 100644
+--- a/WeaselUI/DetachedRewriteLayout.h
++++ b/WeaselUI/DetachedRewriteLayout.h
+@@ -12,7 +12,7 @@ class DetachedRewriteLayout : public HorizontalLayout {
+     auto original = _context.rewrite;
+     original.stage = L"armed"; original.index.clear(); original.replacement.clear();
+     const auto measured = MeasureRewrite(*this, original, dwr, true);
+-    const int reserve = (int)(54 * dwr->dpiScaleLayout);  // 48px editor + 6px separation.
++    const int reserve = (int)(30 * dwr->dpiScaleLayout);  // 24px editor + 6px separation.
+     const int limit = _style.max_width > 0 ? _style.max_width : (int)(1000 * dwr->dpiScaleLayout);
+     const int left = (std::max)(real_margin_x, leadingInset);
+     const int width = (std::min)(limit, (int)measured.size.cx + reserve + left + real_margin_x);
+@@ -31,16 +31,19 @@ class DetachedRewriteLayout : public HorizontalLayout {
+ };
+ 
+ inline IsToRoundStruct JoinedRewriteCorners(bool editor, bool above,
+-                                             int candidateWidth, int editorWidth) {
++                                             int candidateWidth, int editorWidth, int editorOffset = 0) {
+   IsToRoundStruct corners;
+   if (editor) {
+     if (above) {
+       corners.IsBottomLeftNeedToRound = false;
+-      corners.IsBottomRightNeedToRound = editorWidth > candidateWidth;
++      corners.IsBottomRightNeedToRound = editorOffset + editorWidth > candidateWidth;
+     } else {
+       corners.IsTopLeftNeedToRound = false;
+-      corners.IsTopRightNeedToRound = editorWidth > candidateWidth;
++      corners.IsTopRightNeedToRound = editorOffset + editorWidth > candidateWidth;
+     }
++  } else if (editorOffset > 0) {
++    // An inset tag leaves the candidate outer corners intact.
++    return corners;
+   } else if (above) {
+     corners.IsTopLeftNeedToRound = false;
+     corners.IsTopRightNeedToRound = editorWidth < candidateWidth;
+@@ -54,7 +57,7 @@ inline IsToRoundStruct JoinedRewriteCorners(bool editor, bool above,
+ struct DetachedRewritePosition { CRect candidate, editor; };
+ // Rectangles describe visible surfaces, excluding translucent shadow padding.
+ inline DetachedRewritePosition PositionDetachedRewrite(CRect candidate, CSize editor,
+-                                                        CRect caret, CRect work, int gap) {
++                                                        CRect caret, CRect work, int gap, int editorOffset = 0) {
+   bool above = candidate.bottom <= caret.top ||
+       (candidate.top < caret.top && candidate.CenterPoint().y < caret.CenterPoint().y);
+   const int combined = candidate.Height() + editor.cy + gap * 2;
+@@ -68,7 +71,7 @@ inline DetachedRewritePosition PositionDetachedRewrite(CRect candidate, CSize ed
+     above = true;
+   }
+   const int top = above ? candidate.top - gap - editor.cy : candidate.bottom + gap;
+-  CRect edit(candidate.left, top, candidate.left + editor.cx, top + editor.cy);
++  CRect edit(candidate.left + editorOffset, top, candidate.left + editorOffset + editor.cx, top + editor.cy);
+   CRect group; group.UnionRect(candidate, edit);
+   const int dx = group.right > work.right ? work.right - group.right :
+                  group.left < work.left ? work.left - group.left : 0;
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 5389766..e5a4390 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -62,7 +62,7 @@ inline RewriteLayout MeasureStableRewrite(Layout& layout, const RewriteState& st
+   const bool vertical = layout._style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
+   const int extent = vertical ? area.cy : area.cx;
+   const int gap = (std::max)(1, (int)(6 * dwr->dpiScaleLayout));
+-  const int reserve = (std::max)(1, (std::min)((int)(48 * dwr->dpiScaleLayout), extent / 3));
++  const int reserve = (std::max)(1, (std::min)((int)(24 * dwr->dpiScaleLayout), extent / 3));
+   syllables.SetRect(0, 0, area.cx, area.cy);
+   editor = syllables;
+   if (vertical) { syllables.bottom = (std::max)(1, extent - reserve - gap); editor.top = extent - reserve; }
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 3cd930a..0deb6b9 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -145,6 +145,10 @@ void WeaselPanel::_CreateLayout() {
+ // 更新界面
+ void WeaselPanel::Refresh() {
+   m_ctx = m_sourceCtx;
++  if (!m_editOnly && IsWindow()) {
++    if (m_status.composing) ::SetTimer(m_hWnd, POSITION_TIMER, 50, nullptr);
++    else { ::KillTimer(m_hWnd, POSITION_TIMER); m_positionHost = nullptr; }
++  }
+   if (!m_editOnly) m_ctx.rewrite.clear();
+   bool should_show_icon =
+       (m_status.ascii_mode || !m_status.composing || !m_ctx.aux.empty());
+@@ -1107,7 +1111,7 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
+         (m_style.inline_preedit && (m_candidateCount || !m_ctx.aux.empty()))) {
+       CRect backrc = m_layout->GetContentRect();
+       const auto corners = m_joinSide ? JoinedRewriteCorners(m_editOnly, m_joinSide < 0,
+-                               m_joinCandidateWidth, m_joinEditorWidth) : IsToRoundStruct();
++                               m_joinCandidateWidth, m_joinEditorWidth, m_joinEditorOffset) : IsToRoundStruct();
+       _HighlightText(memDC, backrc, m_style.back_color, m_style.shadow_color,
+                      DPI_SCALE(m_style.round_corner_ex), BackType::BACKGROUND,
+                      corners, m_style.border_color);
+@@ -1232,6 +1236,8 @@ LRESULT WeaselPanel::OnDestroy(UINT uMsg,
+                                WPARAM wParam,
+                                LPARAM lParam,
+                                BOOL& bHandled) {
++  ::KillTimer(m_hWnd, POSITION_TIMER);
++  m_positionHost = nullptr;
+   m_hoverIndex = -1;
+   m_lastMousePos = {-1, -1};
+   m_sticky = false;
+@@ -1249,9 +1255,36 @@ LRESULT WeaselPanel::OnDpiChanged(UINT uMsg,
+   return LRESULT();
+ }
+ 
+-void WeaselPanel::MoveTo(RECT const& rc) {
++LRESULT WeaselPanel::OnPositionTimer(UINT, WPARAM id, LPARAM, BOOL& handled) {
++  handled = id == POSITION_TIMER;
++  if (!handled || m_editOnly || !m_status.composing || !IsWindowVisible() ||
++      !::IsWindow(m_positionHost) || m_lastCaretRect.IsRectEmpty()) return 0;
++  CPoint origin(0, 0);
++  if (!::ClientToScreen(m_positionHost, &origin) || origin == m_hostOrigin) return 0;
++  CRect caret = m_lastCaretRect;
++  caret.OffsetRect(origin - m_hostOrigin);
++  MoveTo(caret, m_positionHost);
++  return 0;
++}
++
++void WeaselPanel::MoveTo(RECT const& rc, HWND host) {
+   if (!m_layout)
+     return;  // avoid handling nullptr in _RepositionWindow
++  // Some text stores do not publish TSF layout changes while their window is dragged.
++  // Track the focused client origin without changing the inline composition text.
++  if (!m_editOnly && m_status.composing) {
++    if (!host) {
++      GUITHREADINFO info = {sizeof(GUITHREADINFO)};
++      const auto foreground = ::GetForegroundWindow();
++      const auto thread = ::GetWindowThreadProcessId(foreground, nullptr);
++      if (thread && ::GetGUIThreadInfo(thread, &info)) host = info.hwndFocus;
++      if (!host) host = foreground;
++    }
++    CPoint origin(0, 0);
++    if (host && ::ClientToScreen(host, &origin)) {
++      m_positionHost = host; m_hostOrigin = origin;
++    }
++  }
+   // Keep the raw caret separate from m_inputPos, which positioning mutates.
+   if (m_sourceCtx.rewrite.active() && !m_candidateCount &&
+       !m_lastCaretRect.IsRectEmpty() && !m_lastCandidateSurface.IsRectEmpty())
+@@ -1406,7 +1439,7 @@ void WeaselPanel::_UpdateRewriteWindow() {
+   style.inline_preedit = false;
+   style.vertical_text_with_wrap = false;
+   style.min_width = style.min_height = style.max_height = 0;
+-  style.margin_x = 6; style.margin_y = 2;
++  style.margin_x = 4; style.margin_y = 2;
+   style.hilite_padding_x = 0; style.hilite_padding_y = 0;
+   style.round_corner_ex = 6;
+   style.shadow_radius = style.shadow_offset_x = style.shadow_offset_y = 0;
+@@ -1414,7 +1447,10 @@ void WeaselPanel::_UpdateRewriteWindow() {
+   MONITORINFO monitor = {sizeof(MONITORINFO)};
+   GetMonitorInfo(m_hMonitor, &monitor);
+   const int available = (std::max)(80, (int)(monitor.rcWork.right - monitor.rcWork.left) - 2 * m_layout->offsetX);
+-  style.max_width = (int)(available / dpiScaleLayout);
++  if (m_candidateCount)
++    m_editLeadingInset = m_layout->GetCandidateTextRect(0).left - m_layout->GetContentRect().left;
++  const int editorOffset = (std::max)(0, m_editLeadingInset - DPI_SCALE(4));
++  style.max_width = (int)((available - editorOffset) / dpiScaleLayout);
+   m_editUI->status() = m_status;
+   m_editUI->ctx() = m_sourceCtx;
+   m_editUI->ctx().cinfo.clear(); m_editUI->ctx().aux.clear();
+@@ -1423,9 +1459,7 @@ void WeaselPanel::_UpdateRewriteWindow() {
+     m_editPanel->Create(m_hWnd);
+     m_editPanel->ModifyStyleEx(0, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+   }
+-  if (m_candidateCount)
+-    m_editLeadingInset = m_layout->GetCandidateTextRect(0).left - m_layout->GetContentRect().left;
+-  m_editPanel->m_editLeadingInset = m_editLeadingInset;
++  m_editPanel->m_editLeadingInset = 0;
+   m_editPanel->m_inputPos = m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect;
+   m_editPanel->Refresh();
+   CRect candidate; GetWindowRect(&candidate);
+@@ -1437,7 +1471,8 @@ void WeaselPanel::_UpdateRewriteWindow() {
+   work.DeflateRect((std::max)(m_layout->offsetX, m_editPanel->m_layout->offsetX),
+                    (std::max)(m_layout->offsetY, m_editPanel->m_layout->offsetY));
+   const auto placement = PositionDetachedRewrite(visible, childContent.Size(),
+-      m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect, work, -DPI_SCALE(2));
++      m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect, work, -DPI_SCALE(2),
++      editorOffset);
+   const auto caret = m_lastCaretRect.IsRectEmpty() ? m_inputPos : m_lastCaretRect;
+   m_lastCandidateSurface = placement.candidate;
+   m_sticky = placement.candidate.bottom <= caret.top;
+@@ -1445,10 +1480,12 @@ void WeaselPanel::_UpdateRewriteWindow() {
+                        m_style.layout_type == UIStyle::LAYOUT_VERTICAL;
+   const int joinSide = m_candidateCount ? (placement.editor.top < placement.candidate.top ? -1 : 1) : 0;
+   const bool repaint = reverse != m_istorepos || m_joinSide != joinSide ||
+-      m_joinCandidateWidth != visible.Width() || m_joinEditorWidth != childContent.Width();
++      m_joinCandidateWidth != visible.Width() || m_joinEditorWidth != childContent.Width() ||
++      m_joinEditorOffset != placement.editor.left - placement.candidate.left;
+   const bool repaintEditor = m_editPanel->m_joinSide != joinSide ||
+       m_editPanel->m_joinCandidateWidth != visible.Width() ||
+       m_editPanel->m_joinEditorWidth != childContent.Width();
++  m_joinEditorOffset = m_editPanel->m_joinEditorOffset = placement.editor.left - placement.candidate.left;
+   m_joinSide = m_editPanel->m_joinSide = joinSide;
+   m_joinCandidateWidth = m_editPanel->m_joinCandidateWidth = visible.Width();
+   m_joinEditorWidth = m_editPanel->m_joinEditorWidth = childContent.Width();
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 3cb6e06..9a9e421 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -30,6 +30,7 @@ class WeaselPanel
+   MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+   MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
+   MESSAGE_HANDLER(WM_SHOWWINDOW, OnShowWindow)
++  MESSAGE_HANDLER(WM_TIMER, OnPositionTimer)
+   MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
+   MESSAGE_HANDLER(WM_LBUTTONUP, OnLeftClickedUp)
+   MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLeftClickedDown)
+@@ -43,6 +44,7 @@ class WeaselPanel
+   LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+   LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+   LRESULT OnShowWindow(UINT, WPARAM, LPARAM, BOOL&);
++  LRESULT OnPositionTimer(UINT, WPARAM, LPARAM, BOOL&);
+   LRESULT OnMouseActivate(UINT uMsg,
+                           WPARAM wParam,
+                           LPARAM lParam,
+@@ -62,7 +64,7 @@ class WeaselPanel
+   WeaselPanel(weasel::UI& ui, bool editOnly = false);
+   ~WeaselPanel();
+ 
+-  void MoveTo(RECT const& rc);
++  void MoveTo(RECT const& rc, HWND host = nullptr);
+   void Refresh();
+   void DoPaint(CDCHandle dc);
+   bool GetIsReposition() { return m_istorepos; }
+@@ -137,6 +139,9 @@ class WeaselPanel
+ 
+   CRect m_inputPos;
+   CRect m_lastCaretRect;
++  HWND m_positionHost = nullptr;
++  CPoint m_hostOrigin;
++  static const UINT_PTR POSITION_TIMER = 20240316;
+   CRect m_lastCandidateSurface;
+   const bool m_editOnly;
+   std::unique_ptr<weasel::UI> m_editUI;
+@@ -144,6 +149,7 @@ class WeaselPanel
+   int m_editLeadingInset = 0;
+   int m_joinSide = 0;
+   int m_joinCandidateWidth = 0, m_joinEditorWidth = 0;
++  int m_joinEditorOffset = 0;
+   int m_offsetys[MAX_CANDIDATES_COUNT];  // offset y for candidates when
+                                          // vertical layout over bottom
+   int m_offsety_preedit;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 04a318d..260effb 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-follow-aligned-editor-20260930
++Build-ID: rewrite-ui-host-follow-compact-editor-20260930
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: compact joined tone-pinyin label; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index f3f30c2..aa0f2e5 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -179,6 +179,19 @@ int main() {
+     WeaselPanel panel(host);
+     assert(panel.Create(nullptr) != nullptr);
+     panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
++    // A real host window moves without publishing a new caret rectangle.
++    HWND inputHost = CreateWindowEx(0, L"STATIC", L"position host", WS_POPUP,
++        100, 100, 400, 300, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
++    assert(inputHost);
++    panel.ShowWindow(SW_SHOWNA);
++    panel.MoveTo(CRect(200, 200, 201, 224), inputHost);
++    auto normalSurface = panel.SurfaceRect();
++    SetWindowPos(inputHost, nullptr, 130, 120, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
++    BOOL handled = FALSE;
++    panel.OnPositionTimer(WM_TIMER, 20240316, 0, handled);
++    normalSurface.OffsetRect(30, 20);
++    assert(handled && panel.SurfaceRect() == normalSurface);
++    panel.MoveTo(CRect(200, 200, 201, 224), inputHost);
+     CRect before; panel.GetWindowRect(&before);
+     CRect locked;
+     for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
+@@ -189,7 +202,9 @@ int main() {
+       assert(actual.Size() == before.Size());
+       assert(panel.RewriteWindow() != nullptr);
+       CRect editRect; GetWindowRect(panel.RewriteWindow(), &editRect);
+-      assert(panel.RewriteSurfaceRect().left == panel.SurfaceRect().left);
++      assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
++      assert(panel.RewriteTextRect().left - panel.RewriteSurfaceRect().left == 4);
++      assert(panel.RewriteSurfaceRect().right - panel.RewriteTextRect().right == 4);
+       assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
+       assert(panel.RewriteSurfaceRect().top == panel.SurfaceRect().bottom - 2 ||
+              panel.RewriteSurfaceRect().bottom == panel.SurfaceRect().top + 2);
+@@ -198,6 +213,14 @@ int main() {
+       if (locked.IsRectEmpty()) locked = actual;
+       assert(actual == locked);
+     }
++    panel.MoveTo(CRect(200, 200, 201, 224), inputHost);
++    auto hostCandidate = panel.SurfaceRect(); auto hostEditor = panel.RewriteSurfaceRect();
++    SetWindowPos(inputHost, nullptr, 150, 150, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
++    panel.OnPositionTimer(WM_TIMER, 20240316, 0, handled);
++    hostCandidate.OffsetRect(20, 30); hostEditor.OffsetRect(20, 30);
++    assert(panel.SurfaceRect() == hostCandidate && panel.RewriteSurfaceRect() == hostEditor);
++    assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
++    panel.MoveTo(CRect(200, 200, 201, 224), inputHost);
+     // Both surfaces follow horizontal movement and even a one-pixel vertical change.
+     auto movedCandidate = panel.SurfaceRect(); auto movedEditor = panel.RewriteSurfaceRect();
+     panel.MoveTo(CRect(230, 201, 231, 225));
+@@ -220,7 +243,9 @@ int main() {
+     panel.GetWindowRect(&candidateAbove); GetWindowRect(panel.RewriteWindow(), &editAbove);
+     assert(candidateAbove.top < bottomCaret.top);
+     assert(panel.RewriteSurfaceRect().top < panel.SurfaceRect().top);
+-    assert(panel.RewriteSurfaceRect().left == panel.SurfaceRect().left);
++    assert(panel.RewriteTextRect().left == panel.CandidateTextRect().left);
++      assert(panel.RewriteTextRect().left - panel.RewriteSurfaceRect().left == 4);
++      assert(panel.RewriteSurfaceRect().right - panel.RewriteTextRect().right == 4);
+     panel.ShowWindow(SW_SHOWNA);
+     assert(IsWindowVisible(panel.RewriteWindow()));
+     auto empty = editing; empty.cinfo.clear(); empty.preedit.clear();
+@@ -233,6 +258,8 @@ int main() {
+     assert(panel.RewriteSurfaceRect() == emptyEditor);
+     panel.ShowWindow(SW_HIDE);
+     assert(!IsWindowVisible(panel.RewriteWindow()));
++    DestroyWindow(inputHost);
++    panel.OnPositionTimer(WM_TIMER, 20240316, 0, handled);
+     panel.DestroyWindow();
+   }
+   std::cout << "IPC, property-only UI update, exit, layout and DPI tests passed\n";
+-- 
+2.53.0.windows.2
+
