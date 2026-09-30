@@ -1,0 +1,563 @@
+From b6f7e333dcd9f857ed78abaa8f8f6d9eb2ecb9c8 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 21:30:12 +0800
+Subject: [PATCH 35/35] feat(skin): add dark accents and readable secondary
+ hover text
+
+---
+ Apply-Skin-black.cmd             |  8 ++++
+ Apply-Skin-green.cmd             |  8 ++++
+ Apply-Skin-navy.cmd              |  8 ++++
+ Apply-Skin.ps1                   | 12 +++---
+ INSTALL-PATCH.md                 |  2 +
+ WeaselUI/CandidateTextColors.h   | 17 +++++++++
+ WeaselUI/WeaselPanel.cpp         | 15 +++-----
+ package-rewrite.ps1              |  4 +-
+ package-skin.ps1                 |  4 +-
+ rime/skins/README.md             | 13 +++++++
+ rime/skins/azure_pill.yaml       |  5 ++-
+ rime/skins/azure_pill_black.yaml | 63 ++++++++++++++++++++++++++++++++
+ rime/skins/azure_pill_green.yaml | 63 ++++++++++++++++++++++++++++++++
+ rime/skins/azure_pill_navy.yaml  | 63 ++++++++++++++++++++++++++++++++
+ test/installer_rime_test.ps1     |  8 ++--
+ test/rewrite_pipeline_test.cpp   | 11 ++++++
+ tools/rewrite-config.cpp         | 14 ++++++-
+ 17 files changed, 293 insertions(+), 25 deletions(-)
+ create mode 100644 Apply-Skin-black.cmd
+ create mode 100644 Apply-Skin-green.cmd
+ create mode 100644 Apply-Skin-navy.cmd
+ create mode 100644 WeaselUI/CandidateTextColors.h
+ create mode 100644 rime/skins/azure_pill_black.yaml
+ create mode 100644 rime/skins/azure_pill_green.yaml
+ create mode 100644 rime/skins/azure_pill_navy.yaml
+
+diff --git a/Apply-Skin-black.cmd b/Apply-Skin-black.cmd
+new file mode 100644
+index 0000000..02d6ec1
+--- /dev/null
++++ b/Apply-Skin-black.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Skin.ps1" -Accent black
++set "skin_result=%errorlevel%"
++echo.
++pause
++exit /b %skin_result%
+diff --git a/Apply-Skin-green.cmd b/Apply-Skin-green.cmd
+new file mode 100644
+index 0000000..6e9e68e
+--- /dev/null
++++ b/Apply-Skin-green.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Skin.ps1" -Accent green
++set "skin_result=%errorlevel%"
++echo.
++pause
++exit /b %skin_result%
+diff --git a/Apply-Skin-navy.cmd b/Apply-Skin-navy.cmd
+new file mode 100644
+index 0000000..9fa3bf3
+--- /dev/null
++++ b/Apply-Skin-navy.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Skin.ps1" -Accent navy
++set "skin_result=%errorlevel%"
++echo.
++pause
++exit /b %skin_result%
+diff --git a/Apply-Skin.ps1 b/Apply-Skin.ps1
+index 9a0e5de..5477169 100644
+--- a/Apply-Skin.ps1
++++ b/Apply-Skin.ps1
+@@ -1,5 +1,6 @@
+ ﻿[CmdletBinding()]
+-param([string]$UserDataRoot, [string]$Target, [switch]$CheckOnly)
++param([string]$UserDataRoot, [string]$Target, [switch]$CheckOnly,
++      [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
+ $ErrorActionPreference = 'Stop'
+ $changed = $false; $saved = $null; $locked = $false; $mutex = $null
+ function Run-Deploy {
+@@ -54,8 +55,9 @@ try {
+   }
+   $helper = Join-Path $PSScriptRoot 'RewriteConfig.exe'
+   if (!(Test-Path $helper)) { $helper = Join-Path $PSScriptRoot 'output/RewriteConfig.exe' }
+-  $theme = Join-Path $PSScriptRoot 'skins/azure_pill.yaml'
+-  if (!(Test-Path $theme)) { $theme = Join-Path $PSScriptRoot 'rime/skins/azure_pill.yaml' }
++  $themeName = if ($Accent -eq 'blue') { 'azure_pill.yaml' } else { "azure_pill_$Accent.yaml" }
++  $theme = Join-Path $PSScriptRoot ("skins/" + $themeName)
++  if (!(Test-Path $theme)) { $theme = Join-Path $PSScriptRoot ("rime/skins/" + $themeName) }
+   $stage = Join-Path ([IO.Path]::GetTempPath()) ('azure-pill-' + [guid]::NewGuid().ToString('N'))
+   $destination = Join-Path $UserDataRoot 'weasel.custom.yaml'
+   $originalHash = if (Test-Path -LiteralPath $destination) { (Get-FileHash -LiteralPath $destination).Hash } else { $null }
+@@ -87,7 +89,7 @@ try {
+   $changed = $true
+   Copy-Item -LiteralPath (Join-Path $stage 'weasel.custom.yaml') -Destination $destination -Force
+   Run-Deploy
+-  & $helper skin-verify $UserDataRoot
++  & $helper skin-verify $UserDataRoot $theme
+   if ($LASTEXITCODE) { throw '部署后的皮肤校验失败。' }
+   $server = Join-Path $Target 'WeaselServer.exe'
+   $p = Start-Process -FilePath $server -ArgumentList '/q' -WindowStyle Hidden -PassThru
+@@ -103,7 +105,7 @@ try {
+   } while ([DateTime]::UtcNow -lt $deadline)
+   if ($running.Count) { throw '小狼毫尚未退出，请从托盘手动重启后再运行。' }
+   Start-Process -FilePath $server -WindowStyle Hidden | Out-Null
+-  Write-Host 'SUCCESS：蓝白圆角皮肤已启用，部署校验通过，服务已重启。无需重启 Windows。'
++  Write-Host "SUCCESS：圆角皮肤已启用（$Accent），部署校验通过，服务已重启。无需重启 Windows。"
+   if ($existed) { Write-Host "原配置备份：$saved" }
+ } catch {
+   Write-Host "SKIN FAILED：$($_.Exception.Message)" -ForegroundColor Red
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index d84c23d..e230e9f 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,6 +1,8 @@
+ # 悬浮声调拼音预览版（2026-09-30）
+ 
+ 新增独立皮肤 **Azure Pill / 蓝白圆角**：白色横排、蓝色圆角选中项、灰色编号与淡阴影。
++新增深蓝、深黑、深绿配色，运行 `Apply-Skin-navy.cmd`、`Apply-Skin-black.cmd`、`Apply-Skin-green.cmd` 切换。
++本次程序修复次要候选 hover 白字与浅色背景难辨的问题，悬停使用深色强调文字，选中项仍为白字。
+ 已有程序只换皮肤时运行 `Apply-Skin.cmd`；它备份并合并 UI 配置、部署和重启服务，无需重启 Windows。
+ 皮肤定义及详细说明见 `skins/azure_pill.yaml` 和 `skins/README.md`。
+ 
+diff --git a/WeaselUI/CandidateTextColors.h b/WeaselUI/CandidateTextColors.h
+new file mode 100644
+index 0000000..10c870c
+--- /dev/null
++++ b/WeaselUI/CandidateTextColors.h
+@@ -0,0 +1,17 @@
++#pragma once
++#include <WeaselUI.h>
++
++namespace weasel {
++struct CandidateTextColors { int label, text, comment; };
++inline CandidateTextColors GetCandidateTextColors(const UIStyle& style,
++                                                   bool selected, bool hovered) {
++  if (selected) return {style.hilited_label_text_color,
++                        style.hilited_candidate_text_color,
++                        style.hilited_comment_text_color};
++  // Semi-highlight has a translucent background, not the opaque selection.
++  // Retain the readable normal accent rather than white selection lettering.
++  if (hovered) return {style.candidate_text_color, style.candidate_text_color,
++                       style.candidate_text_color};
++  return {style.label_text_color, style.candidate_text_color, style.comment_text_color};
++}
++}  // namespace weasel
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index a174b38..3d0331c 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -13,6 +13,7 @@
+ #include "FullScreenLayout.h"
+ #include "VHorizontalLayout.h"
+ #include "StableRewriteLayout.h"
++#include "CandidateTextColors.h"
+ 
+ // for IDI_ZH, IDI_EN
+ #include <resource.h>
+@@ -991,15 +992,11 @@ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+     // begin draw candidate texts
+     int label_text_color, candidate_text_color, comment_text_color;
+     for (auto i = 0; i < m_candidateCount && i < MAX_CANDIDATES_COUNT; ++i) {
+-      if (i == m_ctx.cinfo.highlighted || i == m_hoverIndex) {
+-        label_text_color = m_style.hilited_label_text_color;
+-        candidate_text_color = m_style.hilited_candidate_text_color;
+-        comment_text_color = m_style.hilited_comment_text_color;
+-      } else {
+-        label_text_color = m_style.label_text_color;
+-        candidate_text_color = m_style.candidate_text_color;
+-        comment_text_color = m_style.comment_text_color;
+-      }
++      const auto colors = GetCandidateTextColors(m_style, i == m_ctx.cinfo.highlighted,
++                                                 i == m_hoverIndex);
++      label_text_color = colors.label;
++      candidate_text_color = colors.text;
++      comment_text_color = colors.comment;
+       // Draw label
+       std::wstring label = m_layout->GetLabelText(
+           labels, (int)i, m_style.label_text_format.c_str());
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index 903222d..b49e221 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -13,9 +13,9 @@ Copy-Item INSTALL-PATCH.md "$destination/README.md" -Force
+ Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
+ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt $destination -Force
+ Copy-Item output/RewriteConfig.exe $destination -Force
+-Copy-Item Apply-Skin.cmd,Apply-Skin.ps1 $destination -Force
++Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1 $destination -Force
+ New-Item -ItemType Directory -Force "$destination/skins" | Out-Null
+-Copy-Item rime/skins/azure_pill.yaml,rime/skins/README.md "$destination/skins" -Force
++Copy-Item rime/skins/azure_pill*.yaml,rime/skins/README.md "$destination/skins" -Force
+ New-Item -ItemType Directory -Force "$destination/rime/lua" | Out-Null
+ Copy-Item rime/lua/indexed_rewrite_pro.lua "$destination/rime/lua/" -Force
+ Copy-Item LICENSE.txt "$destination/licenses/Weasel-GPL-3.0.txt" -Force
+diff --git a/package-skin.ps1 b/package-skin.ps1
+index 9e87f0e..f1affd5 100644
+--- a/package-skin.ps1
++++ b/package-skin.ps1
+@@ -5,8 +5,8 @@ Set-Location $PSScriptRoot
+ $final = Join-Path $PSScriptRoot ('dist/' + $PackageName)
+ $stage = $final + '-stage-' + [guid]::NewGuid().ToString('N')
+ New-Item -ItemType Directory -Path (Join-Path $stage 'skins') -Force | Out-Null
+-Copy-Item Apply-Skin.cmd,Apply-Skin.ps1,output/RewriteConfig.exe -Destination $stage
+-Copy-Item rime/skins/azure_pill.yaml -Destination (Join-Path $stage 'skins')
++Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1,output/RewriteConfig.exe -Destination $stage
++Copy-Item rime/skins/azure_pill*.yaml -Destination (Join-Path $stage 'skins')
+ Copy-Item rime/skins/README.md -Destination (Join-Path $stage 'README.md')
+ Copy-Item librime/deps/yaml-cpp/LICENSE -Destination (Join-Path $stage 'yaml-cpp-MIT.txt')
+ Copy-Item LICENSE.txt -Destination (Join-Path $stage 'Weasel-GPL-3.0.txt')
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 8f9053b..d444758 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -4,6 +4,19 @@
+ 候选字体 18pt、编号 16pt；外框圆角 16px、选中项圆角 13px、内边距 10×8px，按 DPI 缩放。
+ 
+ 打开独立皮肤包 `Weasel-Azure-Pill`，普通双击 `Apply-Skin.cmd`。
++当前 `dist` 只保留完整包 `Weasel-Rewrite-UI-Floating-Preview` 及其 ZIP；完整包根目录包含相同的皮肤切换脚本。
++四种强调色共用同一套白底圆角布局：
++
++| 启动脚本 | 配色 |
++|---|---|
++| `Apply-Skin.cmd` | 原蓝色 |
++| `Apply-Skin-navy.cmd` | 深蓝 |
++| `Apply-Skin-black.cmd` | 深黑 |
++| `Apply-Skin-green.cmd` | 深绿 |
++
++也可以运行 `Apply-Skin.ps1 -Accent navy`（或 black、green、blue）。切换时会备份当前配置。
++非选中候选悬停时使用深色强调文字，正式选中项保持白字；修复半透明浅色背景搭配白字的问题。
++此 hover 修复需要先安装本次完整补丁的程序文件，单独安装皮肤不能修改旧版程序的绘制逻辑。
+ 脚本备份并合并 `weasel.custom.yaml`，部署、校验并重启小狼毫服务；无需重启 Windows。
+ 2026-09-30 修复了旧脚本启动部署器时附加空格、进入隐藏配置向导而一直等待的问题。
+ 本版直接传递 `/deploy`，等待时显示耗时与日志目录；异常向导窗口保持可见。
+diff --git a/rime/skins/azure_pill.yaml b/rime/skins/azure_pill.yaml
+index a1e6618..85d962f 100644
+--- a/rime/skins/azure_pill.yaml
++++ b/rime/skins/azure_pill.yaml
+@@ -15,7 +15,8 @@ patch:
+   style/fullscreen: false
+   style/vertical_text: false
+   style/text_orientation: horizontal
+-  style/inline_preedit: true
++  style/inline_preedit: true
++  style/hover_type: semi_hilite
+   style/layout/type: horizontal
+   style/layout/align_type: center
+   style/layout/min_width: 0
+@@ -43,7 +44,7 @@ patch:
+     border_color: 0xCECECEFF
+     shadow_color: 0x00000028
+     text_color: 0x6A6A6AFF
+-    candidate_text_color: 0x303030FF
++    candidate_text_color: 0x14367AFF
+     candidate_back_color: 0x00000000
+     candidate_border_color: 0x00000000
+     candidate_shadow_color: 0x00000000
+diff --git a/rime/skins/azure_pill_black.yaml b/rime/skins/azure_pill_black.yaml
+new file mode 100644
+index 0000000..0c09466
+--- /dev/null
++++ b/rime/skins/azure_pill_black.yaml
+@@ -0,0 +1,63 @@
++# Reference-inspired white horizontal panel with a blue rounded selection.
++# Color literals are RRGGBBAA because the palette declares rgba.
++patch:
++  style/color_scheme: azure_pill
++  style/color_scheme_dark: azure_pill
++  style/font_face: "Microsoft YaHei UI, Segoe UI"
++  style/font_point: 18
++  style/label_font_face: "Segoe UI, Microsoft YaHei UI"
++  style/label_font_point: 16
++  style/comment_font_face: "Microsoft YaHei UI, Segoe UI"
++  style/comment_font_point: 11
++  style/label_format: "%s."
++  style/mark_text: ""
++  style/horizontal: true
++  style/fullscreen: false
++  style/vertical_text: false
++  style/text_orientation: horizontal
++  style/inline_preedit: true
++  style/hover_type: semi_hilite
++  style/layout/type: horizontal
++  style/layout/align_type: center
++  style/layout/min_width: 0
++  style/layout/max_width: 1000
++  style/layout/min_height: 0
++  style/layout/max_height: 0
++  style/layout/border: 1
++  style/layout/margin_x: 14
++  style/layout/margin_y: 12
++  style/layout/spacing: 8
++  style/layout/candidate_spacing: 24
++  style/layout/hilite_spacing: 6
++  style/layout/hilite_padding_x: 10
++  style/layout/hilite_padding_y: 8
++  style/layout/corner_radius: 16
++  style/layout/hilited_corner_radius: 13
++  style/layout/shadow_radius: 12
++  style/layout/shadow_offset_x: 0
++  style/layout/shadow_offset_y: 5
++  preset_color_schemes/azure_pill:
++    name: "Azure Pill / 深黑圆角"
++    author: "mianxiu"
++    color_format: rgba
++    back_color: 0xFFFFFFFF
++    border_color: 0xCECECEFF
++    shadow_color: 0x00000028
++    text_color: 0x6A6A6AFF
++    candidate_text_color: 0x151619FF
++    candidate_back_color: 0x00000000
++    candidate_border_color: 0x00000000
++    candidate_shadow_color: 0x00000000
++    label_color: 0x858585FF
++    comment_text_color: 0x909090FF
++    hilited_text_color: 0xFFFFFFFF
++    hilited_back_color: 0x202124FF
++    hilited_candidate_text_color: 0xFFFFFFFF
++    hilited_candidate_back_color: 0x202124FF
++    hilited_candidate_border_color: 0x00000000
++    hilited_candidate_shadow_color: 0x00000000
++    hilited_label_color: 0xFFFFFFFF
++    hilited_comment_text_color: 0xEDEDEDFF
++    hilited_mark_color: 0x00000000
++    prevpage_color: 0x00000000
++    nextpage_color: 0x00000000
+diff --git a/rime/skins/azure_pill_green.yaml b/rime/skins/azure_pill_green.yaml
+new file mode 100644
+index 0000000..cbb8dd8
+--- /dev/null
++++ b/rime/skins/azure_pill_green.yaml
+@@ -0,0 +1,63 @@
++# Reference-inspired white horizontal panel with a blue rounded selection.
++# Color literals are RRGGBBAA because the palette declares rgba.
++patch:
++  style/color_scheme: azure_pill
++  style/color_scheme_dark: azure_pill
++  style/font_face: "Microsoft YaHei UI, Segoe UI"
++  style/font_point: 18
++  style/label_font_face: "Segoe UI, Microsoft YaHei UI"
++  style/label_font_point: 16
++  style/comment_font_face: "Microsoft YaHei UI, Segoe UI"
++  style/comment_font_point: 11
++  style/label_format: "%s."
++  style/mark_text: ""
++  style/horizontal: true
++  style/fullscreen: false
++  style/vertical_text: false
++  style/text_orientation: horizontal
++  style/inline_preedit: true
++  style/hover_type: semi_hilite
++  style/layout/type: horizontal
++  style/layout/align_type: center
++  style/layout/min_width: 0
++  style/layout/max_width: 1000
++  style/layout/min_height: 0
++  style/layout/max_height: 0
++  style/layout/border: 1
++  style/layout/margin_x: 14
++  style/layout/margin_y: 12
++  style/layout/spacing: 8
++  style/layout/candidate_spacing: 24
++  style/layout/hilite_spacing: 6
++  style/layout/hilite_padding_x: 10
++  style/layout/hilite_padding_y: 8
++  style/layout/corner_radius: 16
++  style/layout/hilited_corner_radius: 13
++  style/layout/shadow_radius: 12
++  style/layout/shadow_offset_x: 0
++  style/layout/shadow_offset_y: 5
++  preset_color_schemes/azure_pill:
++    name: "Azure Pill / 深绿圆角"
++    author: "mianxiu"
++    color_format: rgba
++    back_color: 0xFFFFFFFF
++    border_color: 0xCECECEFF
++    shadow_color: 0x00000028
++    text_color: 0x6A6A6AFF
++    candidate_text_color: 0x103E29FF
++    candidate_back_color: 0x00000000
++    candidate_border_color: 0x00000000
++    candidate_shadow_color: 0x00000000
++    label_color: 0x858585FF
++    comment_text_color: 0x909090FF
++    hilited_text_color: 0xFFFFFFFF
++    hilited_back_color: 0x165B3BFF
++    hilited_candidate_text_color: 0xFFFFFFFF
++    hilited_candidate_back_color: 0x165B3BFF
++    hilited_candidate_border_color: 0x00000000
++    hilited_candidate_shadow_color: 0x00000000
++    hilited_label_color: 0xFFFFFFFF
++    hilited_comment_text_color: 0xE4F3EBFF
++    hilited_mark_color: 0x00000000
++    prevpage_color: 0x00000000
++    nextpage_color: 0x00000000
+diff --git a/rime/skins/azure_pill_navy.yaml b/rime/skins/azure_pill_navy.yaml
+new file mode 100644
+index 0000000..31a41f5
+--- /dev/null
++++ b/rime/skins/azure_pill_navy.yaml
+@@ -0,0 +1,63 @@
++# Reference-inspired white horizontal panel with a blue rounded selection.
++# Color literals are RRGGBBAA because the palette declares rgba.
++patch:
++  style/color_scheme: azure_pill
++  style/color_scheme_dark: azure_pill
++  style/font_face: "Microsoft YaHei UI, Segoe UI"
++  style/font_point: 18
++  style/label_font_face: "Segoe UI, Microsoft YaHei UI"
++  style/label_font_point: 16
++  style/comment_font_face: "Microsoft YaHei UI, Segoe UI"
++  style/comment_font_point: 11
++  style/label_format: "%s."
++  style/mark_text: ""
++  style/horizontal: true
++  style/fullscreen: false
++  style/vertical_text: false
++  style/text_orientation: horizontal
++  style/inline_preedit: true
++  style/hover_type: semi_hilite
++  style/layout/type: horizontal
++  style/layout/align_type: center
++  style/layout/min_width: 0
++  style/layout/max_width: 1000
++  style/layout/min_height: 0
++  style/layout/max_height: 0
++  style/layout/border: 1
++  style/layout/margin_x: 14
++  style/layout/margin_y: 12
++  style/layout/spacing: 8
++  style/layout/candidate_spacing: 24
++  style/layout/hilite_spacing: 6
++  style/layout/hilite_padding_x: 10
++  style/layout/hilite_padding_y: 8
++  style/layout/corner_radius: 16
++  style/layout/hilited_corner_radius: 13
++  style/layout/shadow_radius: 12
++  style/layout/shadow_offset_x: 0
++  style/layout/shadow_offset_y: 5
++  preset_color_schemes/azure_pill:
++    name: "Azure Pill / 深蓝圆角"
++    author: "mianxiu"
++    color_format: rgba
++    back_color: 0xFFFFFFFF
++    border_color: 0xCECECEFF
++    shadow_color: 0x00000028
++    text_color: 0x6A6A6AFF
++    candidate_text_color: 0x102651FF
++    candidate_back_color: 0x00000000
++    candidate_border_color: 0x00000000
++    candidate_shadow_color: 0x00000000
++    label_color: 0x858585FF
++    comment_text_color: 0x909090FF
++    hilited_text_color: 0xFFFFFFFF
++    hilited_back_color: 0x173F8AFF
++    hilited_candidate_text_color: 0xFFFFFFFF
++    hilited_candidate_back_color: 0x173F8AFF
++    hilited_candidate_border_color: 0x00000000
++    hilited_candidate_shadow_color: 0x00000000
++    hilited_label_color: 0xFFFFFFFF
++    hilited_comment_text_color: 0xE8EEFFFF
++    hilited_mark_color: 0x00000000
++    prevpage_color: 0x00000000
++    nextpage_color: 0x00000000
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index 9d85dd4..47dedd6 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,4 +1,4 @@
+-﻿param([switch]$AzurePill)
++﻿param([switch]$AzurePill, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
+ $ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+@@ -31,7 +31,9 @@ if ($LASTEXITCODE) { throw 'Merge failed' }
+ Copy-Item (Join-Path $stage '*.yaml') $user
+ if ($AzurePill) {
+   $skinStage = Join-Path $root 'skin-stage'
+-  & (Join-Path $repo 'output/RewriteConfig.exe') skin $user (Join-Path $repo 'rime/skins/azure_pill.yaml') $skinStage
++  $themeName = if ($Accent -eq 'blue') { 'azure_pill.yaml' } else { "azure_pill_$Accent.yaml" }
++  $theme = Join-Path $repo ("rime/skins/" + $themeName)
++  & (Join-Path $repo 'output/RewriteConfig.exe') skin $user $theme $skinStage
+   if ($LASTEXITCODE) { throw 'Skin merge failed' }
+   Copy-Item (Join-Path $skinStage 'weasel.custom.yaml') $user -Force
+ }
+@@ -55,7 +57,7 @@ if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
+ Write-Host "PASS: actual librime deployment and generated YAML. Fixture: $root"
+ 
+ if ($AzurePill) {
+-  & (Join-Path $repo 'output/RewriteConfig.exe') skin-verify $user
++  & (Join-Path $repo 'output/RewriteConfig.exe') skin-verify $user $theme
+   if ($LASTEXITCODE) { throw 'Skin deployment verification failed' }
+   Write-Host 'PASS: actual librime deployed Azure Pill palette and horizontal rounded layout'
+ }
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index abd24cc..8a16202 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -7,6 +7,7 @@
+ #include "../WeaselUI/RewriteLayout.h"
+ #include "../WeaselUI/StableRewriteLayout.h"
+ #include "../WeaselUI/WeaselPanel.h"
++#include "../WeaselUI/CandidateTextColors.h"
+ #include <cassert>
+ #include <iostream>
+ 
+@@ -61,6 +62,16 @@ int main() {
+   style.margin_x = style.margin_y = 10;
+   style.inline_preedit = true;
+   style.client_caps = weasel::INLINE_PREEDIT_CAPABLE;
++  // Selected text stays white; secondary hover uses the readable theme accent.
++  for (int accent : {0xff7a3614, 0xff512610, 0xff191615, 0xff293e10}) {
++    style.candidate_text_color = accent;
++    style.hilited_candidate_text_color = 0xffffffff;
++    style.hilited_label_text_color = style.hilited_comment_text_color = 0xffffffff;
++    const auto hover = weasel::GetCandidateTextColors(style, false, true);
++    const auto selected = weasel::GetCandidateTextColors(style, true, true);
++    assert(hover.text == accent && hover.label == accent && hover.comment == accent);
++    assert(selected.text == (int)0xffffffff && selected.label == (int)0xffffffff);
++  }
+   HDC dc = CreateCompatibleDC(nullptr);
+   for (UINT dpi : {96u, 144u, 192u}) {
+     for (int mode = 0; mode < 3; ++mode) {
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index efa4d52..c6d2bc8 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -250,13 +250,23 @@ int wmain(int argc, wchar_t** argv) {
+     } else if (std::wstring(argv[1]) == L"skin") {
+       require(argc == 5, "skin requires USER THEME STAGE"); skin(argv[2], argv[3], argv[4]);
+     } else if (std::wstring(argv[1]) == L"skin-verify") {
++      require(argc == 3 || argc == 4, "skin-verify requires USER [THEME]");
+       auto ui = load(fs::path(argv[2]) / L"build" / L"weasel.yaml");
+       require(scalar(ui["style"]["color_scheme"], "azure_pill"), "Skin selection missing");
+       require(scalar(ui["style"]["layout"]["type"], "horizontal"), "Horizontal skin layout missing");
+       require(ui["style"]["layout"]["corner_radius"].as<int>(0) == 16, "Skin corner radius missing");
+       auto palette = ui["preset_color_schemes"]["azure_pill"];
+-      require(palette["hilited_candidate_back_color"].as<unsigned int>(0) == 0x286cf4ff,
+-              "Blue candidate background missing");
++      const auto expected = argc == 4
++          ? load(argv[3])["patch"]["preset_color_schemes/azure_pill"]
++          : YAML::Node();
++      require(palette["hilited_candidate_back_color"].as<unsigned int>(0) ==
++              (argc == 4 ? expected["hilited_candidate_back_color"].as<unsigned int>() : 0x286cf4ff),
++              "Selected accent background missing");
++      if (argc == 4) {
++        for (const auto key : {"candidate_text_color", "hilited_candidate_text_color", "label_color"})
++          require(palette[key].as<unsigned int>() == expected[key].as<unsigned int>(),
++                  std::string("Skin color mismatch: ") + key);
++      }
+     } else if (std::wstring(argv[1]) == L"verify") verify(argv[2]);
+     else throw std::runtime_error("Unknown operation");
+     std::cout << "Configuration check passed.\n";
+-- 
+2.53.0.windows.2
+

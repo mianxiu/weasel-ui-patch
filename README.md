@@ -1,8 +1,8 @@
-> **2026-09-30 修复皮肤部署等待：** 旧脚本启动部署器时附加空格，导致进入隐藏配置向导。现直接传递 /deploy，部署器也会清理参数空白；本机皮肤部署和校验已通过。修正版独立皮肤包：weasel/dist/Weasel-Azure-Pill-DeployFix.zip，普通运行 Apply-Skin.cmd，无需重启 Windows。
+> **2026-09-30 当前分发包：** dist 已清理，只保留 weasel/dist/Weasel-Rewrite-UI-Floating-Preview 文件夹及同名 ZIP。运行 Apply-Patch.cmd 更新完整补丁；同一文件夹内 Apply-Skin.cmd 使用原蓝色，Apply-Skin-navy.cmd / Apply-Skin-black.cmd / Apply-Skin-green.cmd 分别切换深蓝、深黑、深绿。次要候选 hover 使用深色强调文字，正式选中保持白字；hover 修复需要安装本次程序。四种配色的真实 librime 部署、原生 UI 回归和分发包校验通过。
 
-> **Tab 编辑不增高：** 编辑区置于候选旁边，保留进入前的窗口高度；末尾编辑区预留，长内容滚动显示。进入时可扩展一次宽度，随后同一行编辑保持尺寸和位置。三种布局、96/144/192 DPI、真实 HWND 的进入/长串编辑/退出测试通过。完整包：weasel/dist/Weasel-Rewrite-UI-Floating-Preview.zip，运行 Apply-Patch.cmd；真实应用视觉验收仍待完成。
+> **Tab 编辑不增高：** 编辑区置于候选旁边，保留进入前的窗口高度；末尾编辑区预留，长内容滚动显示。进入时可扩展一次宽度，随后同一行编辑保持尺寸和位置。三种布局、96/144/192 DPI、真实 HWND 的进入/长串编辑/退出测试通过；真实应用视觉验收仍待完成。
 
-> **悬浮声调预览版：** 行内输入已恢复旧版。Tab 时显示万象词典声调全拼、小字号和独立圆角上标编号；序号及替换输入在末尾。没有可靠拼音时回退原始编码。皮肤定义在 rime/skins/azure_pill.yaml。当前为本地预览分支，稳定 Release 保持原有版本。
+> **悬浮声调预览版：** 行内输入已恢复旧版。Tab 时显示万象词典声调全拼、小字号和独立圆角上标编号；序号及替换输入在末尾。没有可靠拼音时回退原始编码。皮肤定义在 rime/skins/azure_pill*.yaml。皮肤部署参数空格问题已修复。当前为本地预览分支，稳定线上 Release 保持原有版本。
 
 # weasel-ui-patch
 

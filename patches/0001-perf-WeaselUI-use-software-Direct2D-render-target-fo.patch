@@ -1,7 +1,7 @@
 From 28e627ea71b2489f97bcd0ddcc97076060135b3b Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:39 +0800
-Subject: [PATCH 01/34] perf(WeaselUI): use software Direct2D render target for
+Subject: [PATCH 01/35] perf(WeaselUI): use software Direct2D render target for
  panel
 
 ---
