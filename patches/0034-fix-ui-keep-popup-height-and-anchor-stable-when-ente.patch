@@ -1,0 +1,795 @@
+From 6c120b08ce245ed307b2edb4a3ff572d066d2f87 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 21:14:07 +0800
+Subject: [PATCH 34/34] fix(ui): keep popup height and anchor stable when
+ entering Tab edit mode
+
+---
+ INSTALL-PATCH.md                  |   5 +-
+ WeaselUI/DirectWriteResources.cpp |   2 +-
+ WeaselUI/Layout.h                 | 255 +++++++++++++++---------------
+ WeaselUI/RewriteLayout.h          |  40 ++++-
+ WeaselUI/StableRewriteLayout.h    | 115 ++++++++++++++
+ WeaselUI/WeaselPanel.cpp          |  74 ++++++++-
+ WeaselUI/WeaselPanel.h            |   6 +
+ rewrite-build.txt                 |   2 +-
+ test/rewrite_pipeline_test.cpp    |  76 +++++++++
+ 9 files changed, 442 insertions(+), 133 deletions(-)
+ create mode 100644 WeaselUI/StableRewriteLayout.h
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index bc9165d..d84c23d 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -8,10 +8,13 @@
+ Tab 编辑时，候选窗口显示万象词典提供的全拼声调；编号紧随音节，以独立圆角底色包裹。
+ 悬浮编码字号为候选字号的 60%（至少 8pt）；编号左间距 4px，内边距 3×1px，圆角 4px，均按 DPI 缩放。
+ 输入序号及替换字母显示在整串拼音最后。拼音固定为进入 Tab 时所选候选的读音。
++进入 Tab 不新增一行：编辑区置于候选旁边，保留进入前的窗口高度。
++预留末尾编辑区域，长拼音、长替换串及候选在各自固定区域滚动，不因输入而增高。
++进入时可向右扩展一次宽度，受屏幕工作区限制；随后同一编辑会话保持尺寸和位置，换行或跨屏时重新定位。
+ 没有词典拼音、无法与音节范围对应时，回退到原始编码，避免标错声调或索引。
+ 安装器会移除上一版 `rewrite_ui/display`、`inline_raw_input`、`inline_labels` 试验设置。
+ 安装后完全退出并重新打开测试应用（包括后台进程）；仍未刷新时再注销登录或重启。
+-自动测试覆盖真实 librime 的拼音读取与行内输入保持、布局和 DPI；真实应用视觉效果仍需实测。
++自动测试覆盖真实 librime 的拼音读取与行内输入保持、三种布局和 DPI，以及实际 HWND 进入/编辑/退出的尺寸和位置；真实应用视觉效果仍需实测。
+ 
+ # 小狼毫 / 万象 Pro 一键重写补丁
+ 
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index d051974..da4a9c7 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -138,7 +138,7 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   init_font(font_face, font_point, pTextFormat, wrapping);
+   init_font(font_face, font_point, pPreeditTextFormat, wrapping_preedit);
+   init_font(font_face, (std::max)(8, (int)(font_point * 0.60f)),
+-            pRewriteTextFormat, wrapping_preedit);
++            pRewriteTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
+   init_font(label_font_face, label_font_point, pLabelTextFormat, wrapping);
+   init_font(comment_font_face, comment_font_point, pCommentTextFormat,
+             wrapping);
+diff --git a/WeaselUI/Layout.h b/WeaselUI/Layout.h
+index d96ad8e..30e2178 100644
+--- a/WeaselUI/Layout.h
++++ b/WeaselUI/Layout.h
+@@ -1,126 +1,129 @@
+-#pragma once
+-
+-#include <WeaselIPCData.h>
+-#include <WeaselUI.h>
+-#include <gdiplus.h>
+-
+-#pragma comment(lib, "gdiplus.lib")
+-#define IS_FULLSCREENLAYOUT(style)                             \
+-  (style.layout_type == UIStyle::LAYOUT_VERTICAL_FULLSCREEN || \
+-   style.layout_type == UIStyle::LAYOUT_HORIZONTAL_FULLSCREEN)
+-#define NOT_FULLSCREENLAYOUT(style)                            \
+-  (style.layout_type != UIStyle::LAYOUT_VERTICAL_FULLSCREEN && \
+-   style.layout_type != UIStyle::LAYOUT_HORIZONTAL_FULLSCREEN)
+-
+-namespace weasel {
+-class GraphicsRoundRectPath : public Gdiplus::GraphicsPath {
+- public:
+-  GraphicsRoundRectPath() {};
+-  GraphicsRoundRectPath(int left,
+-                        int top,
+-                        int width,
+-                        int height,
+-                        int cornerx,
+-                        int cornery)
+-      : Gdiplus::GraphicsPath() {
+-    AddRoundRect(left, top, width, height, cornerx, cornery);
+-  }
+-  GraphicsRoundRectPath(const CRect rc, int corner) {
+-    if (corner > 0)
+-      AddRoundRect(rc.left, rc.top, rc.Width(), rc.Height(), corner, corner);
+-    else
+-      AddRectangle(Gdiplus::Rect(rc.left, rc.top, rc.Width(), rc.Height()));
+-  }
+-
+-  GraphicsRoundRectPath(const CRect rc,
+-                        int corner,
+-                        bool roundTopLeft,
+-                        bool roundTopRight,
+-                        bool roundBottomRight,
+-                        bool roundBottomLeft);
+-
+- public:
+-  void AddRoundRect(int left,
+-                    int top,
+-                    int width,
+-                    int height,
+-                    int cornerx,
+-                    int cornery);
+-};
+-
+-struct IsToRoundStruct {
+-  bool IsTopLeftNeedToRound;
+-  bool IsBottomLeftNeedToRound;
+-  bool IsTopRightNeedToRound;
+-  bool IsBottomRightNeedToRound;
+-  bool Hemispherical;
+-  IsToRoundStruct()
+-      : IsTopLeftNeedToRound(true),
+-        IsTopRightNeedToRound(true),
+-        IsBottomLeftNeedToRound(true),
+-        IsBottomRightNeedToRound(true),
+-        Hemispherical(false) {}
+-};
+-
+-class Layout {
+- public:
+-  Layout(const UIStyle& style,
+-         const Context& context,
+-         const Status& status,
+-         PDWR pDWR);
+-
+-  virtual void DoLayout(CDCHandle dc, PDWR pDWR = NULL) = 0;
+-  /* All points in this class is based on the content area */
+-  /* The top-left corner of the content area is always (0, 0) */
+-  virtual CSize GetContentSize() const = 0;
+-  virtual CRect GetPreeditRect() const = 0;
+-  virtual CRect GetAuxiliaryRect() const = 0;
+-  virtual CRect GetHighlightRect() const = 0;
+-  virtual CRect GetCandidateLabelRect(int id) const = 0;
+-  virtual CRect GetCandidateTextRect(int id) const = 0;
+-  virtual CRect GetCandidateRect(int id) const = 0;
+-  virtual CRect GetCandidateCommentRect(int id) const = 0;
+-  virtual CRect GetStatusIconRect() const = 0;
+-  virtual IsToRoundStruct GetRoundInfo(int id) = 0;
+-  virtual IsToRoundStruct GetTextRoundInfo() = 0;
+-  virtual CRect GetContentRect() = 0;
+-  virtual CRect GetPrepageRect() = 0;
+-  virtual CRect GetNextpageRect() = 0;
+-  virtual weasel::TextRange GetPreeditRange() = 0;
+-  virtual CSize GetBeforeSize() = 0;
+-  virtual CSize GetHilitedSize() = 0;
+-  virtual CSize GetAfterSize() = 0;
+-
+-  virtual std::wstring GetLabelText(const std::vector<Text>& labels,
+-                                    int id,
+-                                    const wchar_t* format) const = 0;
+-  virtual bool IsInlinePreedit() const = 0;
+-  virtual bool ShouldDisplayStatusIcon() const = 0;
+-  virtual void GetTextSizeDW(const std::wstring& text,
+-                             size_t nCount,
+-                             ComPtr<IDWriteTextFormat1>& pTextFormat,
+-                             PDWR pDWR,
+-                             LPSIZE lpSize) const = 0;
+-
+-  int offsetX = 0;
+-  int offsetY = 0;
+-  int mark_width = 4;
+-  int mark_gap = 8;
+-  int mark_height = 0;
+-  int real_margin_x;
+-  int real_margin_y;
+-  UIStyle _style;
+-
+- protected:
+-  const Context& _context;
+-  const Status& _status;
+-  const std::vector<Text>& candidates;
+-  const std::vector<Text>& comments;
+-  const std::vector<Text>& labels;
+-  const int& id;
+-  const int candidates_count;
+-  const int labelFontValid;
+-  const int textFontValid;
+-  const int cmtFontValid;
+-};
+-};  // namespace weasel
++#pragma once
++
++#include <WeaselIPCData.h>
++#include <WeaselUI.h>
++#include <gdiplus.h>
++
++#pragma comment(lib, "gdiplus.lib")
++#define IS_FULLSCREENLAYOUT(style)                             \
++  (style.layout_type == UIStyle::LAYOUT_VERTICAL_FULLSCREEN || \
++   style.layout_type == UIStyle::LAYOUT_HORIZONTAL_FULLSCREEN)
++#define NOT_FULLSCREENLAYOUT(style)                            \
++  (style.layout_type != UIStyle::LAYOUT_VERTICAL_FULLSCREEN && \
++   style.layout_type != UIStyle::LAYOUT_HORIZONTAL_FULLSCREEN)
++
++namespace weasel {
++class GraphicsRoundRectPath : public Gdiplus::GraphicsPath {
++ public:
++  GraphicsRoundRectPath() {};
++  GraphicsRoundRectPath(int left,
++                        int top,
++                        int width,
++                        int height,
++                        int cornerx,
++                        int cornery)
++      : Gdiplus::GraphicsPath() {
++    AddRoundRect(left, top, width, height, cornerx, cornery);
++  }
++  GraphicsRoundRectPath(const CRect rc, int corner) {
++    if (corner > 0)
++      AddRoundRect(rc.left, rc.top, rc.Width(), rc.Height(), corner, corner);
++    else
++      AddRectangle(Gdiplus::Rect(rc.left, rc.top, rc.Width(), rc.Height()));
++  }
++
++  GraphicsRoundRectPath(const CRect rc,
++                        int corner,
++                        bool roundTopLeft,
++                        bool roundTopRight,
++                        bool roundBottomRight,
++                        bool roundBottomLeft);
++
++ public:
++  void AddRoundRect(int left,
++                    int top,
++                    int width,
++                    int height,
++                    int cornerx,
++                    int cornery);
++};
++
++struct IsToRoundStruct {
++  bool IsTopLeftNeedToRound;
++  bool IsBottomLeftNeedToRound;
++  bool IsTopRightNeedToRound;
++  bool IsBottomRightNeedToRound;
++  bool Hemispherical;
++  IsToRoundStruct()
++      : IsTopLeftNeedToRound(true),
++        IsTopRightNeedToRound(true),
++        IsBottomLeftNeedToRound(true),
++        IsBottomRightNeedToRound(true),
++        Hemispherical(false) {}
++};
++
++class Layout {
++ public:
++  virtual ~Layout() = default;
++  Layout(const UIStyle& style,
++         const Context& context,
++         const Status& status,
++         PDWR pDWR);
++
++  virtual void DoLayout(CDCHandle dc, PDWR pDWR = NULL) = 0;
++  /* All points in this class is based on the content area */
++  /* The top-left corner of the content area is always (0, 0) */
++  virtual CSize GetContentSize() const = 0;
++  virtual CRect GetPreeditRect() const = 0;
++  virtual CRect GetAuxiliaryRect() const = 0;
++  virtual CRect GetHighlightRect() const = 0;
++  virtual CRect GetCandidateLabelRect(int id) const = 0;
++  virtual CRect GetCandidateTextRect(int id) const = 0;
++  virtual CRect GetCandidateRect(int id) const = 0;
++  virtual CRect GetCandidateCommentRect(int id) const = 0;
++  virtual CRect GetStatusIconRect() const = 0;
++  virtual IsToRoundStruct GetRoundInfo(int id) = 0;
++  virtual IsToRoundStruct GetTextRoundInfo() = 0;
++  virtual CRect GetContentRect() = 0;
++  virtual CRect GetPrepageRect() = 0;
++  virtual CRect GetNextpageRect() = 0;
++  virtual weasel::TextRange GetPreeditRange() = 0;
++  virtual CSize GetBeforeSize() = 0;
++  virtual CSize GetHilitedSize() = 0;
++  virtual CSize GetAfterSize() = 0;
++
++  virtual std::wstring GetLabelText(const std::vector<Text>& labels,
++                                    int id,
++                                    const wchar_t* format) const = 0;
++  virtual bool IsInlinePreedit() const = 0;
++  virtual bool IsStableRewrite() const { return false; }
++  virtual CRect GetCandidateViewport() { return GetContentRect(); }
++  virtual bool ShouldDisplayStatusIcon() const = 0;
++  virtual void GetTextSizeDW(const std::wstring& text,
++                             size_t nCount,
++                             ComPtr<IDWriteTextFormat1>& pTextFormat,
++                             PDWR pDWR,
++                             LPSIZE lpSize) const = 0;
++
++  int offsetX = 0;
++  int offsetY = 0;
++  int mark_width = 4;
++  int mark_gap = 8;
++  int mark_height = 0;
++  int real_margin_x;
++  int real_margin_y;
++  UIStyle _style;
++
++ protected:
++  const Context& _context;
++  const Status& _status;
++  const std::vector<Text>& candidates;
++  const std::vector<Text>& comments;
++  const std::vector<Text>& labels;
++  const int& id;
++  const int candidates_count;
++  const int labelFontValid;
++  const int textFontValid;
++  const int cmtFontValid;
++};
++};  // namespace weasel
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 065f853..185feeb 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -12,7 +12,7 @@ struct RewriteLayout {
+ };
+ // Keep pronunciation and its superscript badge together when wrapping.
+ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+-                                    PDWR dwr) {
++                                    PDWR dwr, bool unwrapped = false) {
+   RewriteLayout result;
+   const auto& style = layout._style;
+   const bool vertical = style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
+@@ -34,7 +34,7 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     const int w = vertical ? (std::max<LONG>)(text.cx, lw) : text.cx + (lw ? margin + lw : 0);
+     const int h = vertical ? text.cy + (lh ? margin + lh : 0) : (std::max<LONG>)(text.cy, lh);
+     const int span = vertical ? h : w;
+-    if (limit > 0 && advance > 0 && advance + span > limit) {
++    if (!unwrapped && limit > 0 && advance > 0 && advance + span > limit) {
+       cross += line + gap; advance = 0; line = 0;
+     }
+     const int x = vertical ? cross : advance, y = vertical ? advance : cross;
+@@ -53,4 +53,40 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+   }
+   return result;
+ }
++// Fixed rail with a reserved editing slot, visible even before the first digit.
++// Clip and scroll only presentation rectangles; never truncate Rime input.
++inline RewriteLayout MeasureStableRewrite(Layout& layout, const RewriteState& state,
++                                           PDWR dwr, CSize area,
++                                           CRect& syllables, CRect& editor) {
++  auto result = MeasureRewrite(layout, state, dwr, true);
++  const bool vertical = layout._style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
++  const int extent = vertical ? area.cy : area.cx;
++  const int gap = (std::max)(1, (int)(6 * dwr->dpiScaleLayout));
++  const int reserve = (std::max)(1, (std::min)((int)(80 * dwr->dpiScaleLayout), extent / 3));
++  syllables.SetRect(0, 0, area.cx, area.cy);
++  editor = syllables;
++  if (vertical) { syllables.bottom = (std::max)(1, extent - reserve - gap); editor.top = extent - reserve; }
++  else { syllables.right = (std::max)(1, extent - reserve - gap); editor.left = extent - reserve; }
++  int shift = 0;
++  for (const auto& cell : result.cells) if (cell.unit.active && !cell.unit.badge) {
++    const int start = vertical ? cell.back.top : cell.back.left;
++    const int end = vertical ? cell.back.bottom : cell.back.right;
++    const int span = vertical ? syllables.Height() : syllables.Width();
++    if (end > span) shift = (std::max)(0, end - span);
++    if (end - start > span) shift = start;
++  }
++  for (auto& cell : result.cells) {
++    int dx = vertical ? 0 : -shift, dy = vertical ? -shift : 0;
++    if (cell.unit.badge) {
++      dx = editor.left - cell.text.left;
++      dy = editor.top - cell.text.top;
++      if (vertical) dy -= (std::max)(0, cell.text.Height() - editor.Height());
++      else dx -= (std::max)(0, cell.text.Width() - editor.Width());
++    }
++    cell.back.OffsetRect(dx, dy); cell.text.OffsetRect(dx, dy);
++    cell.labelBack.OffsetRect(dx, dy); cell.label.OffsetRect(dx, dy);
++  }
++  result.size = area;
++  return result;
++}
+ }  // namespace weasel
+diff --git a/WeaselUI/StableRewriteLayout.h b/WeaselUI/StableRewriteLayout.h
+new file mode 100644
+index 0000000..db10d2e
+--- /dev/null
++++ b/WeaselUI/StableRewriteLayout.h
+@@ -0,0 +1,115 @@
++#pragma once
++#include "HorizontalLayout.h"
++#include "VerticalLayout.h"
++#include "VHorizontalLayout.h"
++#include <array>
++#include <memory>
++
++namespace weasel {
++// Put the rewrite rail beside the existing candidate area, never above it.
++// The entry size is captured before Tab, including margins and shadow padding.
++class StableRewriteLayout : public Layout {
++ public:
++  StableRewriteLayout(const UIStyle& style, const Context& context,
++                      const Status& status, PDWR dwr, CSize entry,
++                      int workWidth)
++      : Layout(style, context, status, dwr), normal_(context), entry_(entry),
++        workWidth_(workWidth) {
++    normal_.rewrite.clear();
++    normal_.preedit.clear();
++    auto plain = style;
++    plain.inline_preedit = true;
++    // Keep a single horizontal candidate strip; scroll it to the selected item.
++    // Vertical lists retain their original orientation and scroll vertically.
++    plain.max_width = plain.max_height = 0;
++    if (style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT)
++      base_.reset(new VHorizontalLayout(plain, normal_, status, dwr));
++    else if (style.layout_type == UIStyle::LAYOUT_VERTICAL ||
++             style.layout_type == UIStyle::LAYOUT_VERTICAL_FULLSCREEN)
++      base_.reset(new VerticalLayout(plain, normal_, status, dwr));
++    else base_.reset(new HorizontalLayout(plain, normal_, status, dwr));
++  }
++  void DoLayout(CDCHandle dc, PDWR dwr) override {
++    const std::array<ComPtr<IDWriteTextFormat1>, 3> formats = {
++        dwr->pTextFormat, dwr->pLabelTextFormat, dwr->pCommentTextFormat};
++    std::array<DWRITE_WORD_WRAPPING, 3> wraps{};
++    for (size_t i = 0; i < formats.size(); ++i) if (formats[i]) {
++      wraps[i] = formats[i]->GetWordWrapping();
++      formats[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
++    }
++    base_->DoLayout(dc, dwr);
++    for (size_t i = 0; i < formats.size(); ++i) if (formats[i])
++      formats[i]->SetWordWrapping(wraps[i]);
++    auto natural = base_->GetContentSize();
++    const int scaleRail = (std::max)(48, (int)(240 * dwr->dpiScaleLayout));
++    const int gap = (std::max)(_style.hilite_padding_x * 2,
++                              (int)(12 * dwr->dpiScaleLayout));
++    const int oldWidth = entry_.cx > 0 ? entry_.cx : natural.cx;
++    const int oldHeight = entry_.cy > 0 ? entry_.cy : natural.cy;
++    const int limit = workWidth_ > 0 ? workWidth_ : oldWidth + scaleRail + gap;
++    size_ = CSize((std::min)(limit, oldWidth + scaleRail + gap), oldHeight);
++    const int innerWidth = (std::max<LONG>)(2, size_.cx - 2 * (offsetX + real_margin_x));
++    const int rail = (std::min)(scaleRail, (std::max)(1, innerWidth / 2 - gap));
++    const int top = offsetY + real_margin_y;
++    const int bottom = (std::max<LONG>)(top + 1, size_.cy - offsetY - real_margin_y);
++    rail_.SetRect(offsetX + real_margin_x, top,
++                  offsetX + real_margin_x + rail, bottom);
++    viewport_.SetRect(rail_.right + gap, top,
++                      (std::max)(rail_.right + gap + 1, size_.cx - offsetX - real_margin_x), bottom);
++    dx_ = rail + gap; dy_ = 0;
++    mark_width = base_->mark_width;
++    mark_gap = base_->mark_gap;
++    mark_height = base_->mark_height;
++    if (candidates_count > 0 && id >= 0 && id < candidates_count && id < MAX_CANDIDATES_COUNT) {
++      auto selected = base_->GetCandidateRect(id);
++      selected.OffsetRect(dx_, 0);
++      if (selected.Width() > viewport_.Width() || selected.left < viewport_.left)
++        dx_ += viewport_.left - selected.left;
++      else if (selected.right > viewport_.right) dx_ -= selected.right - viewport_.right;
++      if (selected.Height() > viewport_.Height() || selected.top < viewport_.top)
++        dy_ += viewport_.top - selected.top;
++      else if (selected.bottom > viewport_.bottom) dy_ -= selected.bottom - viewport_.bottom;
++    }
++    content_.SetRect(offsetX, offsetY, size_.cx - offsetX, size_.cy - offsetY);
++  }
++  bool IsStableRewrite() const override { return true; }
++  bool IsInlinePreedit() const override { return false; }
++  CSize GetContentSize() const override { return size_; }
++  CRect GetPreeditRect() const override { return rail_; }
++  CRect GetContentRect() override { return content_; }
++  CRect GetCandidateViewport() override { return viewport_; }
++  CRect GetCandidateRect(int i) const override { return clipped(base_->GetCandidateRect(i)); }
++  CRect GetHighlightRect() const override { return clipped(base_->GetHighlightRect()); }
++  CRect GetCandidateLabelRect(int i) const override { return shifted(base_->GetCandidateLabelRect(i)); }
++  CRect GetCandidateTextRect(int i) const override { return shifted(base_->GetCandidateTextRect(i)); }
++  CRect GetCandidateCommentRect(int i) const override { return shifted(base_->GetCandidateCommentRect(i)); }
++  CRect GetAuxiliaryRect() const override { return clipped(base_->GetAuxiliaryRect()); }
++  CRect GetStatusIconRect() const override { return clipped(base_->GetStatusIconRect()); }
++  CRect GetPrepageRect() override { return clipped(base_->GetPrepageRect()); }
++  CRect GetNextpageRect() override { return clipped(base_->GetNextpageRect()); }
++  bool ShouldDisplayStatusIcon() const override { return base_->ShouldDisplayStatusIcon(); }
++  IsToRoundStruct GetRoundInfo(int i) override { return base_->GetRoundInfo(i); }
++  IsToRoundStruct GetTextRoundInfo() override { return base_->GetTextRoundInfo(); }
++  TextRange GetPreeditRange() override { return {}; }
++  CSize GetBeforeSize() override { return {}; }
++  CSize GetHilitedSize() override { return {}; }
++  CSize GetAfterSize() override { return {}; }
++  std::wstring GetLabelText(const std::vector<Text>& labels, int i, const wchar_t* format) const override {
++    return base_->GetLabelText(labels, i, format);
++  }
++  void GetTextSizeDW(const std::wstring& text, size_t count,
++                    ComPtr<IDWriteTextFormat1>& format, PDWR dwr, LPSIZE size) const override {
++    base_->GetTextSizeDW(text, count, format, dwr, size);
++  }
++ private:
++  CRect shifted(CRect rc) const { rc.OffsetRect(dx_, dy_); return rc; }
++  CRect clipped(CRect rc) const {
++    rc = shifted(rc); CRect result; result.IntersectRect(rc, viewport_); return result;
++  }
++  Context normal_;
++  std::unique_ptr<Layout> base_;
++  CSize entry_, size_;
++  int workWidth_, dx_ = 0, dy_ = 0;
++  CRect rail_, viewport_, content_;
++};
++}  // namespace weasel
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 19a6e9d..a174b38 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -12,6 +12,7 @@
+ #include "HorizontalLayout.h"
+ #include "FullScreenLayout.h"
+ #include "VHorizontalLayout.h"
++#include "StableRewriteLayout.h"
+ 
+ // for IDI_ZH, IDI_EN
+ #include <resource.h>
+@@ -113,6 +114,15 @@ void WeaselPanel::_CreateLayout() {
+     delete m_layout;
+ 
+   Layout* layout = NULL;
++  if (m_rewriteLocked && m_ctx.rewrite.active()) {
++    MONITORINFO info = {sizeof(MONITORINFO)};
++    const auto monitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
++    const int available = GetMonitorInfo(monitor, &info)
++        ? (std::max<LONG>)(1, info.rcWork.right - m_rewriteAnchor.x) : 0;
++    m_layout = new StableRewriteLayout(m_style, m_ctx, m_status, pDWR,
++                                      m_rewriteEntrySize, available);
++    return;
++  }
+   if (m_style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT) {
+     layout = new VHorizontalLayout(m_style, m_ctx, m_status, pDWR);
+   } else {
+@@ -134,6 +144,18 @@ void WeaselPanel::_CreateLayout() {
+ 
+ // 更新界面
+ void WeaselPanel::Refresh() {
++  const bool editing = m_status.composing && m_ctx.rewrite.active();
++  if (editing && (!m_rewriteLocked || m_rewriteOriginal != m_ctx.rewrite.original)) {
++    m_rewriteEntrySize = m_layout ? m_layout->GetContentSize() : CSize(0, 0);
++    CRect window; GetWindowRect(&window);
++    m_rewriteAnchor = window.TopLeft();
++    m_rewriteOriginal = m_ctx.rewrite.original;
++    m_rewriteDpi = dpi;
++    m_rewriteLocked = true;
++  } else if (!editing) {
++    m_rewriteLocked = false;
++    m_rewriteOriginal.clear();
++  }
+   bool should_show_icon =
+       (m_status.ascii_mode || !m_status.composing || !m_ctx.aux.empty());
+   m_candidateCount = min(m_ctx.cinfo.candies.size(), MAX_CANDIDATES_COUNT);
+@@ -167,6 +189,11 @@ void WeaselPanel::Refresh() {
+   // inline_no_candidates
+   if (!hide_candidates || inline_no_candidates) {
+     _InitFontRes();
++    if (m_rewriteLocked && dpi != m_rewriteDpi) {
++      m_rewriteEntrySize.cx = MulDiv(m_rewriteEntrySize.cx, dpi, m_rewriteDpi);
++      m_rewriteEntrySize.cy = MulDiv(m_rewriteEntrySize.cy, dpi, m_rewriteDpi);
++      m_rewriteDpi = dpi;
++    }
+     _CreateLayout();
+ 
+     CDCHandle dc = GetDC();
+@@ -788,13 +815,20 @@ bool WeaselPanel::_DrawPreeditBack(const Text& text,
+ }
+ 
+ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+-  auto layout = MeasureRewrite(*m_layout, m_ctx.rewrite, pDWR);
++  CRect syllables, editor;
++  const bool stable = m_layout->IsStableRewrite();
++  auto layout = stable ? MeasureStableRewrite(*m_layout, m_ctx.rewrite, pDWR,
++                       rc.Size(), syllables, editor)
++                       : MeasureRewrite(*m_layout, m_ctx.rewrite, pDWR);
++  syllables.OffsetRect(rc.left, rc.top); editor.OffsetRect(rc.left, rc.top);
+   for (auto cell : layout.cells) {
+     cell.text.OffsetRect(rc.left, rc.top);
+     cell.labelBack.OffsetRect(rc.left, rc.top);
+     cell.label.OffsetRect(rc.left, rc.top);
++    const CRect clip = cell.unit.badge ? editor : syllables;
++    if (stable && background) cell.labelBack.IntersectRect(cell.labelBack, clip);
+     if (background) {
+-      if (!cell.unit.label.empty()) {
++      if (!cell.unit.label.empty() && !cell.labelBack.IsRectEmpty()) {
+         unsigned int color = m_style.hilited_back_color;
+         if (!cell.unit.active)
+           color = (color & 0x00ffffff) | (((color >> 24) / 3) << 24);
+@@ -805,12 +839,16 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+       }
+     } else {
+       int color = cell.unit.active ? m_style.hilited_text_color : m_style.text_color;
++      if (stable) pDWR->pRenderTarget->PushAxisAlignedClip(
++          D2D1::RectF((float)clip.left, (float)clip.top, (float)clip.right, (float)clip.bottom),
++          D2D1_ANTIALIAS_MODE_ALIASED);
+       // Only badges carry a background; pronunciation remains unobtrusive.
+       _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), m_style.text_color,
+                pDWR->pRewriteTextFormat.Get());
+       if (!cell.unit.label.empty())
+         _TextOut(cell.label, cell.unit.label, cell.unit.label.size(), color,
+                  pDWR->pRewriteTextFormat.Get());
++      if (stable) pDWR->pRenderTarget->PopAxisAlignedClip();
+     }
+   }
+   return !layout.cells.empty();
+@@ -818,6 +856,15 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+ 
+ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+   bool drawn = false;
++  const bool stable = m_layout->IsStableRewrite();
++  const CRect clip = m_layout->GetCandidateViewport();
++  const int saved = stable ? ::SaveDC(dc) : 0;
++  if (stable) {
++    ::IntersectClipRect(dc, clip.left, clip.top, clip.right, clip.bottom);
++    if (!back) pDWR->pRenderTarget->PushAxisAlignedClip(
++        D2D1::RectF((float)clip.left, (float)clip.top, (float)clip.right, (float)clip.bottom),
++        D2D1_ANTIALIAS_MODE_ALIASED);
++  }
+   const std::vector<Text>& candidates(m_ctx.cinfo.candies);
+   const std::vector<Text>& comments(m_ctx.cinfo.comments);
+   const std::vector<Text>& labels(m_ctx.cinfo.labels);
+@@ -1015,6 +1062,8 @@ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+       }
+     }
+   }
++  if (stable && !back) pDWR->pRenderTarget->PopAxisAlignedClip();
++  if (saved) ::RestoreDC(dc, saved);
+   return drawn;
+ }
+ 
+@@ -1190,6 +1239,8 @@ LRESULT WeaselPanel::OnDestroy(UINT uMsg,
+   m_hoverIndex = -1;
+   m_lastMousePos = {-1, -1};
+   m_sticky = false;
++  m_rewriteLocked = false;
++  m_rewriteOriginal.clear();
+   delete m_layout;
+   m_layout = NULL;
+   return 0;
+@@ -1206,6 +1257,18 @@ LRESULT WeaselPanel::OnDpiChanged(UINT uMsg,
+ void WeaselPanel::MoveTo(RECT const& rc) {
+   if (!m_layout)
+     return;  // avoid handling nullptr in _RepositionWindow
++  if (m_rewriteLocked && m_layout->IsStableRewrite()) {
++    const bool monitorChanged = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST) != m_hMonitor;
++    if ((!m_lastCaretRect.IsRectEmpty() && abs(rc.top - m_lastCaretRect.top) > 6) || monitorChanged) {
++      m_rewriteAnchor.Offset(rc.left - m_lastCaretRect.left, rc.top - m_lastCaretRect.top);
++      m_inputPos = rc; m_inputPos.OffsetRect(0, 6);
++      Refresh();
++    }
++    m_lastCaretRect = rc;
++    _RepositionWindow();
++    return;
++  }
++  m_lastCaretRect = rc;
+   m_redraw_by_monitor_change = false;
+   // The conditions for resetting the sticky state:
+   // 1. When the input session ends (ctx.empty() is true)
+@@ -1272,6 +1335,13 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
+   GetWindowRect(&rcWindow);
+   int width = (rcWindow.right - rcWindow.left);
+   int height = (rcWindow.bottom - rcWindow.top);
++  if (m_rewriteLocked && m_layout->IsStableRewrite()) {
++    const int x = (std::max)(rcWorkArea.left, (std::min)(m_rewriteAnchor.x, rcWorkArea.right - width));
++    const int y = (std::max)(rcWorkArea.top, (std::min)(m_rewriteAnchor.y, rcWorkArea.bottom - height));
++    m_rewriteAnchor = CPoint(x, y); m_istorepos = false;
++    SetWindowPos(HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
++    return;
++  }
+   // keep panel visible
+   rcWorkArea.right -= width;
+   rcWorkArea.bottom -= height;
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 8c77357..9f4af52 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -114,6 +114,12 @@ class WeaselPanel
+   const bool& m_in_server;
+ 
+   CRect m_inputPos;
++  CRect m_lastCaretRect;
++  CSize m_rewriteEntrySize;
++  CPoint m_rewriteAnchor;
++  bool m_rewriteLocked = false;
++  std::wstring m_rewriteOriginal;
++  UINT m_rewriteDpi = 96;
+   int m_offsetys[MAX_CANDIDATES_COUNT];  // offset y for candidates when
+                                          // vertical layout over bottom
+   int m_offsety_preedit;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 176fe8b..4bebe04 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,5 +1,5 @@
+ Build-ID: rewrite-ui-floating-tone-preview-20260930
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+-Features: floating dictionary tone pinyin + rounded superscript badges; original inline composition
++Features: floating dictionary tone pinyin + rounded superscript badges; fixed edit height; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+ This file identifies the installed package. Check SHA256SUMS.txt to verify binaries.
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 48ab413..abd24cc 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -5,6 +5,8 @@
+ #include "../WeaselUI/HorizontalLayout.h"
+ #include "../WeaselUI/VHorizontalLayout.h"
+ #include "../WeaselUI/RewriteLayout.h"
++#include "../WeaselUI/StableRewriteLayout.h"
++#include "../WeaselUI/WeaselPanel.h"
+ #include <cassert>
+ #include <iostream>
+ 
+@@ -27,6 +29,8 @@ weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
+ }
+ 
+ int main() {
++  CoInitialize(nullptr);
++  _Module.Init(nullptr, GetModuleHandle(nullptr));
+   auto armed = snapshot(L"armed", L"");
+   auto indexed = snapshot(L"index", L"3");
+   assert(indexed.rewrite.Units()[2].text == L"rén");
+@@ -87,8 +91,80 @@ int main() {
+           assert(!IntersectRect(&overlap, &measured.cells[i].back, &measured.cells[j].back));
+         }
+       }
++      // Candidate size before Tab is the height budget for the whole edit session.
++      auto normal = exited;
++      for (int n = 0; n < 5; ++n) {
++        normal.cinfo.candies.push_back(weasel::Text{L"测试候选文本"});
++        normal.cinfo.comments.push_back(weasel::Text{L"注释"});
++        normal.cinfo.labels.push_back(weasel::Text{std::to_wstring(n + 1)});
++      }
++      std::unique_ptr<weasel::Layout> before;
++      if (mode == 0) before.reset(new weasel::VerticalLayout(style, normal, status, dwr));
++      if (mode == 1) before.reset(new weasel::HorizontalLayout(style, normal, status, dwr));
++      if (mode == 2) before.reset(new weasel::VHorizontalLayout(style, normal, status, dwr));
++      before->DoLayout(dc, dwr);
++      auto entrySize = before->GetContentSize();
++      CSize locked;
++      for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
++        editing.cinfo = normal.cinfo;
++        editing.cinfo.highlighted = 4;
++        weasel::StableRewriteLayout stable(style, editing, status, dwr, entrySize, 1600);
++        stable.DoLayout(dc, dwr);
++        assert(stable.GetContentSize().cy == entrySize.cy);
++        if (!locked.cx) locked = stable.GetContentSize();
++        assert(stable.GetContentSize() == locked);
++        assert(!stable.GetCandidateRect(4).IsRectEmpty());
++        CRect pronunciations, tail;
++        auto rail = weasel::MeasureStableRewrite(stable, editing.rewrite, dwr,
++                        stable.GetPreeditRect().Size(), pronunciations, tail);
++        assert(rail.size == stable.GetPreeditRect().Size());
++        assert(tail.Width() > 0 && tail.Height() > 0);
++        RECT overlap;
++        assert(!IntersectRect(&overlap, &pronunciations, &tail));
++      }
+     }
+   }
+   DeleteDC(dc);
++  // Exercise real HWND resizing and painting, rather than just measurement.
++  {
++    weasel::UI host;
++    style.layout_type = weasel::UIStyle::LAYOUT_HORIZONTAL;
++    style.max_width = 700;
++    style.max_height = 0;
++    style.back_color = 0xffffffff;
++    style.text_color = style.candidate_text_color = 0xff333333;
++    style.hilited_back_color = 0xfff46c28;
++    style.hilited_text_color = style.hilited_candidate_text_color = 0xffffffff;
++    host.style() = style;
++    host.status() = status;
++    auto normal = exited;
++    for (int n = 0; n < 5; ++n) {
++      normal.cinfo.candies.push_back(weasel::Text{L"测试候选文本"});
++      normal.cinfo.comments.push_back(weasel::Text{L""});
++      normal.cinfo.labels.push_back(weasel::Text{std::to_wstring(n + 1)});
++    }
++    host.ctx() = normal;
++    WeaselPanel panel(host);
++    assert(panel.Create(nullptr) != nullptr);
++    panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
++    CRect before; panel.GetWindowRect(&before);
++    CRect locked;
++    for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
++      editing.cinfo = normal.cinfo;
++      host.ctx() = editing;
++      panel.Refresh(); panel.MoveTo(CRect(250, 200, 251, 224));
++      CRect actual; panel.GetWindowRect(&actual);
++      assert(actual.Height() == before.Height());
++      assert(actual.top == before.top && actual.left == before.left);
++      if (locked.IsRectEmpty()) locked = actual;
++      assert(actual == locked);
++    }
++    host.ctx() = normal; panel.Refresh(); panel.MoveTo(CRect(200, 200, 201, 224));
++    CRect after; panel.GetWindowRect(&after);
++    assert(after.Size() == before.Size());
++    panel.DestroyWindow();
++  }
+   std::cout << "IPC, property-only UI update, exit, layout and DPI tests passed\n";
++  _Module.Term();
++  CoUninitialize();
+ }
+-- 
+2.53.0.windows.2
+

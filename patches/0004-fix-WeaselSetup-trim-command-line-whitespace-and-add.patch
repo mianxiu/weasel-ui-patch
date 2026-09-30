@@ -1,7 +1,7 @@
 From 4d9e2116c6c1208c1ff41ea2afb72adc06118140 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:40 +0800
-Subject: [PATCH 04/32] fix(WeaselSetup): trim command-line whitespace and add
+Subject: [PATCH 04/34] fix(WeaselSetup): trim command-line whitespace and add
  opt-in setup tracing
 
 ---

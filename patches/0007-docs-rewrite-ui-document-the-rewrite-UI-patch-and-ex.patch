@@ -1,7 +1,7 @@
 From 1e2fd4e63ce12e5e3c7e20b8dfafca4aaf6c347d Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:40 +0800
-Subject: [PATCH 07/32] docs(rewrite-ui): document the rewrite UI patch and
+Subject: [PATCH 07/34] docs(rewrite-ui): document the rewrite UI patch and
  example config
 
 ---

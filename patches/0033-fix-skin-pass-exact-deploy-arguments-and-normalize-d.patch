@@ -1,0 +1,104 @@
+From 67519cfc7f41003f0ba5f29da6d698b7192f50f2 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 21:14:05 +0800
+Subject: [PATCH 33/34] fix(skin): pass exact deploy arguments and normalize
+ deployer switches
+
+---
+ Apply-Skin.ps1                    | 17 +++++++++++++++--
+ WeaselDeployer/WeaselDeployer.cpp |  5 +++++
+ package-skin.ps1                  |  8 +++++---
+ rime/skins/README.md              |  2 ++
+ 4 files changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/Apply-Skin.ps1 b/Apply-Skin.ps1
+index 67df548..9a0e5de 100644
+--- a/Apply-Skin.ps1
++++ b/Apply-Skin.ps1
+@@ -3,10 +3,23 @@ param([string]$UserDataRoot, [string]$Target, [switch]$CheckOnly)
+ $ErrorActionPreference = 'Stop'
+ $changed = $false; $saved = $null; $locked = $false; $mutex = $null
+ function Run-Deploy {
+-  $p = Start-Process -FilePath (Join-Path $Target 'WeaselDeployer.exe') -ArgumentList '/deploy' -WindowStyle Hidden -PassThru
++  # Start-Process may append whitespace, which older deployers interpret as setup.
++  $info = New-Object Diagnostics.ProcessStartInfo
++  $info.FileName = Join-Path $Target 'WeaselDeployer.exe'
++  $info.Arguments = '/deploy'
++  $info.UseShellExecute = $false
++  $info.CreateNoWindow = $true
++  $p = [Diagnostics.Process]::Start($info)
+   try {
+     $null = $p.Handle
+-    while (!$p.WaitForExit(10000)) { Write-Host '正在部署皮肤…' }
++    $started = [DateTime]::UtcNow
++    while (!$p.WaitForExit(10000)) {
++      $elapsed = [int]([DateTime]::UtcNow - $started).TotalSeconds
++      Write-Host "正在部署皮肤…已等待 $elapsed 秒。部署日志：$env:TEMP\rime.weasel"
++      if ($elapsed -ge 60 -and $p.MainWindowHandle -ne [IntPtr]::Zero) {
++        Write-Host '部署器正在等待窗口操作，请查看小狼毫部署器窗口。'
++      }
++    }
+     if ($p.ExitCode -ne 0) { throw "部署失败：$($p.ExitCode)" }
+   } finally { $p.Dispose() }
+ }
+diff --git a/WeaselDeployer/WeaselDeployer.cpp b/WeaselDeployer/WeaselDeployer.cpp
+index a578014..7ceb571 100644
+--- a/WeaselDeployer/WeaselDeployer.cpp
++++ b/WeaselDeployer/WeaselDeployer.cpp
+@@ -59,6 +59,11 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
+ }
+ 
+ static int Run(LPTSTR lpCmdLine) {
++  std::wstring command(lpCmdLine ? lpCmdLine : L"");
++  const auto first = command.find_first_not_of(L" \t\r\n");
++  command = first == std::wstring::npos ? L"" :
++      command.substr(first, command.find_last_not_of(L" \t\r\n") - first + 1);
++  lpCmdLine = command.data();
+   Configurator configurator;
+   configurator.Initialize();
+ 
+diff --git a/package-skin.ps1 b/package-skin.ps1
+index fa1e6d0..9e87f0e 100644
+--- a/package-skin.ps1
++++ b/package-skin.ps1
+@@ -1,6 +1,8 @@
++param([string]$PackageName = 'Weasel-Azure-Pill')
+ $ErrorActionPreference = 'Stop'
++if ($PackageName -notmatch '^Weasel-Azure-Pill(?:-[a-zA-Z0-9]+)*$') { throw 'Invalid package name' }
+ Set-Location $PSScriptRoot
+-$final = Join-Path $PSScriptRoot 'dist/Weasel-Azure-Pill'
++$final = Join-Path $PSScriptRoot ('dist/' + $PackageName)
+ $stage = $final + '-stage-' + [guid]::NewGuid().ToString('N')
+ New-Item -ItemType Directory -Path (Join-Path $stage 'skins') -Force | Out-Null
+ Copy-Item Apply-Skin.cmd,Apply-Skin.ps1,output/RewriteConfig.exe -Destination $stage
+@@ -23,7 +25,7 @@ $manifest = Get-ChildItem $stage -Recurse -File | ForEach-Object {
+   (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetRelativePath($stage, $_.FullName)
+ }
+ $manifest | Set-Content (Join-Path $stage 'SHA256SUMS.txt') -Encoding utf8
+-Compress-Archive -Path "$stage/*" -DestinationPath 'dist/Weasel-Azure-Pill.zip' -Force
++Compress-Archive -Path "$stage/*" -DestinationPath ('dist/' + $PackageName + '.zip') -Force
+ if (Test-Path -LiteralPath $final) {
+   $resolved = (Resolve-Path -LiteralPath $final).Path
+   if ($resolved -ne [IO.Path]::GetFullPath($final) -or
+@@ -31,4 +33,4 @@ if (Test-Path -LiteralPath $final) {
+   Move-Item -LiteralPath $resolved -Destination ($final + '-previous-' + [guid]::NewGuid().ToString('N'))
+ }
+ Move-Item -LiteralPath $stage -Destination $final
+-Get-Item 'dist/Weasel-Azure-Pill.zip' | Select-Object FullName,Length
++Get-Item ('dist/' + $PackageName + '.zip') | Select-Object FullName,Length
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 64cb831..8f9053b 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -5,6 +5,8 @@
+ 
+ 打开独立皮肤包 `Weasel-Azure-Pill`，普通双击 `Apply-Skin.cmd`。
+ 脚本备份并合并 `weasel.custom.yaml`，部署、校验并重启小狼毫服务；无需重启 Windows。
++2026-09-30 修复了旧脚本启动部署器时附加空格、进入隐藏配置向导而一直等待的问题。
++本版直接传递 `/deploy`，等待时显示耗时与日志目录；异常向导窗口保持可见。
+ 它不替换输入法 DLL，也不修改方案、词库或 Lua。
+ 其他主题定义、应用设置和无关配置值保留；YAML 注释和格式会规范化，原文件保存在备份里。
+ 
+-- 
+2.53.0.windows.2
+
