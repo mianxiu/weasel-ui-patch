@@ -1,7 +1,7 @@
 From fd33dc154769ac59e680e537f0bf026a81c2fbe3 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:40 +0800
-Subject: [PATCH 05/45] test(rewrite-ui): add state, IPC pipeline and librime
+Subject: [PATCH 05/46] test(rewrite-ui): add state, IPC pipeline and librime
  property tests
 
 ---
