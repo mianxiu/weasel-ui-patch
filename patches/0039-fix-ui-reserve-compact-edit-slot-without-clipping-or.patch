@@ -1,0 +1,56 @@
+From 36287beb459d833010489dbd39755e8b8f8b9e30 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 23:06:59 +0800
+Subject: [PATCH 39/39] fix(ui): reserve compact edit slot without clipping
+ original pronunciation
+
+---
+ WeaselUI/DetachedRewriteLayout.h | 2 +-
+ WeaselUI/RewriteLayout.h         | 2 +-
+ test/rewrite_pipeline_test.cpp   | 4 ++++
+ 3 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/WeaselUI/DetachedRewriteLayout.h b/WeaselUI/DetachedRewriteLayout.h
+index f781516..97f7f4c 100644
+--- a/WeaselUI/DetachedRewriteLayout.h
++++ b/WeaselUI/DetachedRewriteLayout.h
+@@ -11,7 +11,7 @@ class DetachedRewriteLayout : public HorizontalLayout {
+     auto original = _context.rewrite;
+     original.stage = L"armed"; original.index.clear(); original.replacement.clear();
+     const auto measured = MeasureRewrite(*this, original, dwr, true);
+-    const int reserve = (int)(48 * dwr->dpiScaleLayout);
++    const int reserve = (int)(54 * dwr->dpiScaleLayout);  // 48px editor + 6px separation.
+     const int limit = _style.max_width > 0 ? _style.max_width : (int)(1000 * dwr->dpiScaleLayout);
+     const int width = (std::min)(limit, (int)measured.size.cx + reserve + 2 * real_margin_x);
+     const int height = (std::max)(1, (int)measured.size.cy);
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 185feeb..5389766 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -62,7 +62,7 @@ inline RewriteLayout MeasureStableRewrite(Layout& layout, const RewriteState& st
+   const bool vertical = layout._style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
+   const int extent = vertical ? area.cy : area.cx;
+   const int gap = (std::max)(1, (int)(6 * dwr->dpiScaleLayout));
+-  const int reserve = (std::max)(1, (std::min)((int)(80 * dwr->dpiScaleLayout), extent / 3));
++  const int reserve = (std::max)(1, (std::min)((int)(48 * dwr->dpiScaleLayout), extent / 3));
+   syllables.SetRect(0, 0, area.cx, area.cy);
+   editor = syllables;
+   if (vertical) { syllables.bottom = (std::max)(1, extent - reserve - gap); editor.top = extent - reserve; }
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 1729a79..7362b40 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -117,6 +117,10 @@ int main() {
+                         editor.GetPreeditRect().Size(), pronunciations, tail);
+         assert(rail.size == editor.GetPreeditRect().Size());
+         assert(tail.Width() > 0 && tail.Height() > 0);
++        if (editing.rewrite.stage == L"armed") {
++          for (const auto& cell : rail.cells)
++            assert(cell.back.right <= pronunciations.right);
++        }
+       }
+ 
+     }
+-- 
+2.53.0.windows.2
+

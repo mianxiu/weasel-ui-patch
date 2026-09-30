@@ -1,6 +1,6 @@
 > **2026-09-30 当前分发包：** dist 已清理，只保留 weasel/dist/Weasel-Rewrite-UI-Floating-Preview 文件夹及同名 ZIP。运行 Apply-Patch.cmd 更新完整补丁；同一文件夹内 Apply-Skin.cmd 使用原蓝色，Apply-Skin-navy.cmd / Apply-Skin-black.cmd / Apply-Skin-green.cmd 分别切换深蓝、深黑、深绿。次要候选 hover 使用深色强调文字，正式选中保持白字；hover 修复需要安装本次程序。四种配色的真实 librime 部署、原生 UI 回归和分发包校验通过。
 
-> **独立 Tab 编辑框：** 已移除候选旁边的固定编辑区域。候选恢复普通布局和皮肤圆角，Tab 编码在独立悬浮窗中显示；两个框左对齐。候选在行内编码上方时，编辑窗在候选上方；候选在下方时，编辑窗在候选下方。屏幕空间不足时整体翻到另一侧，保留相对顺序。退出 Tab 和焦点隐藏会隐藏编辑窗。32/64 位构建、独立编辑布局 DPI、真实 HWND 上下定位/圆角皮肤尺寸/隐藏/无候选续编和真实 librime 回归通过。分发 Build-ID：rewrite-ui-detached-editor-20260930。真实应用视觉验收仍待完成。
+> **紧凑贴合 Tab 标签：** 字号按旧皮肤备份恢复为 12pt（候选、编号、注释）。Tab 标签 padding 6×2px、圆角 6px、无独立阴影、末尾预留 48px；与候选左边缘对齐并重叠 2px。连接处取消圆角与内横边，外侧保留圆角，形成上下可翻转的混合轮廓。仍使用独立窗口，保持候选内容布局和高度；退出 Tab 后候选恢复完整圆角。32/64 位构建、连接轮廓/DPI/原生窗口回归、四种配色真实 librime 部署测试通过。Build-ID：rewrite-ui-compact-joined-editor-20260930。
 
 > **悬浮声调预览版：** 行内输入已恢复旧版。Tab 时显示万象词典声调全拼、小字号和独立圆角上标编号；序号及替换输入在末尾。没有可靠拼音时回退原始编码。皮肤定义在 rime/skins/azure_pill*.yaml。皮肤部署参数空格问题已修复。当前为本地预览分支，稳定线上 Release 保持原有版本。
 

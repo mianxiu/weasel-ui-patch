@@ -1,7 +1,7 @@
 From d6c26e0b404b688dfcf7a81ab567b62e89f3af4e Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Tue, 29 Sep 2026 19:15:14 +0800
-Subject: [PATCH 23/37] fix(installer): validate effective Rime Tab binding
+Subject: [PATCH 23/39] fix(installer): validate effective Rime Tab binding
  precedence
 
 ---
