@@ -1,3 +1,5 @@
+> **新增皮肤：Azure Pill / 蓝白圆角。** 白色横排候选窗、蓝色圆角选中项、灰色编号和淡阴影。独立包 weasel/dist/Weasel-Azure-Pill.zip，普通运行 Apply-Skin.cmd，备份并合并 UI 配置后部署和重启服务；无需重启 Windows。皮肤定义在 ime/skins/azure_pill.yaml。
+
 > **2026-09-30 悬浮声调预览版：** 已撤销行内编号与高亮试验，恢复旧版行内 composition。Tab 时在候选窗显示万象词典声调全拼、小字号、带间距和圆角背景的上标编号；序号及替换输入位于整串拼音末尾。运行 weasel/dist/Weasel-Rewrite-UI-Floating-Preview/Apply-Patch.cmd。缺少可靠拼音或音节无法对齐时回退原始编码。32/64 位构建、真实 librime 隔离测试、布局与 DPI、配置合并/恢复及分发包预检通过；实际应用视觉验收待完成。当前分支为本地预览，稳定 Release 保持原有版本。
 
 # weasel-ui-patch

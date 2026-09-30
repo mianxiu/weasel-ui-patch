@@ -1,0 +1,468 @@
+From 329534dd04aa3dcb39c97fde0b7f0934f3f1d31b Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Wed, 30 Sep 2026 20:37:09 +0800
+Subject: [PATCH 32/32] feat(skin): add Azure Pill white and blue rounded
+ horizontal theme
+
+---
+ Apply-Skin.cmd               |   8 +++
+ Apply-Skin.ps1               | 110 +++++++++++++++++++++++++++++++++++
+ INSTALL-PATCH.md             |   4 ++
+ TODO.md                      |   3 +
+ package-rewrite.ps1          |   3 +
+ package-skin.ps1             |  34 +++++++++++
+ rime/skins/README.md         |  24 ++++++++
+ rime/skins/azure_pill.yaml   |  62 ++++++++++++++++++++
+ test/installer_rime_test.ps1 |  15 ++++-
+ test/skin_config_test.ps1    |  31 ++++++++++
+ tools/rewrite-config.cpp     |  45 ++++++++++++++
+ 11 files changed, 338 insertions(+), 1 deletion(-)
+ create mode 100644 Apply-Skin.cmd
+ create mode 100644 Apply-Skin.ps1
+ create mode 100644 package-skin.ps1
+ create mode 100644 rime/skins/README.md
+ create mode 100644 rime/skins/azure_pill.yaml
+ create mode 100644 test/skin_config_test.ps1
+
+diff --git a/Apply-Skin.cmd b/Apply-Skin.cmd
+new file mode 100644
+index 0000000..3c0e691
+--- /dev/null
++++ b/Apply-Skin.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Skin.ps1"
++set "skin_result=%errorlevel%"
++echo.
++pause
++exit /b %skin_result%
+diff --git a/Apply-Skin.ps1 b/Apply-Skin.ps1
+new file mode 100644
+index 0000000..67df548
+--- /dev/null
++++ b/Apply-Skin.ps1
+@@ -0,0 +1,110 @@
++﻿[CmdletBinding()]
++param([string]$UserDataRoot, [string]$Target, [switch]$CheckOnly)
++$ErrorActionPreference = 'Stop'
++$changed = $false; $saved = $null; $locked = $false; $mutex = $null
++function Run-Deploy {
++  $p = Start-Process -FilePath (Join-Path $Target 'WeaselDeployer.exe') -ArgumentList '/deploy' -WindowStyle Hidden -PassThru
++  try {
++    $null = $p.Handle
++    while (!$p.WaitForExit(10000)) { Write-Host '正在部署皮肤…' }
++    if ($p.ExitCode -ne 0) { throw "部署失败：$($p.ExitCode)" }
++  } finally { $p.Dispose() }
++}
++try {
++  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
++  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
++  if (!$CheckOnly -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
++    throw '请普通双击 Apply-Skin.cmd，无需以管理员身份运行。'
++  }
++  $mutex = New-Object Threading.Mutex($false, 'Local\WeaselRewritePatchInstaller')
++  try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
++  if (!$locked) { throw '另一个补丁或皮肤安装器正在运行。' }
++  $manifest = Join-Path $PSScriptRoot 'SHA256SUMS.txt'
++  if (Test-Path -LiteralPath $manifest) {
++    foreach ($line in Get-Content -LiteralPath $manifest) {
++      if ($line -notmatch '^([a-fA-F0-9]{64})\s+(.+)$') { throw '皮肤包校验表无效。' }
++      $expected = $Matches[1]
++      $file = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $Matches[2]))
++      if (!$file.StartsWith($PSScriptRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '皮肤包路径无效。' }
++      if ((Get-FileHash -LiteralPath $file).Hash -ne $expected) { throw '皮肤包文件校验失败。' }
++    }
++  }
++  $registered = Join-Path $env:APPDATA 'Rime'
++  $settings = Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction SilentlyContinue
++  if ($settings -and $settings.PSObject.Properties['RimeUserDir'] -and $settings.RimeUserDir) {
++    $registered = [Environment]::ExpandEnvironmentVariables([string]$settings.RimeUserDir)
++  }
++  if (!$UserDataRoot) { $UserDataRoot = $registered }
++  $UserDataRoot = (Resolve-Path -LiteralPath $UserDataRoot).Path
++  if (!$CheckOnly -and $UserDataRoot -ine (Resolve-Path -LiteralPath $registered).Path) {
++    throw '用户目录与注册的 Rime 目录不同，无法安全部署。'
++  }
++  $helper = Join-Path $PSScriptRoot 'RewriteConfig.exe'
++  if (!(Test-Path $helper)) { $helper = Join-Path $PSScriptRoot 'output/RewriteConfig.exe' }
++  $theme = Join-Path $PSScriptRoot 'skins/azure_pill.yaml'
++  if (!(Test-Path $theme)) { $theme = Join-Path $PSScriptRoot 'rime/skins/azure_pill.yaml' }
++  $stage = Join-Path ([IO.Path]::GetTempPath()) ('azure-pill-' + [guid]::NewGuid().ToString('N'))
++  $destination = Join-Path $UserDataRoot 'weasel.custom.yaml'
++  $originalHash = if (Test-Path -LiteralPath $destination) { (Get-FileHash -LiteralPath $destination).Hash } else { $null }
++  & $helper skin $UserDataRoot $theme $stage
++  if ($LASTEXITCODE) { throw '皮肤配置合并失败。' }
++  if ($CheckOnly) { Write-Host "CHECK PASSED：未修改用户配置。合并预览：$stage"; exit 0 }
++  if (!$Target) {
++    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
++      $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
++      try {
++        $key = $base.OpenSubKey('Software\Rime\Weasel')
++        if ($key) { try { $Target = [string]$key.GetValue('WeaselRoot') } finally { $key.Dispose() } }
++      } finally { $base.Dispose() }
++      if ($Target) { break }
++    }
++  }
++  if (!$Target) { throw '未找到小狼毫安装目录。' }
++  $Target = (Resolve-Path -LiteralPath $Target).Path
++  foreach ($name in @('WeaselDeployer.exe','WeaselServer.exe')) {
++    if (!(Test-Path -LiteralPath (Join-Path $Target $name))) { throw "缺少 $name" }
++  }
++  if (@(Get-Process WeaselDeployer,WeaselSetup -ErrorAction SilentlyContinue).Count) { throw '另一个部署或安装进程正在运行。' }
++  $destination = Join-Path $UserDataRoot 'weasel.custom.yaml'
++  $currentHash = if (Test-Path -LiteralPath $destination) { (Get-FileHash -LiteralPath $destination).Hash } else { $null }
++  if ($currentHash -ne $originalHash) { throw '配置在预览期间发生变化，请重新运行。' }
++  $existed = Test-Path -LiteralPath $destination
++  $saved = $destination + '.azure-pill-backup-' + [guid]::NewGuid().ToString('N')
++  if ($existed) { Copy-Item -LiteralPath $destination -Destination $saved }
++  $changed = $true
++  Copy-Item -LiteralPath (Join-Path $stage 'weasel.custom.yaml') -Destination $destination -Force
++  Run-Deploy
++  & $helper skin-verify $UserDataRoot
++  if ($LASTEXITCODE) { throw '部署后的皮肤校验失败。' }
++  $server = Join-Path $Target 'WeaselServer.exe'
++  $p = Start-Process -FilePath $server -ArgumentList '/q' -WindowStyle Hidden -PassThru
++  try {
++    $null = $p.Handle
++    if (!$p.WaitForExit(10000)) { throw '退出请求尚未结束，请从托盘手动重启小狼毫。' }
++  } finally { $p.Dispose() }
++  $deadline = [DateTime]::UtcNow.AddSeconds(10)
++  do {
++    $running = @(Get-Process WeaselServer -ErrorAction SilentlyContinue | Where-Object {$_.Path -ieq $server})
++    if (!$running.Count) { break }
++    Start-Sleep -Milliseconds 100
++  } while ([DateTime]::UtcNow -lt $deadline)
++  if ($running.Count) { throw '小狼毫尚未退出，请从托盘手动重启后再运行。' }
++  Start-Process -FilePath $server -WindowStyle Hidden | Out-Null
++  Write-Host 'SUCCESS：蓝白圆角皮肤已启用，部署校验通过，服务已重启。无需重启 Windows。'
++  if ($existed) { Write-Host "原配置备份：$saved" }
++} catch {
++  Write-Host "SKIN FAILED：$($_.Exception.Message)" -ForegroundColor Red
++  if ($changed) {
++    try {
++      if ($existed) { Copy-Item -LiteralPath $saved -Destination $destination -Force }
++      else { Remove-Item -LiteralPath $destination }
++      Run-Deploy
++      Start-Process -FilePath (Join-Path $Target 'WeaselServer.exe') -WindowStyle Hidden | Out-Null
++      Write-Host '原配置已恢复并重新部署。'
++    } catch { Write-Host "恢复未完成，请保留备份：$saved" }
++  }
++  exit 1
++} finally {
++  if ($locked) { $mutex.ReleaseMutex() }
++  if ($mutex) { $mutex.Dispose() }
++}
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 275d114..bc9165d 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,5 +1,9 @@
+ # 悬浮声调拼音预览版（2026-09-30）
+ 
++新增独立皮肤 **Azure Pill / 蓝白圆角**：白色横排、蓝色圆角选中项、灰色编号与淡阴影。
++已有程序只换皮肤时运行 `Apply-Skin.cmd`；它备份并合并 UI 配置、部署和重启服务，无需重启 Windows。
++皮肤定义及详细说明见 `skins/azure_pill.yaml` 和 `skins/README.md`。
++
+ 运行 `Apply-Patch.cmd`。本包恢复普通行内输入，不再向输入框写入音节编号或额外高亮。
+ Tab 编辑时，候选窗口显示万象词典提供的全拼声调；编号紧随音节，以独立圆角底色包裹。
+ 悬浮编码字号为候选字号的 60%（至少 8pt）；编号左间距 4px，内边距 3×1px，圆角 4px，均按 DPI 缩放。
+diff --git a/TODO.md b/TODO.md
+index 484c032..c0be865 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -8,3 +8,6 @@
+ - [ ] 根据真机反馈确定字体比例、间距及圆角是否开放为 YAML 配置。
+ - [ ] 将全部候选列表放进应用输入框：保留为后续研究，需处理分页、按键冲突、提交取消、鼠标与可访问性。
+ - [ ] 清理历史 Lua/UI 和旧版文档说明。
++
++- [x] 新建 Azure Pill 蓝白圆角皮肤、独立安装包与备份/部署/校验入口。
++- [ ] 在实际应用中验收 Azure Pill 的字号、圆角、阴影及横排换行。
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index ea7f65f..903222d 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -13,6 +13,9 @@ Copy-Item INSTALL-PATCH.md "$destination/README.md" -Force
+ Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
+ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt $destination -Force
+ Copy-Item output/RewriteConfig.exe $destination -Force
++Copy-Item Apply-Skin.cmd,Apply-Skin.ps1 $destination -Force
++New-Item -ItemType Directory -Force "$destination/skins" | Out-Null
++Copy-Item rime/skins/azure_pill.yaml,rime/skins/README.md "$destination/skins" -Force
+ New-Item -ItemType Directory -Force "$destination/rime/lua" | Out-Null
+ Copy-Item rime/lua/indexed_rewrite_pro.lua "$destination/rime/lua/" -Force
+ Copy-Item LICENSE.txt "$destination/licenses/Weasel-GPL-3.0.txt" -Force
+diff --git a/package-skin.ps1 b/package-skin.ps1
+new file mode 100644
+index 0000000..fa1e6d0
+--- /dev/null
++++ b/package-skin.ps1
+@@ -0,0 +1,34 @@
++$ErrorActionPreference = 'Stop'
++Set-Location $PSScriptRoot
++$final = Join-Path $PSScriptRoot 'dist/Weasel-Azure-Pill'
++$stage = $final + '-stage-' + [guid]::NewGuid().ToString('N')
++New-Item -ItemType Directory -Path (Join-Path $stage 'skins') -Force | Out-Null
++Copy-Item Apply-Skin.cmd,Apply-Skin.ps1,output/RewriteConfig.exe -Destination $stage
++Copy-Item rime/skins/azure_pill.yaml -Destination (Join-Path $stage 'skins')
++Copy-Item rime/skins/README.md -Destination (Join-Path $stage 'README.md')
++Copy-Item librime/deps/yaml-cpp/LICENSE -Destination (Join-Path $stage 'yaml-cpp-MIT.txt')
++Copy-Item LICENSE.txt -Destination (Join-Path $stage 'Weasel-GPL-3.0.txt')
++Add-Type -AssemblyName System.IO.Compression.FileSystem
++$stream = [IO.File]::Open((Join-Path $stage 'skin-helper-source.zip'), [IO.FileMode]::Create)
++$archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
++try {
++  $files = @(Get-Item tools/rewrite-config.cpp,build-rewrite-config.cmd,LICENSE.txt,librime/deps/yaml-cpp/LICENSE) +
++           @(Get-ChildItem librime/deps/yaml-cpp/include,librime/deps/yaml-cpp/src -Recurse -File)
++  foreach ($file in $files) {
++    $relative = [IO.Path]::GetRelativePath($PSScriptRoot, $file.FullName).Replace('\','/')
++    [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $relative) | Out-Null
++  }
++} finally { $archive.Dispose(); $stream.Dispose() }
++$manifest = Get-ChildItem $stage -Recurse -File | ForEach-Object {
++  (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetRelativePath($stage, $_.FullName)
++}
++$manifest | Set-Content (Join-Path $stage 'SHA256SUMS.txt') -Encoding utf8
++Compress-Archive -Path "$stage/*" -DestinationPath 'dist/Weasel-Azure-Pill.zip' -Force
++if (Test-Path -LiteralPath $final) {
++  $resolved = (Resolve-Path -LiteralPath $final).Path
++  if ($resolved -ne [IO.Path]::GetFullPath($final) -or
++      (Get-Item -LiteralPath $resolved).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe skin destination' }
++  Move-Item -LiteralPath $resolved -Destination ($final + '-previous-' + [guid]::NewGuid().ToString('N'))
++}
++Move-Item -LiteralPath $stage -Destination $final
++Get-Item 'dist/Weasel-Azure-Pill.zip' | Select-Object FullName,Length
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+new file mode 100644
+index 0000000..64cb831
+--- /dev/null
++++ b/rime/skins/README.md
+@@ -0,0 +1,24 @@
++# Azure Pill / 蓝白圆角
++
++参考用户提供的截图：白色横排候选窗、蓝色圆角选中项、灰色编号、细灰边框与柔和阴影。
++候选字体 18pt、编号 16pt；外框圆角 16px、选中项圆角 13px、内边距 10×8px，按 DPI 缩放。
++
++打开独立皮肤包 `Weasel-Azure-Pill`，普通双击 `Apply-Skin.cmd`。
++脚本备份并合并 `weasel.custom.yaml`，部署、校验并重启小狼毫服务；无需重启 Windows。
++它不替换输入法 DLL，也不修改方案、词库或 Lua。
++其他主题定义、应用设置和无关配置值保留；YAML 注释和格式会规范化，原文件保存在备份里。
++
++只预览合并结果：
++
++```powershell
++powershell -NoProfile -ExecutionPolicy Bypass -File .\Apply-Skin.ps1 -CheckOnly
++```
++
++皮肤定义在 `skins/azure_pill.yaml`。可调整字体、字号、圆角、padding、间距和颜色。
++颜色格式为 `rgba`，例如 `0x286CF4FF` 是不透明蓝色。
++
++输入框里的字体、光标、编码下划线由目标应用绘制，皮肤无法保证复制截图上方的效果。
++安装了悬浮声调预览补丁时，Tab 重写行自动沿用本皮肤的字体与配色。
++应用或方案的专属样式可能覆盖全局皮肤设置。
++
++恢复旧皮肤：将生成的 `weasel.custom.yaml.azure-pill-backup-*` 复制回 `weasel.custom.yaml`，重新部署并从托盘重启服务。
+diff --git a/rime/skins/azure_pill.yaml b/rime/skins/azure_pill.yaml
+new file mode 100644
+index 0000000..a1e6618
+--- /dev/null
++++ b/rime/skins/azure_pill.yaml
+@@ -0,0 +1,62 @@
++# Reference-inspired white horizontal panel with a blue rounded selection.
++# Color literals are RRGGBBAA because the palette declares rgba.
++patch:
++  style/color_scheme: azure_pill
++  style/color_scheme_dark: azure_pill
++  style/font_face: "Microsoft YaHei UI, Segoe UI"
++  style/font_point: 18
++  style/label_font_face: "Segoe UI, Microsoft YaHei UI"
++  style/label_font_point: 16
++  style/comment_font_face: "Microsoft YaHei UI, Segoe UI"
++  style/comment_font_point: 11
++  style/label_format: "%s."
++  style/mark_text: ""
++  style/horizontal: true
++  style/fullscreen: false
++  style/vertical_text: false
++  style/text_orientation: horizontal
++  style/inline_preedit: true
++  style/layout/type: horizontal
++  style/layout/align_type: center
++  style/layout/min_width: 0
++  style/layout/max_width: 1000
++  style/layout/min_height: 0
++  style/layout/max_height: 0
++  style/layout/border: 1
++  style/layout/margin_x: 14
++  style/layout/margin_y: 12
++  style/layout/spacing: 8
++  style/layout/candidate_spacing: 24
++  style/layout/hilite_spacing: 6
++  style/layout/hilite_padding_x: 10
++  style/layout/hilite_padding_y: 8
++  style/layout/corner_radius: 16
++  style/layout/hilited_corner_radius: 13
++  style/layout/shadow_radius: 12
++  style/layout/shadow_offset_x: 0
++  style/layout/shadow_offset_y: 5
++  preset_color_schemes/azure_pill:
++    name: "Azure Pill / 蓝白圆角"
++    author: "mianxiu"
++    color_format: rgba
++    back_color: 0xFFFFFFFF
++    border_color: 0xCECECEFF
++    shadow_color: 0x00000028
++    text_color: 0x6A6A6AFF
++    candidate_text_color: 0x303030FF
++    candidate_back_color: 0x00000000
++    candidate_border_color: 0x00000000
++    candidate_shadow_color: 0x00000000
++    label_color: 0x858585FF
++    comment_text_color: 0x909090FF
++    hilited_text_color: 0xFFFFFFFF
++    hilited_back_color: 0x286CF4FF
++    hilited_candidate_text_color: 0xFFFFFFFF
++    hilited_candidate_back_color: 0x286CF4FF
++    hilited_candidate_border_color: 0x00000000
++    hilited_candidate_shadow_color: 0x00000000
++    hilited_label_color: 0xFFFFFFFF
++    hilited_comment_text_color: 0xE8EFFFFF
++    hilited_mark_color: 0x00000000
++    prevpage_color: 0x00000000
++    nextpage_color: 0x00000000
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index e3f6b89..9d85dd4 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,4 +1,5 @@
+-﻿$ErrorActionPreference='Stop'
++﻿param([switch]$AzurePill)
++$ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+ New-Item -ItemType Directory -Path $shared,(Join-Path $user 'lua') -Force | Out-Null
+@@ -28,6 +29,12 @@ $repo=Split-Path $PSScriptRoot -Parent
+ & (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
+ if ($LASTEXITCODE) { throw 'Merge failed' }
+ Copy-Item (Join-Path $stage '*.yaml') $user
++if ($AzurePill) {
++  $skinStage = Join-Path $root 'skin-stage'
++  & (Join-Path $repo 'output/RewriteConfig.exe') skin $user (Join-Path $repo 'rime/skins/azure_pill.yaml') $skinStage
++  if ($LASTEXITCODE) { throw 'Skin merge failed' }
++  Copy-Item (Join-Path $skinStage 'weasel.custom.yaml') $user -Force
++}
+ [IO.File]::WriteAllText((Join-Path $user 'lua/tone_fixture.lua'), @'
+ local M = {}
+ M.func = function(input, seg)
+@@ -46,3 +53,9 @@ if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
+ & (Join-Path $repo 'output/RewriteConfig.exe') verify $user
+ if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
+ Write-Host "PASS: actual librime deployment and generated YAML. Fixture: $root"
++
++if ($AzurePill) {
++  & (Join-Path $repo 'output/RewriteConfig.exe') skin-verify $user
++  if ($LASTEXITCODE) { throw 'Skin deployment verification failed' }
++  Write-Host 'PASS: actual librime deployed Azure Pill palette and horizontal rounded layout'
++}
+diff --git a/test/skin_config_test.ps1 b/test/skin_config_test.ps1
+new file mode 100644
+index 0000000..02ee741
+--- /dev/null
++++ b/test/skin_config_test.ps1
+@@ -0,0 +1,31 @@
++$ErrorActionPreference = 'Stop'
++$repo = Split-Path $PSScriptRoot -Parent
++$helper = Join-Path $repo 'output/RewriteConfig.exe'
++$theme = Join-Path $repo 'rime/skins/azure_pill.yaml'
++$root = Join-Path ([IO.Path]::GetTempPath()) ('azure-skin-test-' + [guid]::NewGuid().ToString('N'))
++New-Item -ItemType Directory -Path $root -Force | Out-Null
++[IO.File]::WriteAllText((Join-Path $root 'weasel.custom.yaml'), @'
++patch:
++  style:
++    font_point: 30
++    future_option: 77
++    layout: {type: vertical, margin_x: 42}
++  style/layout: {hilited_corner_radius: 0, unrelated: 88}
++  style/color_scheme: old
++  preset_color_schemes:
++    old: {name: old, back_color: 0x000000}
++    azure_pill: {name: previous}
++  app_options: {terminal.exe: {ascii_mode: true}}
++  rewrite_ui/enabled: true
++'@, [Text.UTF8Encoding]::new($false))
++& $helper skin $root $theme (Join-Path $root 'stage')
++if ($LASTEXITCODE) { throw 'Skin merge failed' }
++$merged = [IO.File]::ReadAllText((Join-Path $root 'stage/weasel.custom.yaml'))
++foreach ($key in @('future_option: 77','unrelated: 88','terminal.exe','rewrite_ui/enabled: true','name: old','style/font_point: 18','style/layout/type: horizontal')) {
++  if (!$merged.Contains($key)) { throw "Missing preserved or selected setting: $key" }
++}
++if ($merged -match 'font_point: 30|margin_x: 42|type: vertical|name: previous|hilited_corner_radius: 0') { throw 'Nested style still conflicts' }
++& $helper skin (Join-Path $root 'stage') $theme (Join-Path $root 'second')
++if ($LASTEXITCODE) { throw 'Repeated skin merge failed' }
++if ([IO.File]::ReadAllText((Join-Path $root 'second/weasel.custom.yaml')) -ne $merged) { throw 'Skin merge is not idempotent' }
++Write-Host 'PASS: skin merge preserves unrelated values, removes conflicting nested leaves, and is idempotent.'
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index b74d98e..efa4d52 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -207,11 +207,56 @@ void verify(const fs::path& user) {
+     require(scalar(effective["send_sequence"], "//"), "Effective Tab binding does not activate rewrite");
+   }
+ }
++// A skin changes only the named UI leaves; preserve unrelated nested settings.
++void clearNestedSkinLeaf(YAML::Node root, const std::string& path) {
++  for (size_t cut = path.find('/'); cut != std::string::npos;
++       cut = path.find('/', cut + 1)) {
++    auto prefix = path.substr(0, cut);
++    if (!root[prefix]) continue;
++    auto node = root[prefix];
++    size_t start = cut + 1;
++    while (true) {
++      require(node.IsMap(), "Skin conflicts with non-map UI path: " + prefix);
++      auto end = path.find('/', start);
++      auto part = path.substr(start, end - start);
++      if (end == std::string::npos) { node.remove(part); break; }
++      if (!node[part]) break;
++      node.reset(node[part]);
++      start = end + 1;
++    }
++  }
++}
++void skin(const fs::path& user, const fs::path& theme, const fs::path& stage) {
++  auto ui = load(user / L"weasel.custom.yaml", true);
++  auto target = patch(ui);
++  auto skinDoc = load(theme);
++  auto values = patch(skinDoc);
++  require(values.size() > 0, "Skin is empty");
++  for (auto item : values) {
++    auto key = item.first.Scalar();
++    require(key.rfind("style/", 0) == 0 || key == "preset_color_schemes/azure_pill",
++            "Unsupported skin setting: " + key);
++    clearNestedSkinLeaf(target, key);
++    target[key] = YAML::Clone(item.second);
++  }
++  fs::create_directories(stage);
++  save(ui, stage / L"weasel.custom.yaml");
++}
+ int wmain(int argc, wchar_t** argv) {
+   try {
+     require(argc >= 3, "Usage: RewriteConfig.exe prepare USER STAGE | verify USER");
+     if (std::wstring(argv[1]) == L"prepare") {
+       require(argc == 4, "prepare requires USER STAGE"); prepare(argv[2], argv[3]);
++    } else if (std::wstring(argv[1]) == L"skin") {
++      require(argc == 5, "skin requires USER THEME STAGE"); skin(argv[2], argv[3], argv[4]);
++    } else if (std::wstring(argv[1]) == L"skin-verify") {
++      auto ui = load(fs::path(argv[2]) / L"build" / L"weasel.yaml");
++      require(scalar(ui["style"]["color_scheme"], "azure_pill"), "Skin selection missing");
++      require(scalar(ui["style"]["layout"]["type"], "horizontal"), "Horizontal skin layout missing");
++      require(ui["style"]["layout"]["corner_radius"].as<int>(0) == 16, "Skin corner radius missing");
++      auto palette = ui["preset_color_schemes"]["azure_pill"];
++      require(palette["hilited_candidate_back_color"].as<unsigned int>(0) == 0x286cf4ff,
++              "Blue candidate background missing");
+     } else if (std::wstring(argv[1]) == L"verify") verify(argv[2]);
+     else throw std::runtime_error("Unknown operation");
+     std::cout << "Configuration check passed.\n";
+-- 
+2.53.0.windows.2
+
