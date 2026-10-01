@@ -1,0 +1,364 @@
+From 74c9491a24c9fc73353f995c1478d2810344f489 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 12:34:38 +0800
+Subject: [PATCH 59/59] feat(rewrite): default to single syllable and opt in to
+ multi-syllable edits
+
+---
+ INSTALL-PATCH.md                 |  4 +++
+ Install-Binaries.ps1             |  2 +-
+ REWRITE-UI.md                    |  4 +++
+ include/RewriteState.h           |  6 ++++-
+ rewrite-build.txt                |  2 +-
+ rime/lua/indexed_rewrite_pro.lua | 26 ++++++++++++------
+ rime/wanxiang_pro.custom.yaml    |  1 +
+ test-floating-rewrite.cmd        |  2 ++
+ test/installer_rime_test.cpp     | 46 ++++++++++++++++++++++++++++++--
+ test/installer_rime_test.ps1     | 12 ++++++---
+ test/rewrite_pipeline_test.cpp   | 13 ++++++---
+ test/rewrite_state_test.cpp      | 13 +++++++++
+ 12 files changed, 111 insertions(+), 20 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 5e2621e..c1c9108 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,7 @@
++> **2026-10-01 默认单音节编辑：** 连续多音节替换为可选功能，默认关闭。按原目标音节的编码长度限制字母输入（双拼通常两码），多余字母不进入替换缓存；退格后可继续修改。直接输入字母的从头覆盖模式也限制为首音节。需要连续替换时，在 `wanxiang_pro.custom.yaml` 的 `patch:` 下添加 `indexed_rewrite/allow_multi_syllable: true`，重新部署后生效；删除该项或设为 `false` 恢复默认。下方多音节说明仅适用于开启此选项。
++
++> **2026-10-01 连续多音节替换：** 输入序号后可连续替换为多个音节，例如第 3 项从 `bǐ` 改成 `bù shì hǎo`，Tab 行完整显示替换读音；这些音节归属原第 3 项，后续原音节及其编号保持。退格逐步缩短读音，清空后恢复原音节。
++
+ > **2026-10-01 Tab 实时拼音：** 在第一枚斜杠前保存原候选音节边界，避免 Tab 改变候选后分段错误。索引替换时按当前首候选的词典读音实时更新被编辑音节，未编辑音节保持原读音；退格清空替换恢复原读音。缺少可对应读音时保留已有读音，缺失音节单独回退编码，不再整行退回编码。
+ 
+ > **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–3 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 61b7fa9..03869e0 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-live-tab-pinyin-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-single-tab-default-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index d2672db..2c0d5fb 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,7 @@
++> **2026-10-01 默认单音节编辑：** 连续多音节替换为可选功能，默认关闭。按原目标音节的编码长度限制字母输入（双拼通常两码），多余字母不进入替换缓存；退格后可继续修改。直接输入字母的从头覆盖模式也限制为首音节。需要连续替换时，在 `wanxiang_pro.custom.yaml` 的 `patch:` 下添加 `indexed_rewrite/allow_multi_syllable: true`，重新部署后生效；删除该项或设为 `false` 恢复默认。下方多音节说明仅适用于开启此选项。
++
++> **2026-10-01 连续多音节替换：** 输入序号后可连续替换为多个音节，例如第 3 项从 `bǐ` 改成 `bù shì hǎo`，Tab 行完整显示替换读音；这些音节归属原第 3 项，后续原音节及其编号保持。退格逐步缩短读音，清空后恢复原音节。
++
+ > **2026-10-01 Tab 实时拼音：** 在第一枚斜杠前保存原候选音节边界，避免 Tab 改变候选后分段错误。索引替换时按当前首候选的词典读音实时更新被编辑音节，未编辑音节保持原读音；退格清空替换恢复原读音。缺少可对应读音时保留已有读音，缺失音节单独回退编码，不再整行退回编码。
+ 
+ > **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–3 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
+diff --git a/include/RewriteState.h b/include/RewriteState.h
+index 39d0622..311c09b 100644
+--- a/include/RewriteState.h
++++ b/include/RewriteState.h
+@@ -70,7 +70,11 @@ struct RewriteState {
+     std::vector<std::wstring> pronunciations;
+     std::wstring token;
+     for (auto c : pinyin + L"|") {
+-      if (c == L'|') { pronunciations.push_back(token); token.clear(); }
++      if (c == L'|') {
++        if (!token.empty() && token.back() == L' ') { pronunciations.clear(); break; }
++        pronunciations.push_back(token); token.clear();
++      }
++      else if (c == L' ' && !token.empty() && token.back() != L' ') token += c;
+       else if ((c >= L'a' && c <= L'z') || (c >= 0xc0 && c <= 0x24f) ||
+                (c >= 0x300 && c <= 0x36f)) token += c;
+       else { pronunciations.clear(); break; }
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 4def1af..f9a1ff0 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-live-tab-pinyin-20261001
++Build-ID: rewrite-ui-single-tab-default-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+index 22c625b..66eaff6 100644
+--- a/rime/lua/indexed_rewrite_pro.lua
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -271,6 +271,7 @@ end
+ ------------------------------------------------------------
+ 
+ function M.init(env)
++    env.allow_multi_syllable = env.engine.schema.config:get_bool("indexed_rewrite/allow_multi_syllable") == true
+     clear_props(env.engine.context)
+ end
+ 
+@@ -435,6 +436,10 @@ function M.func(key, env)
+ 
+         if is_lower_letter(repr) then
+             local typed = get_prop(ctx, PROP_REPLACEMENT) .. repr
++            local first = parse_ranges(get_prop(ctx, PROP_RANGES))[1]
++            if not env.allow_multi_syllable and first and #typed > first[2] - first[1] then
++                return ACCEPTED
++            end
+             local original = get_prop(ctx, PROP_ORIGINAL)
+ 
+             set_prop(ctx, PROP_REPLACEMENT, typed)
+@@ -503,6 +508,9 @@ function M.func(key, env)
+             end
+ 
+             local replacement = get_prop(ctx, PROP_REPLACEMENT) .. repr
++            if not env.allow_multi_syllable and #replacement > end_pos - start_pos then
++                return ACCEPTED
++            end
+             local original = get_prop(ctx, PROP_ORIGINAL)
+ 
+             set_prop(ctx, PROP_REPLACEMENT, replacement)
+@@ -680,6 +688,7 @@ end
+ 
+ M.hint = {
+ init = function(env)
++    env.allow_multi_syllable = env.engine.schema.config:get_bool("indexed_rewrite/allow_multi_syllable") == true
+     local dictionary = env.engine.schema.config:get_string("translator/dictionary")
+     if dictionary and dictionary ~= "" then
+         local ok, reverse = pcall(ReverseLookup, dictionary)
+@@ -720,14 +729,15 @@ func = function(input, env)
+                         if length <= r[2] then target = i; break end
+                     end
+                 end
+-                -- Only map a whole current reading when segmentation agrees.
+-                -- Keep untouched syllables stable; never borrow the next syllable
+-                -- when an incomplete replacement temporarily has no reading.
+-                if #parts == #ranges and target and current[target] then
+-                    for i = 1, #ranges do
+-                        if i == target or (stage == "head_replace" and i < target) then
+-                            current[i] = parts[i]
+-                        end
++                -- A single original slot may now contain several syllables.
++                -- Preserve the original numbering and suffix: all extra readings
++                -- belong to the replacement, not to the next original slot.
++                local replacement_count = #parts - #ranges + 1
++                if replacement_count >= 1 and target and current[target] then
++                    current[target] = env.allow_multi_syllable and
++                        table.concat(parts, " ", target, target + replacement_count - 1) or parts[target]
++                    if stage == "head_replace" then
++                        for i = 1, target - 1 do current[i] = parts[i] end
+                     end
+                 end
+                 set_prop(ctx, PROP_PINYIN, table.concat(current, "|"))
+diff --git a/rime/wanxiang_pro.custom.yaml b/rime/wanxiang_pro.custom.yaml
+index af31e23..2bd4798 100644
+--- a/rime/wanxiang_pro.custom.yaml
++++ b/rime/wanxiang_pro.custom.yaml
+@@ -1,6 +1,7 @@
+ # 本文件的工作目录是在用户根目录，本目录携带是因为如果放外面就会更新的时候覆盖你的修改，因此我只能藏起来。
+ # 如果没有按初始化说明进行初始化那么你需要手动复制本文件到上层目录，请知悉。
+ patch:
++  indexed_rewrite/allow_multi_syllable: false  # 默认单音节；true 开启连续多音节替换
+   engine/filters/@before 0: lua_filter@*indexed_rewrite_pro*hint
+   engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
+ 
+diff --git a/test-floating-rewrite.cmd b/test-floating-rewrite.cmd
+index d4be6a9..ecfd9c8 100644
+--- a/test-floating-rewrite.cmd
++++ b/test-floating-rewrite.cmd
+@@ -15,6 +15,8 @@ cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\installer_rime_test.cpp /F
+ if errorlevel 1 exit /b 1
+ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_rime_test.ps1
+ if errorlevel 1 exit /b 1
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_rime_test.ps1 -MultiSyllable
++if errorlevel 1 exit /b 1
+ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_config_test.ps1
+ if errorlevel 1 exit /b 1
+ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_transaction_test.ps1
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index 7cb882c..d237e33 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -7,7 +7,8 @@
+ void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+ int wmain(int argc, wchar_t** argv) {
+   try {
+-    check(argc == 3, "Expected shared and user fixture paths");
++    check(argc == 4, "Expected shared/user fixture paths and multi-syllable mode");
++    const bool allowMulti = std::wstring(argv[3]) == L"1";
+     auto shared = std::filesystem::absolute(argv[1]).u8string();
+     auto user = std::filesystem::absolute(argv[2]).u8string();
+     auto logs = (std::filesystem::absolute(argv[2]) / "logs").u8string();
+@@ -61,12 +62,53 @@ int wmain(int argc, wchar_t** argv) {
+     expectPinyin(u8"jiǎng|jī|jī|běi");
+     api->process_key(session, 0xff08, 0);
+     expectPinyin(u8"jiǎng|jī|rén|běi");
++    for (char key : std::string("bu")) api->process_key(session, key, 0);
++    expectPinyin(u8"jiǎng|jī|bù|běi");
++    if (allowMulti) {
++    api->process_key(session, 'u', 0);
++    expectPinyin(u8"jiǎng|jī|bù shì|běi"); // Incomplete next syllable still appears.
++    api->process_key(session, 'i', 0);
++    expectPinyin(u8"jiǎng|jī|bù shì|běi");
++    check(std::string(api->get_input(session)) == "jxjibuuibj", "Multi-syllable suffix changed");
++    for (char key : std::string("hc")) api->process_key(session, key, 0);
++    expectPinyin(u8"jiǎng|jī|bù shì hǎo|běi");
++    api->process_key(session, 0xff08, 0);
++    expectPinyin(u8"jiǎng|jī|bù shì hǎo|běi");
++    api->process_key(session, 0xff08, 0);
++    expectPinyin(u8"jiǎng|jī|bù shì|běi");
++    api->process_key(session, 0xff08, 0);
++    expectPinyin(u8"jiǎng|jī|bù shì|běi");
++    api->process_key(session, 0xff08, 0);
++    expectPinyin(u8"jiǎng|jī|bù|běi");
++    api->process_key(session, 0xff08, 0);
++    api->process_key(session, 0xff08, 0);
++    } else {
++      for (char key : std::string("uihc")) api->process_key(session, key, 0);
++      expectPinyin(u8"jiǎng|jī|bù|běi");
++      check(std::string(api->get_input(session)) == "jxjibubj", "Default single-syllable limit failed");
++      char replacement[64] = {};
++      api->get_property(session, "_indexed_rewrite_replacement", replacement, sizeof(replacement));
++      check(std::string(replacement) == "bu", "Ignored extra letters entered replacement buffer");
++      api->process_key(session, 0xff08, 0);
++      api->process_key(session, 0xff08, 0);
++    }
++    expectPinyin(u8"jiǎng|jī|rén|běi");
++    check(std::string(api->get_input(session)) == "jxjirzbj", "Empty replacement did not restore suffix");
+     api->process_key(session, 'q', 0);
+     expectPinyin(u8"jiǎng|jī|rén|běi"); // Auxiliary codes must not replace pronunciation.
+     api->process_key(session, 0xff1b, 0);
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Escape did not restore input");
++    check(api->process_key(session, 0xff09, 0), "Second Tab not handled");
++    for (char key : std::string("buui")) api->process_key(session, key, 0);
++    expectPinyin(allowMulti ? u8"bù|shì|rén|běi" : u8"bù|jī|rén|běi");
++    check(std::string(api->get_input(session)) == (allowMulti ? "buuirzbj" : "bujirzbj"),
++          "Head replacement ignored mode limit");
++    for (int n = 0; n < (allowMulti ? 4 : 2); ++n) api->process_key(session, 0xff08, 0);
++    expectPinyin(u8"jiǎng|jī|rén|běi");
++    api->process_key(session, 0xff1b, 0);
++    check(std::string(api->get_input(session)) == "jxjirzbj", "Head Escape did not restore input");
+     api->destroy_session(session); api->finalize();
+-    std::cout << "PASS: real deployment, Lua loading, Tab, index, Escape\n";
++    std::cout << "PASS: real deployment, Lua loading, Tab, index, live multi-syllable replacement, Backspace, Escape\n";
+     return 0;
+   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+ }
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index 527623b..c2673cf 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,4 +1,4 @@
+-﻿param([switch]$AzurePill, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
++﻿param([switch]$MultiSyllable, [switch]$AzurePill, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
+ $ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+@@ -24,6 +24,7 @@ key_binder:
+     - {when: composing, accept: Tab, send: Down}
+     - {when: always, accept: Tab, send: Down}
+ '@
++if ($MultiSyllable) { $schema += "`nindexed_rewrite:`n  allow_multi_syllable: true`n" }
+ [IO.File]::WriteAllText((Join-Path $shared 'wanxiang_pro.schema.yaml'), $schema, $utf8)
+ $repo=Split-Path $PSScriptRoot -Parent
+ & (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
+@@ -41,7 +42,12 @@ if ($AzurePill) {
+ local M = {}
+ M.func = function(input, seg)
+   local tone = input == "jxjiqbj" and "jx" or input == "jxjijmbj" and "jiàn" or (input == "jxjijbj" and "jī" or "rén")
+-  local cand = Candidate("test", seg.start, seg._end, "测试", "jiǎng;ab jī;cd " .. tone .. ";ef běi;gh")
++  if input == "jxjibubj" then tone = "bù"
++  elseif input == "jxjibuubj" or input == "jxjibuuibj" then tone = "bù shì"
++  elseif input == "jxjibuuihbj" or input == "jxjibuuihcbj" then tone = "bù shì hǎo" end
++  local first = input:sub(1, 2) == "bu" and "bù" or "jiǎng"
++  local second = input:sub(3, 4) == "ui" and "shì" or "jī"
++  local cand = Candidate("test", seg.start, seg._end, "测试", first .. ";ab " .. second .. ";cd " .. tone .. ";ef běi;gh")
+   cand.preedit = input
+   yield(cand)
+ end
+@@ -51,7 +57,7 @@ end}
+ return M
+ '@, $utf8)
+ Copy-Item (Join-Path $repo 'rime/lua/indexed_rewrite_pro.lua') (Join-Path $user 'lua')
+-& (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user
++& (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user ([int][bool]$MultiSyllable)
+ if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
+ & (Join-Path $repo 'output/RewriteConfig.exe') verify $user
+ if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 7f594ea..78b1e45 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -20,7 +20,8 @@
+ CAppModule _Module;
+ 
+ weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
+-                         const std::wstring& replacement = L"") {
++                         const std::wstring& replacement = L"",
++                         const std::wstring& pinyin = L"jiǎng|jī|rén|běi") {
+   weasel::Context ctx;
+   weasel::ResponseParser parser(nullptr, &ctx);
+   parser.Feed(L"action=ctx");
+@@ -31,7 +32,7 @@ weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
+   parser.Feed(L"ctx.rewrite.input=jxjirzbj");
+   parser.Feed(L"ctx.rewrite.index=" + index);
+   parser.Feed(L"ctx.rewrite.replacement=" + replacement);
+-  parser.Feed(L"ctx.rewrite.pinyin=jiǎng|jī|rén|běi");
++  parser.Feed(L"ctx.rewrite.pinyin=" + pinyin);
+   return ctx;
+ }
+ 
+@@ -137,6 +138,10 @@ int main() {
+   auto replaced = snapshot(L"index_replace", L"3", L"jm");
+   assert(replaced.preedit == armed.preedit);
+   assert(replaced.rewrite.Units()[2].text == L"rén");
++  auto multiple = snapshot(L"index_replace", L"3", L"buuihc", L"jiǎng|jī|bù shì hǎo|běi");
++  assert(multiple.rewrite.Units()[2].text == L"bù shì hǎo");
++  assert(multiple.rewrite.Units()[3].text == L"běi" && multiple.rewrite.Units()[3].label == L"4");
++  assert(multiple.preedit == armed.preedit);
+   assert(snapshot(L"index", L"12").rewrite.Units().back().text == L"12");
+   assert(snapshot(L"index", L"1").rewrite.Units().back().text == L"1");
+   auto exited = snapshot(L"", L"");
+@@ -328,7 +333,7 @@ int main() {
+     panel.MoveTo(CRect(200, 200, 200, 224), inputHost);
+     CRect before; panel.GetWindowRect(&before);
+     CRect locked;
+-    for (auto editing : {armed, indexed, replaced, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
++    for (auto editing : {armed, indexed, replaced, multiple, snapshot(L"index_replace", L"3", std::wstring(120, L'a'))}) {
+       editing.cinfo = normal.cinfo;
+       host.ctx() = editing;
+       panel.Refresh(); panel.MoveTo(CRect(200, 200, 200, 224));
+@@ -351,7 +356,7 @@ int main() {
+     // Typing interleaves context refresh and TSF caret notifications. Neither
+     // phase may move the panel by the shadow-buffer height at an unchanged caret.
+     for (int repeat = 0; repeat < 12; ++repeat) {
+-      for (auto typing : {normal, armed, indexed, replaced}) {
++      for (auto typing : {normal, armed, indexed, replaced, multiple}) {
+         typing.cinfo = normal.cinfo;
+         typing.cinfo.candies[0].str += std::wstring(repeat % 2, L'测');
+         host.ctx() = typing;
+diff --git a/test/rewrite_state_test.cpp b/test/rewrite_state_test.cpp
+index bdda76a..a4a2339 100644
+--- a/test/rewrite_state_test.cpp
++++ b/test/rewrite_state_test.cpp
+@@ -58,6 +58,19 @@ int main() {
+   r.pinyin = L"jiǎng||jiàn|běi";
+   assert(r.Units()[0].text == L"jiǎng" && r.Units()[1].text == L"ji" &&
+          r.Units()[2].text == L"jiàn");
++  r.replacement = L"buuihc";
++  r.pinyin = L"jiǎng|jī|bù shì hǎo|běi";
++  u = r.Units();
++  assert(u.size() == 5 && u[2].active && u[2].text == L"bù shì hǎo" &&
++         u[2].label == L"3" && u[3].text == L"běi" && u[3].label == L"4" &&
++         u.back().text == L"3buuihc");
++  r.replacement = L"buui"; r.pinyin = L"jiǎng|jī|bù shì|běi";
++  assert(r.Units()[2].text == L"bù shì" && r.Units().back().text == L"3buui");
++  r.replacement = L"jm";
++  r.pinyin = L"jiǎng|jī| bù|běi";
++  assert(r.Units()[2].text == L"jm");
++  r.pinyin = L"jiǎng|jī|bù  shì|běi";
++  assert(r.Units()[2].text == L"jm");
+   r.pinyin = L"wrong|count|too|many|parts";
+   assert(r.Units()[2].text == L"jm");
+   r.pinyin = L"汉字|jī|rén|běi";
+-- 
+2.53.0.windows.2
+
