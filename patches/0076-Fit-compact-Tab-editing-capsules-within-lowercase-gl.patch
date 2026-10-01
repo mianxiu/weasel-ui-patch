@@ -1,0 +1,255 @@
+From 37a5a1555361d522a4aae1853033da3b1e92f4a6 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 22:22:12 +0800
+Subject: [PATCH] Fit compact Tab editing capsules within lowercase glyph
+ height
+
+---
+ INSTALL-PATCH.md                  |  1 +
+ REWRITE-UI.md                     |  1 +
+ WeaselUI/DirectWriteResources.cpp | 10 ++++++-
+ WeaselUI/RewriteLayout.h          | 44 ++++++++++++++++++++++++++-----
+ WeaselUI/WeaselPanel.cpp          | 18 ++++++++-----
+ WeaselUI/WeaselPanel.h            |  3 ++-
+ include/WeaselUI.h                |  2 ++
+ rewrite-build.txt                 |  2 +-
+ test/rewrite_pipeline_test.cpp    | 13 +++++++++
+ 9 files changed, 77 insertions(+), 17 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 5ffd60a..17e3ae2 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+ > **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+ > **2026-10-01 Tab 输入序号外观：** 末尾正在输入的序号使用浅灰色圆角背景和深灰文字，字号与前面的 Tab 音节一致，外侧填充沿用 Tab 音节的左右及上下留白。
+ > **2026-10-01 Tab 序号连续输入：** 相邻序号键间隔小于 350 毫秒才拼接编号；超时或插入其他按键会清空待拼接前缀，保留最后选择。每次数字按键重新计时，松键不打断连续输入。超时在下次按键时判定，不重绘或移动已选音节。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index df74a5b..91885c2 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+ > **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+ > **2026-10-01 Tab 输入序号外观：** 末尾正在输入的序号使用浅灰色圆角背景和深灰文字，字号与前面的 Tab 音节一致，外侧填充沿用 Tab 音节的左右及上下留白。
+ > **2026-10-01 Tab 序号连续输入：** 相邻序号键间隔小于 350 毫秒才拼接编号；超时或插入其他按键会清空待拼接前缀，保留最后选择。每次数字按键重新计时，松键不打断连续输入。超时在下次按键时判定，不重绘或移动已选音节。
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index 3ef6ee8..8966480 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -143,7 +143,7 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   const auto glyphMetrics = [&](ComPtr<IDWriteTextFormat1>& format, const wchar_t* glyph) {
+     std::pair<float,float> result{format->GetFontSize() * .7f, format->GetFontSize()};
+     ComPtr<IDWriteTextLayout> text;
+-    if (SUCCEEDED(pDWFactory->CreateTextLayout(glyph, 1, format.Get(), 1000, 1000, &text))) {
++    if (SUCCEEDED(pDWFactory->CreateTextLayout(glyph, (UINT32)wcslen(glyph), format.Get(), 1000, 1000, &text))) {
+       DWRITE_OVERHANG_METRICS ink{}; DWRITE_LINE_METRICS line{}; UINT32 count = 0;
+       if (SUCCEEDED(text->GetOverhangMetrics(&ink)))
+         result.first = (std::max)(1.f, 1000.f + ink.top + ink.bottom);
+@@ -156,6 +156,14 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   const float ratio = (std::max)(.55f, (std::min)(1.f, lower.first / digit.first));
+   init_font(font_face, rewritePoint * ratio, pRewriteLabelTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
+   rewriteLabelBaselineOffset = lower.second - glyphMetrics(pRewriteLabelTextFormat, L"0").second;
++  // Both editing capsules fit inside the pronunciation's visible lowercase s.
++  rewriteBadgeHeight = (std::max)(1, (int)floor(lower.first));
++  const float padding = (std::min)(dpiScaleLayout, rewriteBadgeHeight * .15f);
++  init_font(font_face, rewritePoint * .5f, pRewriteBadgeTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
++  const float badgeInk = glyphMetrics(pRewriteBadgeTextFormat, L"0123456789abcdefghijklmnopqrstuvwxyz/").first;
++  init_font(font_face, rewritePoint * .5f * (rewriteBadgeHeight - 2 * padding) / badgeInk,
++            pRewriteBadgeTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
++  pRewriteBadgeTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+   init_font(label_font_face, label_font_point, pLabelTextFormat, wrapping);
+   init_font(comment_font_face, comment_font_point, pCommentTextFormat,
+             wrapping);
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 6b51213..f560a93 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -31,13 +31,43 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+   };
+   for (size_t unitIndex = 0; unitIndex < units.size(); ++unitIndex) {
+     const auto& unit = units[unitIndex];
++    if (unit.badge) {
++      CSize digits(0, 0), editing(0, 0), row(0, 0);
++      layout.GetTextSizeDW(L"s", 1, dwr->pRewriteTextFormat, dwr, &row);
++      if (!state.index.empty())
++        layout.GetTextSizeDW(state.index, state.index.size(), dwr->pRewriteBadgeTextFormat, dwr, &digits);
++      if (!state.replacement.empty())
++        layout.GetTextSizeDW(state.replacement, state.replacement.size(), dwr->pRewriteBadgeTextFormat, dwr, &editing);
++      const int pad = (std::max)(1, (int)ceil(dwr->dpiScaleLayout));
++      const int dw = state.index.empty() ? 0 : digits.cx + pad * 2;
++      const int ew = state.replacement.empty() ? 0 : editing.cx + pad * 2;
++      const int between = dw && ew ? pad * 2 : 0;
++      const int w = vertical ? (std::max)(dw, ew) : dw + between + ew;
++      const int h = vertical ? dwr->rewriteBadgeHeight * ((dw && ew) ? 2 : 1) + between : row.cy;
++      const int span = vertical ? h : w;
++      if (!unwrapped && limit > 0 && advance > 0 && advance + span > limit) {
++        cross += line + gap; advance = 0; line = 0;
++      }
++      const int x = vertical ? cross : advance, y = vertical ? advance : cross;
++      const int top = vertical ? y : y + (row.cy - dwr->rewriteBadgeHeight) / 2;
++      CRect number, text;
++      number.SetRectEmpty(); text.SetRectEmpty();
++      if (dw) number.SetRect(x, top, x + dw, top + dwr->rewriteBadgeHeight);
++      if (ew) {
++        const int tx = x + (vertical ? 0 : dw + between);
++        const int ty = top + (vertical && dw ? dwr->rewriteBadgeHeight + between : 0);
++        text.SetRect(tx, ty, tx + ew, ty + dwr->rewriteBadgeHeight);
++      }
++      auto shown = unit; shown.label = state.index; shown.text = state.replacement;
++      result.cells.push_back({shown, CRect(x, y, x + w, y + h), text, number, number});
++      result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
++      result.size.cy = (std::max<LONG>)(result.size.cy, y + h);
++      advance += span + gap; line = (std::max)(line, vertical ? w : h);
++      continue;
++    }
+     CSize text(0, 0), label(0, 0);
+     std::wstring number;
+-    if (unit.badge) {
+-      number = state.index;
+-      if (!number.empty())
+-        layout.GetTextSizeDW(number, number.size(), dwr->pRewriteLabelTextFormat, dwr, &label);
+-    } else if (!unit.label.empty() && !hiddenNumber(unit.label)) {
++    if (!unit.label.empty() && !hiddenNumber(unit.label)) {
+       wchar_t formatted[128];
+       swprintf_s(formatted, style.label_text_format.c_str(), unit.label.c_str());
+       number = formatted;
+@@ -45,8 +75,8 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     }
+     const int labelOffset = vertical ? 0 : (std::max)(0, (int)ceil(dwr->rewriteLabelBaselineOffset));
+     const int lw = number.empty() ? 0 : label.cx + px * 2;
+-    const auto& textValue = unit.badge ? state.replacement : unit.text;
+-    const int prefixGap = unit.badge ? gap : margin;
++    const auto& textValue = unit.text;
++    const int prefixGap = margin;
+     // A replacement may contain many pronunciations in one original slot.
+     // Wrap that text too, leaving room for its visible group prefix.
+     const int savedWidth = layout._style.max_width;
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 48841c9..7fb97df 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -903,14 +903,12 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+       if (cell.unit.badge) {
+         if (!cell.unit.label.empty()) {
+           auto back = cell.labelBack;
+-          back.InflateRect(0, DPI_SCALE(2));
+           if (stable) back.IntersectRect(back, clip);
+           _HighlightText(dc, back, 0xffe8e8e8, 0, DPI_SCALE(4),
+                          BackType::TEXT, IsToRoundStruct());
+         }
+         if (!cell.unit.text.empty()) {
+           auto back = cell.text;
+-          back.InflateRect(DPI_SCALE(4), DPI_SCALE(m_style.hilite_padding_y));
+           if (stable) back.IntersectRect(back, clip);
+           _HighlightText(dc, back, 0xffe8e8e8, 0, DPI_SCALE(6),
+                          BackType::TEXT, IsToRoundStruct());
+@@ -960,12 +958,14 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+       // Ordinary candidate-style numbering and pronunciation share a baseline.
+       if (!cell.unit.text.empty())
+         _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), color,
+-                 pDWR->pRewriteTextFormat.Get());
++                 cell.unit.badge ? pDWR->pRewriteBadgeTextFormat.Get() : pDWR->pRewriteTextFormat.Get(),
++                 cell.unit.badge);
+       if (!cell.unit.label.empty())
+         _TextOut(cell.label, cell.unit.label, cell.unit.label.size(),
+                  cell.unit.badge ? 0xff555555 :
+                      (cell.unit.active ? 0xffd0d0d0 : m_style.label_text_color),
+-                 pDWR->pRewriteLabelTextFormat.Get());
++                 cell.unit.badge ? pDWR->pRewriteBadgeTextFormat.Get() : pDWR->pRewriteLabelTextFormat.Get(),
++                 cell.unit.badge);
+       if (stable) pDWR->pRenderTarget->PopAxisAlignedClip();
+     }
+   }
+@@ -1712,7 +1712,8 @@ void WeaselPanel::_TextOut(const CRect& rc,
+                            const std::wstring& psz,
+                            const size_t& cch,
+                            const int& inColor,
+-                           IDWriteTextFormat1* const pTextFormat) {
++                           IDWriteTextFormat1* const pTextFormat,
++                           bool centerInk) {
+   if (pTextFormat == NULL)
+     return;
+   float r = (float)(GetRValue(inColor)) / 255.0f;
+@@ -1741,9 +1742,12 @@ void WeaselPanel::_TextOut(const CRect& rc,
+   // prepare for space when first character overhanged
+   DWRITE_OVERHANG_METRICS omt;
+   HR(pDWR->GetLayoutOverhangMetrics(&omt));
+-  if (m_style.layout_type != UIStyle::LAYOUT_VERTICAL_TEXT && omt.left > 0)
++  if (centerInk) {
++    offsetx += (omt.left - omt.right) / 2;
++    offsety += (omt.top - omt.bottom) / 2;
++  } else if (m_style.layout_type != UIStyle::LAYOUT_VERTICAL_TEXT && omt.left > 0)
+     offsetx += omt.left;
+-  if (m_style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT && omt.top > 0)
++  if (!centerInk && m_style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT && omt.top > 0)
+     offsety += omt.top;
+ 
+   if (pDWR->pTextLayout != NULL) {
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 298780b..76e56ab 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -140,7 +140,8 @@ class WeaselPanel
+                 const std::wstring& psz,
+                 const size_t& cch,
+                 const int& inColor,
+-                IDWriteTextFormat1* const pTextFormat = NULL);
++                IDWriteTextFormat1* const pTextFormat = NULL,
++                bool centerInk = false);
+ 
+   void _LayerUpdate(const CRect& rc, CDCHandle dc);
+ 
+diff --git a/include/WeaselUI.h b/include/WeaselUI.h
+index fb1738a..8cb284f 100755
+--- a/include/WeaselUI.h
++++ b/include/WeaselUI.h
+@@ -153,6 +153,8 @@ class DirectWriteResources {
+   ComPtr<IDWriteTextFormat1> pPreeditTextFormat;
+   ComPtr<IDWriteTextFormat1> pRewriteTextFormat;
+   ComPtr<IDWriteTextFormat1> pRewriteLabelTextFormat;
++  ComPtr<IDWriteTextFormat1> pRewriteBadgeTextFormat;
++  int rewriteBadgeHeight = 0;
+   float rewriteLabelBaselineOffset = 0;
+   ComPtr<IDWriteTextFormat1> pTextFormat;
+   ComPtr<IDWriteTextFormat1> pLabelTextFormat;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 01c4d54..20aded6 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-separate-index-20261001
++Build-ID: rewrite-ui-tab-compact-badges-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index c2811c4..dd9d667 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -323,8 +323,21 @@ int main() {
+         };
+         assert(abs(inkHeight(dwr->pRewriteTextFormat.Get(),L"s") -
+                    inkHeight(dwr->pRewriteLabelTextFormat.Get(),L"0")) <= dwr->dpiScaleLayout);
++        assert(dwr->rewriteBadgeHeight <= inkHeight(dwr->pRewriteTextFormat.Get(), L"s"));
++        assert(inkHeight(dwr->pRewriteBadgeTextFormat.Get(), L"j") < dwr->rewriteBadgeHeight);
++        auto compactState = wrapped.rewrite;
++        compactState.replacement = L"keyjufmedsxi";
++        const auto compact = weasel::MeasureRewrite(wrappedLayout, compactState, dwr);
++        assert(compact.cells.back().text.Height() == dwr->rewriteBadgeHeight);
++        assert(compact.cells.back().labelBack.Height() == dwr->rewriteBadgeHeight);
+       }
+       for (const auto& cell : measured.cells) if (!cell.unit.label.empty()) {
++        if (cell.unit.badge) {
++          assert(cell.labelBack.Height() == dwr->rewriteBadgeHeight);
++          assert(cell.label == cell.labelBack);
++          assert(dwr->pRewriteBadgeTextFormat->GetFontSize() < dwr->pRewriteLabelTextFormat->GetFontSize());
++          continue;
++        }
+         if (!cell.unit.text.empty()) {
+           if (mode == 2) assert(cell.labelBack.bottom < cell.text.top);
+           else assert(cell.labelBack.right < cell.text.left);
+-- 
+2.53.0.windows.2
+
