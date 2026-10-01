@@ -1,7 +1,7 @@
 From ef00f56161f2def09efabd66449e2d4dffef683d Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 00:11:09 +0800
-Subject: [PATCH 44/54] perf(ui): update following at 16ms and reuse editor
+Subject: [PATCH 44/55] perf(ui): update following at 16ms and reuse editor
  layout during movement
 
 ---

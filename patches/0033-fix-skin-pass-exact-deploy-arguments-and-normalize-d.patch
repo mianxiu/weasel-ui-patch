@@ -1,7 +1,7 @@
 From 67519cfc7f41003f0ba5f29da6d698b7192f50f2 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 21:14:05 +0800
-Subject: [PATCH 33/54] fix(skin): pass exact deploy arguments and normalize
+Subject: [PATCH 33/55] fix(skin): pass exact deploy arguments and normalize
  deployer switches
 
 ---
