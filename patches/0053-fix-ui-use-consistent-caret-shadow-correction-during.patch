@@ -1,7 +1,7 @@
 From 5279d49a5ac557171d309975e161b6a8d3ca4395 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 02:48:44 +0800
-Subject: [PATCH 53/62] fix(ui): use consistent caret shadow correction during
+Subject: [PATCH 53/63] fix(ui): use consistent caret shadow correction during
  typing
 
 ---

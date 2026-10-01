@@ -1,7 +1,7 @@
 From 74c9491a24c9fc73353f995c1478d2810344f489 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 12:34:38 +0800
-Subject: [PATCH 59/62] feat(rewrite): default to single syllable and opt in to
+Subject: [PATCH 59/63] feat(rewrite): default to single syllable and opt in to
  multi-syllable edits
 
 ---

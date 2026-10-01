@@ -1,7 +1,7 @@
 From fe357e85b2e38185f53ffe4ba2796d7d206b97c5 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 23:35:57 +0800
-Subject: [PATCH 41/62] fix(ui): track host window movement and compact inset
+Subject: [PATCH 41/63] fix(ui): track host window movement and compact inset
  Tab label
 
 ---

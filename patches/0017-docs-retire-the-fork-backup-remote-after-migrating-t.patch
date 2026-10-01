@@ -1,7 +1,7 @@
 From 5039d2320c343b66b58c4cf9aed34f3069bf26f8 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 21:27:12 +0800
-Subject: [PATCH 17/62] docs: retire the fork backup remote after migrating to
+Subject: [PATCH 17/63] docs: retire the fork backup remote after migrating to
  the standalone repo
 
 ---

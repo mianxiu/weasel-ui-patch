@@ -1,7 +1,7 @@
 From 896af8cd88a0d2064fe262f7719237f72cc04089 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Tue, 29 Sep 2026 23:25:15 +0800
-Subject: [PATCH 27/62] feat(rewrite): add opt-in TSF inline syllable highlight
+Subject: [PATCH 27/63] feat(rewrite): add opt-in TSF inline syllable highlight
  preview
 
 ---

@@ -1,7 +1,7 @@
 From e029f83d5c0dd869445b233793e2c712eb52a56d Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 10:35:15 +0800
-Subject: [PATCH 56/62] style(ui): balance Tab highlight padding without
+Subject: [PATCH 56/63] style(ui): balance Tab highlight padding without
  stretching its bottom
 
 ---
