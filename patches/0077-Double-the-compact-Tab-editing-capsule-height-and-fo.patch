@@ -1,0 +1,97 @@
+From e0c3b34c339180c28a825dddd4dc06f8c19d3afb Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 22:29:53 +0800
+Subject: [PATCH] Double the compact Tab editing capsule height and font
+
+---
+ INSTALL-PATCH.md                  | 1 +
+ REWRITE-UI.md                     | 1 +
+ WeaselUI/DirectWriteResources.cpp | 6 +++---
+ WeaselUI/RewriteLayout.h          | 1 +
+ rewrite-build.txt                 | 2 +-
+ test/rewrite_pipeline_test.cpp    | 5 +++--
+ 6 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 17e3ae2..e744cbc 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+ > **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+ > **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+ > **2026-10-01 Tab 输入序号外观：** 末尾正在输入的序号使用浅灰色圆角背景和深灰文字，字号与前面的 Tab 音节一致，外侧填充沿用 Tab 音节的左右及上下留白。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 91885c2..e016e4d 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+ > **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+ > **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+ > **2026-10-01 Tab 输入序号外观：** 末尾正在输入的序号使用浅灰色圆角背景和深灰文字，字号与前面的 Tab 音节一致，外侧填充沿用 Tab 音节的左右及上下留白。
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index 8966480..edd6fe1 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -156,9 +156,9 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   const float ratio = (std::max)(.55f, (std::min)(1.f, lower.first / digit.first));
+   init_font(font_face, rewritePoint * ratio, pRewriteLabelTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
+   rewriteLabelBaselineOffset = lower.second - glyphMetrics(pRewriteLabelTextFormat, L"0").second;
+-  // Both editing capsules fit inside the pronunciation's visible lowercase s.
+-  rewriteBadgeHeight = (std::max)(1, (int)floor(lower.first));
+-  const float padding = (std::min)(dpiScaleLayout, rewriteBadgeHeight * .15f);
++  // Double the compact capsule height while keeping both fields uniform.
++  rewriteBadgeHeight = 2 * (std::max)(1, (int)floor(lower.first));
++  const float padding = (std::min)(2 * dpiScaleLayout, rewriteBadgeHeight * .15f);
+   init_font(font_face, rewritePoint * .5f, pRewriteBadgeTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
+   const float badgeInk = glyphMetrics(pRewriteBadgeTextFormat, L"0123456789abcdefghijklmnopqrstuvwxyz/").first;
+   init_font(font_face, rewritePoint * .5f * (rewriteBadgeHeight - 2 * padding) / badgeInk,
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index f560a93..26bd3b2 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -34,6 +34,7 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     if (unit.badge) {
+       CSize digits(0, 0), editing(0, 0), row(0, 0);
+       layout.GetTextSizeDW(L"s", 1, dwr->pRewriteTextFormat, dwr, &row);
++      row.cy = (std::max<LONG>)(row.cy, dwr->rewriteBadgeHeight);
+       if (!state.index.empty())
+         layout.GetTextSizeDW(state.index, state.index.size(), dwr->pRewriteBadgeTextFormat, dwr, &digits);
+       if (!state.replacement.empty())
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 20aded6..727f505 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-compact-badges-20261001
++Build-ID: rewrite-ui-tab-double-badges-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index dd9d667..61e2602 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -323,7 +323,9 @@ int main() {
+         };
+         assert(abs(inkHeight(dwr->pRewriteTextFormat.Get(),L"s") -
+                    inkHeight(dwr->pRewriteLabelTextFormat.Get(),L"0")) <= dwr->dpiScaleLayout);
+-        assert(dwr->rewriteBadgeHeight <= inkHeight(dwr->pRewriteTextFormat.Get(), L"s"));
++        const float lowerHeight = inkHeight(dwr->pRewriteTextFormat.Get(), L"s");
++        assert(dwr->rewriteBadgeHeight <= 2 * lowerHeight);
++        assert(dwr->rewriteBadgeHeight > 2 * lowerHeight - 2.01f);
+         assert(inkHeight(dwr->pRewriteBadgeTextFormat.Get(), L"j") < dwr->rewriteBadgeHeight);
+         auto compactState = wrapped.rewrite;
+         compactState.replacement = L"keyjufmedsxi";
+@@ -335,7 +337,6 @@ int main() {
+         if (cell.unit.badge) {
+           assert(cell.labelBack.Height() == dwr->rewriteBadgeHeight);
+           assert(cell.label == cell.labelBack);
+-          assert(dwr->pRewriteBadgeTextFormat->GetFontSize() < dwr->pRewriteLabelTextFormat->GetFontSize());
+           continue;
+         }
+         if (!cell.unit.text.empty()) {
+-- 
+2.53.0.windows.2
+
