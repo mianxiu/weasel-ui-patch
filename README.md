@@ -10,9 +10,9 @@
 
 ## 当前预览版
 
-构建标识为 `rewrite-ui-gray-hover-four-labels-20261001`。当前本地分发目录是 `weasel/dist/Weasel-Rewrite-UI-Floating-Preview`，压缩包为同名 ZIP。候选框内显示 Tab 声调拼音行，共用主候选圆角；不再使用独立编辑窗口或上标。第 1–4 个音节隐藏编号显示，数字定位仍从 1 开始；字号约为候选的 80%（至少 10pt）。
+构建标识为 `rewrite-ui-half-tab-spacing-20261001`。当前本地分发目录是 `weasel/dist/Weasel-Rewrite-UI-Floating-Preview`，压缩包为同名 ZIP。候选框内显示 Tab 声调拼音行，共用主候选圆角；不再使用独立编辑窗口或上标。第 1–4 个音节隐藏编号显示，数字定位仍从 1 开始；字号约为候选的 80%（至少 10pt）。
 
-Azure Pill 提供蓝、深蓝、深黑、深绿四种配色，普通及悬停候选使用黑字，悬停背景为浅灰色 `#EEEEEE`；前 4 个 Tab 音节按隐藏编号宽度补齐间距。该版本为本地预览，更新文档和打包不会自动发布 Release。
+Azure Pill 提供蓝、深蓝、深黑、深绿四种配色，普通及悬停候选使用黑字，悬停背景为浅灰色 `#EEEEEE`；前 4 个 Tab 音节按隐藏编号宽度的一半增加间距。该版本为本地预览，更新文档和打包不会自动发布 Release。
 
 ## Tab 音节编辑
 
