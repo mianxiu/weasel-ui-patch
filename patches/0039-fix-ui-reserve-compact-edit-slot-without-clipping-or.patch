@@ -1,7 +1,7 @@
 From 36287beb459d833010489dbd39755e8b8f8b9e30 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 23:06:59 +0800
-Subject: [PATCH 39/63] fix(ui): reserve compact edit slot without clipping
+Subject: [PATCH 39/64] fix(ui): reserve compact edit slot without clipping
  original pronunciation
 
 ---

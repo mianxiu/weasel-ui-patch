@@ -1,7 +1,7 @@
 From fc16231c783b09dc81ad6a23598459989accf3ac Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 14:02:18 +0800
-Subject: [PATCH 62/63] style(ui): halve hidden Tab syllable spacing
+Subject: [PATCH 62/64] style(ui): halve hidden Tab syllable spacing
 
 ---
  INSTALL-PATCH.md               | 2 +-
