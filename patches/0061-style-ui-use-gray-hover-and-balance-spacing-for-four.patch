@@ -1,7 +1,7 @@
 From 4c598f4699ef2cced6ba7d90770a265b398594d2 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 13:14:11 +0800
-Subject: [PATCH 61/65] style(ui): use gray hover and balance spacing for four
+Subject: [PATCH 61/66] style(ui): use gray hover and balance spacing for four
  hidden Tab labels
 
 ---

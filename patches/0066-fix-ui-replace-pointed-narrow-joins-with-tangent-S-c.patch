@@ -1,0 +1,154 @@
+From 5c4e4ff753c808e5ebc64ba25daa55cd9b665096 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 18:19:46 +0800
+Subject: [PATCH 66/66] fix(ui): replace pointed narrow joins with tangent S
+ curves
+
+---
+ INSTALL-PATCH.md               |  2 ++
+ Install-Binaries.ps1           |  2 +-
+ README.md                      |  2 ++
+ REWRITE-UI.md                  |  2 ++
+ WeaselUI/JoinedRewritePath.h   | 22 ++++++++++++++++++++++
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp | 24 +++++++++++++++++++++++-
+ 7 files changed, 53 insertions(+), 3 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 3a396dd..6dd9b3c 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
++
+ > **2026-10-01 窄连接圆角修复：** 主候选与 Tab 高亮的边缘接近时，横向与纵向圆角分别计算，避免几像素宽的台阶把纵向弧线一起压缩成尖角。相交填充仍为一条连续轮廓，文字、padding、窗口高度和上下排列保持原样。
+ 
+ > **2026-10-01 行内编码清理修复：** 上一轮只结束输入状态，部分应用会把原始编码留成普通文本。现在取消输入时优先同步删除编码；若只能异步执行，则保存原文本范围，在应用终止输入的写入回调中删除一次，后续回调不重复删除，也不影响新的输入。测试检查实际文本清空、已终止对象的范围失效、延迟回调与新文本保护，覆盖 x64/x86；具体应用仍需安装后完全退出重开再实测。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 1d2b1be..93fd31e 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-smooth-highlight-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-smooth-neck-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/README.md b/README.md
+index ff61c3b..bb3e8b4 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
++
+ > **2026-10-01 窄连接圆角修复：** 主候选与 Tab 高亮的边缘接近时，横向与纵向圆角分别计算，避免几像素宽的台阶把纵向弧线一起压缩成尖角。相交填充仍为一条连续轮廓，文字、padding、窗口高度和上下排列保持原样。
+ 
+ > **2026-10-01 行内编码清理修复：** 上一轮只结束输入状态，部分应用会把原始编码留成普通文本。现在取消输入时优先同步删除编码；若只能异步执行，则保存原文本范围，在应用终止输入的写入回调中删除一次，后续回调不重复删除，也不影响新的输入。测试检查实际文本清空、已终止对象的范围失效、延迟回调与新文本保护，覆盖 x64/x86；具体应用仍需安装后完全退出重开再实测。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 23e3988..527d764 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
++
+ > **2026-10-01 窄连接圆角修复：** 主候选与 Tab 高亮的边缘接近时，横向与纵向圆角分别计算，避免几像素宽的台阶把纵向弧线一起压缩成尖角。相交填充仍为一条连续轮廓，文字、padding、窗口高度和上下排列保持原样。
+ 
+ > **2026-10-01 行内编码清理修复：** 上一轮只结束输入状态，部分应用会把原始编码留成普通文本。现在取消输入时优先同步删除编码；若只能异步执行，则保存原文本范围，在应用终止输入的写入回调中删除一次，后续回调不重复删除，也不影响新的输入。测试检查实际文本清空、已终止对象的范围失效、延迟回调与新文本保护，覆盖 x64/x86；具体应用仍需安装后完全退出重开再实测。
+diff --git a/WeaselUI/JoinedRewritePath.h b/WeaselUI/JoinedRewritePath.h
+index db8bfb0..284f934 100644
+--- a/WeaselUI/JoinedRewritePath.h
++++ b/WeaselUI/JoinedRewritePath.h
+@@ -71,6 +71,28 @@ inline void BuildJoinedRewritePath(Gdiplus::GraphicsPath& path, CRect body, CRec
+     const float outgoingRadius = (std::min)(radius, outgoing / 2);
+     const Gdiplus::PointF u((c.x - p.x) / incoming, (c.y - p.y) / incoming);
+     const Gdiplus::PointF v((n.x - c.x) / outgoing, (n.y - c.y) / outgoing);
++    // Two quarter ellipses on a tiny horizontal ledge still flatten to a
++    // near-horizontal tangent, which looks like a point at normal DPI. Replace
++    // the opposing turns with one S curve, tangent to both vertical sides.
++    if (i + 1 < corners.size() && c.y == n.y && outgoing <= 2 * neckRadius) {
++      const auto after = corners[(i + 2) % corners.size()];
++      const float nextLength = (float)(abs(after.x - n.x) + abs(after.y - n.y));
++      const Gdiplus::PointF w((after.x - n.x) / nextLength, (after.y - n.y) / nextLength);
++      if (u.X == 0 && w.X == 0 && u.Y == w.Y) {
++        const float reach = (std::max)((std::max)(bodyRadius, tagRadius), neckRadius);
++        const float beforeReach = (std::min)(reach, incoming / 2);
++        const float afterReach = (std::min)(reach, nextLength / 2);
++        const Gdiplus::PointF start((float)c.x, c.y - u.Y * beforeReach);
++        const Gdiplus::PointF end((float)n.x, n.y + w.Y * afterReach);
++        const float control = (beforeReach + afterReach) / 2;
++        if (i) path.AddLine(last, start); else firstPoint = start;
++        path.AddBezier(start, {start.X, start.Y + u.Y * control},
++                       {end.X, end.Y - w.Y * control}, end);
++        last = end;
++        ++i;
++        continue;
++      }
++    }
+     const Gdiplus::PointF start(c.x - u.X * incomingRadius, c.y - u.Y * incomingRadius);
+     const Gdiplus::PointF end(c.x + v.X * outgoingRadius, c.y + v.Y * outgoingRadius);
+     if (i) path.AddLine(last, start); else firstPoint = start;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 1d0db45..6b2c544 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-smooth-highlight-20261001
++Build-ID: rewrite-ui-smooth-neck-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 08abfb1..93a0732 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -105,7 +105,7 @@ int main() {
+       // Near-aligned right edges used to shrink both curves to a tiny 1-2px
+       // radius. Preserve the long vertical tangent above and below the join.
+       for (int scale : {1, 2}) for (bool above : {false, true}) {
+-        for (int step : {2, 4, 8}) {
++        for (int step : {1, 2, 4, 8}) {
+           CRect candidate(20*scale, 40*scale, 150*scale, 80*scale);
+           CRect syllable(92*scale, (above ? 12 : 77)*scale,
+                          (150-step)*scale, (above ? 43 : 108)*scale);
+@@ -117,6 +117,21 @@ int main() {
+           // The outer turn starts before the old half-step radius allowed.
+           assert(!path.IsVisible(149.9f*scale, seam - side*3.f*scale));
+           assert(path.IsVisible(100.f*scale, seam));
++          std::vector<Gdiplus::PointF> points(path.GetPointCount());
++          std::vector<BYTE> types(path.GetPointCount());
++          path.GetPathPoints(points.data(), (INT)points.size());
++          path.GetPathTypes(types.data(), (INT)types.size());
++          bool smoothStep = false;
++          for (size_t i = 1; i + 2 < points.size(); ++i) {
++            if ((types[i] & Gdiplus::PathPointTypePathTypeMask) != Gdiplus::PathPointTypeBezier) continue;
++            const auto a = points[i-1], b = points[i], c = points[i+1], d = points[i+2];
++            if (abs(abs(d.X-a.X)-step*scale) < .01f &&
++                abs(d.Y-a.Y) >= 20.f*scale && a.X == b.X && c.X == d.X)
++              smoothStep = true;
++            i += 2;
++          }
++          // No horizontal tangent at the narrow join: one long vertical S curve.
++          assert(smoothStep);
+           // Keep all paint inside the original bounds; the text/layout is untouched.
+           Gdiplus::RectF bounds; path.GetBounds(&bounds);
+           assert(bounds.X >= candidate.left && bounds.GetRight() <= candidate.right);
+@@ -151,6 +166,13 @@ int main() {
+         Gdiplus::SolidBrush blue(Gdiplus::Color(255,38,105,255));
+         graphics.FillPath(&blue,&highlight);
+         assert(preview.Save(above ? L"deps/joined-highlight-above.png" : L"deps/joined-highlight-below.png", &png) == Gdiplus::Ok);
++        Gdiplus::Bitmap zoom(800,700,PixelFormat32bppARGB);
++        Gdiplus::Graphics zoomGraphics(&zoom);
++        zoomGraphics.Clear(Gdiplus::Color(255,255,255,255));
++        zoomGraphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
++        zoomGraphics.ScaleTransform(4.f,4.f);
++        zoomGraphics.FillPath(&blue,&highlight);
++        assert(zoom.Save(above ? L"deps/joined-highlight-above-zoom.png" : L"deps/joined-highlight-below-zoom.png", &png) == Gdiplus::Ok);
+       }
+     }
+     Gdiplus::GdiplusShutdown(token);
+-- 
+2.53.0.windows.2
+

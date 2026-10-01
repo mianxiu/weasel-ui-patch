@@ -1,7 +1,7 @@
 From cc30d24a93c07009e9df39c42d2aaafd03b85e49 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 16:50:08 +0800
-Subject: [PATCH 64/65] fix(tsf): remove cancelled inline preedit before host
+Subject: [PATCH 64/66] fix(tsf): remove cancelled inline preedit before host
  termination
 
 ---

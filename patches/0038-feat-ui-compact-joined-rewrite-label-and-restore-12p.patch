@@ -1,7 +1,7 @@
 From e556ef9f6071c43359d368d6e2c44fcf342d5c31 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 23:02:29 +0800
-Subject: [PATCH 38/65] feat(ui): compact joined rewrite label and restore 12pt
+Subject: [PATCH 38/66] feat(ui): compact joined rewrite label and restore 12pt
  skin typography
 
 ---
