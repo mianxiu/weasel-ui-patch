@@ -1,0 +1,274 @@
+From db17a9314f1dc5388aab754254f253d5cc45180c Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 00:17:36 +0800
+Subject: [PATCH] Fix stale TSF key callbacks after control and window switches
+
+---
+ INSTALL-PATCH.md           |  1 +
+ REWRITE-UI.md              |  1 +
+ WeaselTSF/KeyEventSink.cpp | 53 +++++++++++++++++++++++++++++------
+ WeaselTSF/WeaselTSF.h      | 13 +++++++++
+ rewrite-build.txt          |  2 +-
+ test/tsf_focus_test.cpp    | 57 ++++++++++++++++++++++++++++++++++++--
+ 6 files changed, 116 insertions(+), 11 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 2428fd8..5aeb58c 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+ > **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+ > **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+ > **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 128f0f8..f3fd764 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+ > **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+ > **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+ > **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+diff --git a/WeaselTSF/KeyEventSink.cpp b/WeaselTSF/KeyEventSink.cpp
+index 6a18c13..41c7377 100644
+--- a/WeaselTSF/KeyEventSink.cpp
++++ b/WeaselTSF/KeyEventSink.cpp
+@@ -83,19 +83,44 @@ STDMETHODIMP WeaselTSF::OnSetFocus(BOOL fForeground) {
+  *  and for OnKeyDown() to check if the key has already been sent to the server.
+  */
+ 
++bool WeaselTSF::_PrepareKeyContext(ITfContext* context) {
++  if (!context)
++    return false;
++  com_ptr<ITfDocumentMgr> focusedDocument;
++  com_ptr<ITfContext> focusedContext;
++  if (_pThreadMgr && SUCCEEDED(_pThreadMgr->GetFocus(&focusedDocument)) &&
++      focusedDocument && SUCCEEDED(focusedDocument->GetTop(&focusedContext)) &&
++      focusedContext && focusedContext != context)
++    return false;  // A delayed key from the old control cannot abort new input.
++  // A host can switch controls without a document/thread focus callback.
++  // Cancel the old input before sending the first key for the new control.
++  if (context && _pEditSessionContext && context != _pEditSessionContext)
++    _AbortComposition();
++  if (context)
++    _pEditSessionContext = context;
++  return true;
++}
++
+ STDMETHODIMP WeaselTSF::OnTestKeyDown(ITfContext* pContext,
+                                       WPARAM wParam,
+                                       LPARAM lParam,
+                                       BOOL* pfEaten) {
++  if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyUpPending = FALSE;
+-  if (_fTestKeyDownPending) {
++  const LONG messageTime = GetMessageTime();
++  if (_fTestKeyDownPending &&
++      _testKeyDown.Matches(pContext, wParam, lParam, messageTime, true)) {
+     *pfEaten = TRUE;
+     return S_OK;
+   }
++  // Missing OnKeyDown must not swallow a different or later repeated key.
++  _fTestKeyDownPending = FALSE;
+   _ProcessKeyEvent(wParam, lParam, pfEaten);
+   _UpdateComposition(pContext);
+-  if (*pfEaten)
++  if (*pfEaten) {
++    _testKeyDown = {pContext, wParam, lParam, messageTime};
+     _fTestKeyDownPending = TRUE;
++  }
+   return S_OK;
+ }
+ 
+@@ -103,9 +128,12 @@ STDMETHODIMP WeaselTSF::OnKeyDown(ITfContext* pContext,
+                                   WPARAM wParam,
+                                   LPARAM lParam,
+                                   BOOL* pfEaten) {
++  if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyUpPending = FALSE;
+-  if (_fTestKeyDownPending) {
+-    _fTestKeyDownPending = FALSE;
++  const bool tested = _fTestKeyDownPending &&
++      _testKeyDown.Matches(pContext, wParam, lParam, 0, false);
++  _fTestKeyDownPending = FALSE;
++  if (tested) {
+     *pfEaten = TRUE;
+   } else {
+     _ProcessKeyEvent(wParam, lParam, pfEaten);
+@@ -118,15 +146,21 @@ STDMETHODIMP WeaselTSF::OnTestKeyUp(ITfContext* pContext,
+                                     WPARAM wParam,
+                                     LPARAM lParam,
+                                     BOOL* pfEaten) {
++  if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyDownPending = FALSE;
+-  if (_fTestKeyUpPending) {
++  const LONG messageTime = GetMessageTime();
++  if (_fTestKeyUpPending &&
++      _testKeyUp.Matches(pContext, wParam, lParam, messageTime, true)) {
+     *pfEaten = TRUE;
+     return S_OK;
+   }
++  _fTestKeyUpPending = FALSE;
+   _ProcessKeyEvent(wParam, lParam, pfEaten);
+   _UpdateComposition(pContext);
+-  if (*pfEaten)
++  if (*pfEaten) {
++    _testKeyUp = {pContext, wParam, lParam, messageTime};
+     _fTestKeyUpPending = TRUE;
++  }
+   return S_OK;
+ }
+ 
+@@ -134,9 +168,12 @@ STDMETHODIMP WeaselTSF::OnKeyUp(ITfContext* pContext,
+                                 WPARAM wParam,
+                                 LPARAM lParam,
+                                 BOOL* pfEaten) {
++  if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyDownPending = FALSE;
+-  if (_fTestKeyUpPending) {
+-    _fTestKeyUpPending = FALSE;
++  const bool tested = _fTestKeyUpPending &&
++      _testKeyUp.Matches(pContext, wParam, lParam, 0, false);
++  _fTestKeyUpPending = FALSE;
++  if (tested) {
+     *pfEaten = TRUE;
+   } else {
+     _ProcessKeyEvent(wParam, lParam, pfEaten);
+diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
+index 0b8cfe8..70662c8 100644
+--- a/WeaselTSF/WeaselTSF.h
++++ b/WeaselTSF/WeaselTSF.h
+@@ -183,6 +183,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   BOOL _InitKeyEventSink();
+   void _UninitKeyEventSink();
+   void _ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten);
++  bool _PrepareKeyContext(ITfContext* context);
+ 
+   BOOL _InitPreservedKey();
+   void _UninitPreservedKey();
+@@ -216,6 +217,18 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   DWORD _dwTextEditSinkCookie, _dwTextLayoutSinkCookie;
+   BYTE _lpbKeyState[256];
+   BOOL _fTestKeyDownPending, _fTestKeyUpPending;
++  struct PendingKeyEvent {
++    ITfContext* context = nullptr;
++    WPARAM key = 0;
++    LPARAM flags = 0;
++    LONG messageTime = 0;
++    bool Matches(ITfContext* current, WPARAM currentKey, LPARAM currentFlags,
++                 LONG currentTime, bool sameMessage) const {
++      return context == current && key == currentKey && flags == currentFlags &&
++             (!sameMessage || messageTime == currentTime);
++    }
++  };
++  PendingKeyEvent _testKeyDown, _testKeyUp;
+ 
+   com_ptr<ITfContext> _pEditSessionContext;
+   std::wstring _editSessionText;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 39051dd..e12c4e6 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-full-height-badges-20261001
++Build-ID: rewrite-ui-focus-key-recovery-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/tsf_focus_test.cpp b/test/tsf_focus_test.cpp
+index d0579f6..57b4160 100644
+--- a/test/tsf_focus_test.cpp
++++ b/test/tsf_focus_test.cpp
+@@ -20,6 +20,7 @@ CAppModule _Module;
+   ULONG refs = 1;
+ 
+ struct Host : ITfThreadMgr, ITfUIElementMgr {
++  ITfDocumentMgr* focused = nullptr;
+   ULONG refs = 1;
+   int begins = 0, ends = 0;
+   bool unavailable = false;
+@@ -45,7 +46,9 @@ struct Host : ITfThreadMgr, ITfUIElementMgr {
+   STDMETHODIMP Deactivate() override { return E_NOTIMPL; }
+   STDMETHODIMP CreateDocumentMgr(ITfDocumentMgr**) override { return E_NOTIMPL; }
+   STDMETHODIMP EnumDocumentMgrs(IEnumTfDocumentMgrs**) override { return E_NOTIMPL; }
+-  STDMETHODIMP GetFocus(ITfDocumentMgr** out) override { *out = nullptr; return E_FAIL; }
++  STDMETHODIMP GetFocus(ITfDocumentMgr** out) override {
++    *out = focused; if (*out) (*out)->AddRef(); return focused ? S_OK : E_FAIL;
++  }
+   STDMETHODIMP SetFocus(ITfDocumentMgr*) override { return E_NOTIMPL; }
+   STDMETHODIMP AssociateFocus(HWND, ITfDocumentMgr*, ITfDocumentMgr**) override { return E_NOTIMPL; }
+   STDMETHODIMP IsThreadFocus(BOOL*) override { return E_NOTIMPL; }
+@@ -104,11 +107,12 @@ struct Composition : ITfComposition {
+ };
+ 
+ struct Document : ITfDocumentMgr {
++  ITfContext* top = nullptr;
+   MOCK_UNKNOWN(ITfDocumentMgr)
+   STDMETHODIMP CreateContext(TfClientId, DWORD, IUnknown*, ITfContext**, TfEditCookie*) override { return E_NOTIMPL; }
+   STDMETHODIMP Push(ITfContext*) override { return E_NOTIMPL; }
+   STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
+-  STDMETHODIMP GetTop(ITfContext** out) override { *out = nullptr; return S_OK; }
++  STDMETHODIMP GetTop(ITfContext** out) override { *out = top; if (*out) (*out)->AddRef(); return S_OK; }
+   STDMETHODIMP GetBase(ITfContext**) override { return E_NOTIMPL; }
+   STDMETHODIMP EnumContexts(IEnumTfContexts**) override { return E_NOTIMPL; }
+ };
+@@ -319,6 +323,55 @@ struct TSFFocusTest {
+     assert(context.propertyReads == propertiesBeforeDrain);
+     assert(committedEarly.ends == 0);
+     service->_AbortComposition();
++    context.Drain();
++
++    // Lost OnKeyDown while holding U: only a duplicate test for the same
++    // message is skipped. A later autorepeat or another key must run normally.
++    const LPARAM initialU = 0x00160001;
++    const LPARAM repeatU = 0x40160001;
++    service->_PrepareKeyContext(&context);
++    service->_testKeyDown = {&context, 'U', initialU, GetMessageTime()};
++    service->_fTestKeyDownPending = TRUE;
++    BOOL eaten = FALSE;
++    service->OnTestKeyDown(&context, 'U', initialU, &eaten);
++    assert(eaten && service->_fTestKeyDownPending);
++    assert(!service->_testKeyDown.Matches(&context, 'U', repeatU, GetMessageTime(), true));
++    assert(!service->_testKeyDown.Matches(&context, 'U', initialU, GetMessageTime() + 30, true));
++    assert(!service->_testKeyDown.Matches(&context, 'A', initialU, GetMessageTime(), true));
++    service->OnKeyDown(&context, 'U', initialU, &eaten);
++    assert(eaten && !service->_fTestKeyDownPending);
++
++    // A different control on the same document can receive the next U
++    // without either a document-focus or thread-focus callback.
++    Context nextContext;
++    context.document = nextContext.document = &document;
++    Composition heldU, nextInput;
++    heldU.range.text = L"u";
++    service->_SetComposition(&heldU);
++    service->_status.composing = true;
++    service->_UpdateComposition(&context);
++    service->_fTestKeyDownPending = service->_fTestKeyUpPending = TRUE;
++    epoch = service->_GetCompositionEpoch();
++    service->_PrepareKeyContext(&nextContext);
++    assert(!service->_IsComposing() && !service->_status.composing);
++    assert(!service->_fTestKeyDownPending && !service->_fTestKeyUpPending);
++    assert(service->_pEditSessionContext == &nextContext);
++    assert(!service->_IsCompositionEpoch(epoch));
++    service->_SetComposition(&nextInput);
++    service->_status.composing = true;
++    host.focused = &document; document.top = &nextContext;
++    epoch = service->_GetCompositionEpoch();
++    assert(!service->_PrepareKeyContext(&context));
++    eaten = TRUE;
++    service->OnKeyUp(&context, 'U', 0xc0160001, &eaten);
++    assert(!eaten && service->_IsCompositionEpoch(epoch));
++    assert(service->_IsCurrentComposition(&nextInput) && service->_status.composing);
++    context.Drain();
++    assert(heldU.range.text.empty());
++    assert(service->_IsCurrentComposition(&nextInput) && service->_status.composing);
++    service->_AbortComposition();
++    nextContext.Drain();
++    host.focused = nullptr; document.top = nullptr;
+     service->_pEditSessionContext.Release();
+     candidates->Destroy();
+     candidates.Release(); // Break the existing service/candidate COM cycle.
+-- 
+2.53.0.windows.2
+
