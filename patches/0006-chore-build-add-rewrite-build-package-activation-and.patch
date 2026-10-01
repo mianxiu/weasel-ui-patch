@@ -1,7 +1,7 @@
 From 44e29729ccd60c7ba53a8f4081e2219f9f801b4b Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:40 +0800
-Subject: [PATCH 06/64] chore(build): add rewrite build, package, activation
+Subject: [PATCH 06/65] chore(build): add rewrite build, package, activation
  and patch scripts
 
 ---

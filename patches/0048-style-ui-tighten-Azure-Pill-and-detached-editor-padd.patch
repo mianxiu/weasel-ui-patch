@@ -1,7 +1,7 @@
 From bca262379e35cdeacd7fee3ba59603c55502086c Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 01:53:05 +0800
-Subject: [PATCH 48/64] style(ui): tighten Azure Pill and detached editor
+Subject: [PATCH 48/65] style(ui): tighten Azure Pill and detached editor
  padding
 
 ---

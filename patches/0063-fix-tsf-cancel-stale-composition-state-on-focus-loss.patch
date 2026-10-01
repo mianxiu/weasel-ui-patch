@@ -1,7 +1,7 @@
 From a285b4ca322287345bbc1e0adcebb391281bd034 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 14:47:11 +0800
-Subject: [PATCH 63/64] fix(tsf): cancel stale composition state on focus loss
+Subject: [PATCH 63/65] fix(tsf): cancel stale composition state on focus loss
 
 ---
  INSTALL-PATCH.md                 |   2 +

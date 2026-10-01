@@ -1,7 +1,7 @@
 From e695a65791dd636cad0292e9ba4b3ed81d7bb24b Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 02:34:10 +0800
-Subject: [PATCH 51/64] feat(ui): restore Tab row inside candidate window with
+Subject: [PATCH 51/65] feat(ui): restore Tab row inside candidate window with
  ordinary numbers
 
 ---

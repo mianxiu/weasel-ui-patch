@@ -1,7 +1,7 @@
 From d7a5a14743845642e08404ca29383e8274ff4caa Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 22:40:53 +0800
-Subject: [PATCH 37/64] fix(installer): ignore exited processes when checking
+Subject: [PATCH 37/65] fix(installer): ignore exited processes when checking
  shutdown identity
 
 ---
