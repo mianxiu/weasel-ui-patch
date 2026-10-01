@@ -1,7 +1,7 @@
 From 13ceb756aaf51ede184263831daeb5f1a096d1f4 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 09:45:27 +0800
-Subject: [PATCH 54/56] style(ui): compact Tab row and join overlapping rounded
+Subject: [PATCH 54/57] style(ui): compact Tab row and join overlapping rounded
  highlight fills
 
 ---

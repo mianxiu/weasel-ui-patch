@@ -1,7 +1,7 @@
 From b6f7e333dcd9f857ed78abaa8f8f6d9eb2ecb9c8 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 21:30:12 +0800
-Subject: [PATCH 35/56] feat(skin): add dark accents and readable secondary
+Subject: [PATCH 35/57] feat(skin): add dark accents and readable secondary
  hover text
 
 ---
