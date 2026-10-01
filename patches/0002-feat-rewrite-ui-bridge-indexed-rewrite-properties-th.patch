@@ -1,7 +1,7 @@
 From 18942af36cb963de6c1fa0f34877e69befffc2b5 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:30:39 +0800
-Subject: [PATCH 02/53] feat(rewrite-ui): bridge indexed rewrite properties
+Subject: [PATCH 02/54] feat(rewrite-ui): bridge indexed rewrite properties
  through IPC context
 
 ---

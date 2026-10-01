@@ -1,0 +1,247 @@
+From 13ceb756aaf51ede184263831daeb5f1a096d1f4 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 09:45:27 +0800
+Subject: [PATCH 54/54] style(ui): compact Tab row and join overlapping rounded
+ highlight fills
+
+---
+ INSTALL-PATCH.md               |  2 ++
+ Install-Binaries.ps1           |  2 +-
+ REWRITE-UI.md                  |  2 ++
+ WeaselUI/JoinedRewritePath.h   | 11 +++++++++++
+ WeaselUI/Layout.cpp            |  5 ++++-
+ WeaselUI/RewriteLayout.h       |  2 +-
+ WeaselUI/WeaselPanel.cpp       | 24 +++++++++++++++++++++---
+ WeaselUI/WeaselPanel.h         |  2 ++
+ rewrite-build.txt              |  2 +-
+ rime/skins/README.md           |  2 ++
+ test/rewrite_pipeline_test.cpp | 26 ++++++++++++++++++++++++++
+ 11 files changed, 73 insertions(+), 7 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 76ec492..43a9a9e 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 Tab 紧凑与填充连接：** Tab 行去掉额外上下 1px 内边距，行间距收紧到最多 2px；选中音节与主候选高亮使用同一种强调色，有面积交集时合并为一次圆角填充，连接处做内凹圆角，无交集时独立绘制。保留上下排列规则和打字稳定定位。
++
+ > **2026-10-01 打字抖动修复：** Tab 行重排时，从原始光标定位必须与 TSF 位置通知使用相同的阴影偏移；普通打字继续保留原候选框的已调整位置。测试覆盖连续交替更新内容和同位置光标通知，两个阶段不得上下跳动。
+ 
+ > **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index ae692f6..38b5e77 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-tab-position-stable-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-tab-joined-fill-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 78df9de..4d79f77 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 Tab 紧凑与填充连接：** Tab 行去掉额外上下 1px 内边距，行间距收紧到最多 2px；选中音节与主候选高亮使用同一种强调色，有面积交集时合并为一次圆角填充，连接处做内凹圆角，无交集时独立绘制。保留上下排列规则和打字稳定定位。
++
+ > **2026-10-01 打字抖动修复：** Tab 行重排时，从原始光标定位必须与 TSF 位置通知使用相同的阴影偏移；普通打字继续保留原候选框的已调整位置。测试覆盖连续交替更新内容和同位置光标通知，两个阶段不得上下跳动。
+ 
+ > **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+diff --git a/WeaselUI/JoinedRewritePath.h b/WeaselUI/JoinedRewritePath.h
+index 289f268..3d5ad3d 100644
+--- a/WeaselUI/JoinedRewritePath.h
++++ b/WeaselUI/JoinedRewritePath.h
+@@ -74,4 +74,15 @@ inline void BuildJoinedRewritePath(Gdiplus::GraphicsPath& path, CRect body, CRec
+   path.AddLine(last, firstPoint);
+   path.CloseFigure();
+ }
++// Only merge actual intersections; never bridge empty space between highlights.
++inline bool BuildJoinedRewriteHighlight(Gdiplus::GraphicsPath& path,
++                                        CRect candidate, CRect syllable,
++                                        float candidateRadius, float syllableRadius,
++                                        float neckRadius) {
++  CRect overlap;
++  if (!overlap.IntersectRect(candidate, syllable)) return false;
++  BuildJoinedRewritePath(path, candidate, syllable,
++                         candidateRadius, syllableRadius, neckRadius);
++  return path.GetPointCount() > 0;
++}
+ }  // namespace weasel
+diff --git a/WeaselUI/Layout.cpp b/WeaselUI/Layout.cpp
+index 4112a2b..fd7aff5 100644
+--- a/WeaselUI/Layout.cpp
++++ b/WeaselUI/Layout.cpp
+@@ -18,7 +18,10 @@ Layout::Layout(const UIStyle& style,
+       textFontValid(!!(_style.font_point > 0)),
+       cmtFontValid(!!(_style.comment_font_point > 0)) {
+   // Only this layout snapshot is changed; TSF's inline composition is retained.
+-  if (_context.rewrite.active()) _style.inline_preedit = false;
++  if (_context.rewrite.active()) {
++    _style.inline_preedit = false;
++    _style.spacing = (std::min)(_style.spacing, 2);
++  }
+   if (pDWR) {
+     float scale = pDWR->dpiScaleLayout;
+     _style.min_width = (int)(_style.min_width * scale);
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 0e1df90..4d80661 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -17,7 +17,7 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+   const auto& style = layout._style;
+   const bool vertical = style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
+   const int px = (std::max)(1, (int)(3 * dwr->dpiScaleLayout));
+-  const int py = (std::max)(1, (int)(1 * dwr->dpiScaleLayout));
++  const int py = 0;  // Font metrics already include the complete line height.
+   const int margin = (std::max)(2, (int)(4 * dwr->dpiScaleLayout));
+   const int gap = margin * 2;
+   const int limit = vertical ? style.max_height : style.max_width;
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 2f2bdfe..8bfb6c1 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -902,11 +902,27 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+     if (background) {
+       if (cell.unit.active) {
+         auto back = cell.back; back.OffsetRect(rc.left, rc.top);
+-        _HighlightText(dc, back, m_style.hilited_back_color, 0,
+-                       DPI_SCALE(m_style.round_corner), BackType::TEXT, IsToRoundStruct());
++        Gdiplus::GraphicsPath joined;
++        CRect candidate, bounds;
++        if (m_candidateCount && !stable) {
++          candidate = m_layout->GetHighlightRect();
++          candidate.InflateRect(DPI_SCALE(m_style.hilite_padding_x),
++                                DPI_SCALE(m_style.hilite_padding_y));
++          m_joinedRewriteHighlight = BuildJoinedRewriteHighlight(joined, candidate, back,
++              (float)DPI_SCALE(m_style.round_corner), (float)DPI_SCALE(6), (float)DPI_SCALE(4));
++        }
++        if (m_joinedRewriteHighlight) {
++          bounds.UnionRect(candidate, back);
++          _HighlightText(dc, bounds, m_style.hilited_candidate_back_color,
++                         m_style.hilited_candidate_shadow_color, DPI_SCALE(m_style.round_corner),
++                         BackType::CAND, IsToRoundStruct(), m_style.hilited_candidate_border_color, &joined);
++        } else {
++          _HighlightText(dc, back, m_style.hilited_candidate_back_color, 0,
++                         DPI_SCALE(6), BackType::TEXT, IsToRoundStruct());
++        }
+       }
+     } else {
+-      int color = cell.unit.active ? m_style.hilited_text_color : m_style.text_color;
++      int color = cell.unit.active ? m_style.hilited_candidate_text_color : m_style.text_color;
+       if (stable) pDWR->pRenderTarget->PushAxisAlignedClip(
+           D2D1::RectF((float)clip.left, (float)clip.top, (float)clip.right, (float)clip.bottom),
+           D2D1_ANTIALIAS_MODE_ALIASED);
+@@ -1015,6 +1031,7 @@ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+       }
+       rect.InflateRect(DPI_SCALE(m_style.hilite_padding_x),
+                        DPI_SCALE(m_style.hilite_padding_y));
++      if (!m_joinedRewriteHighlight)
+       _HighlightText(dc, rect, m_style.hilited_candidate_back_color,
+                      markSt ? m_style.hilited_candidate_shadow_color : 0,
+                      DPI_SCALE(m_style.round_corner), bkType, rd,
+@@ -1133,6 +1150,7 @@ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+ 
+ // draw client area
+ void WeaselPanel::DoPaint(CDCHandle dc) {
++  m_joinedRewriteHighlight = false;
+   // turn off WS_EX_TRANSPARENT, for better resp performance
+   ModifyStyleEx(WS_EX_TRANSPARENT, WS_EX_LAYERED);
+   GetClientRect(&rcw);
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index 3d246e3..d641229 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -80,6 +80,7 @@ class WeaselPanel
+   void DoPaint(CDCHandle dc);
+   bool GetIsReposition() { return m_istorepos; }
+   void RedrawWindow();
++  bool RewriteHighlightsJoined() const { return m_joinedRewriteHighlight; }
+   HWND RewriteWindow() const { return m_sourceCtx.rewrite.active() ? m_hWnd : nullptr; }
+   size_t RewriteLayoutGeneration() const { return m_layoutGeneration; }
+   CRect SurfaceRect() const {
+@@ -114,6 +115,7 @@ class WeaselPanel
+   }
+   void _InitFontRes(bool forced = false);
+   void _CaptureRect(CRect& rect);
++  bool m_joinedRewriteHighlight = false;
+   bool m_mouse_entry = false;
+   CPoint m_lastMousePos = {-1, -1};
+   void _CreateLayout();
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 9f73bf5..a491947 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-position-stable-20261001
++Build-ID: rewrite-ui-tab-joined-fill-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 266958e..19c3f2e 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 Tab 紧凑与填充连接：** Tab 行去掉额外上下 1px 内边距，行间距收紧到最多 2px；选中音节与主候选高亮使用同一种强调色，有面积交集时合并为一次圆角填充，连接处做内凹圆角，无交集时独立绘制。保留上下排列规则和打字稳定定位。
++
+ > **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index c985eee..848ff83 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -66,6 +66,23 @@ int main() {
+         assert(!outline.IsOutlineVisible(100.f, 89.f, &border));
+         assert(outline.GetPointCount() > 8);
+       }
++      // Overlapping fills are one path; separate highlights must remain separate.
++      for (int scale : {1, 2}) for (bool above : {false, true}) {
++        CRect candidate(20*scale, 40*scale, 110*scale, 80*scale);
++        CRect syllable(30*scale, (above ? 24 : 77)*scale,
++                       80*scale, (above ? 43 : 96)*scale);
++        Gdiplus::GraphicsPath path;
++        assert(weasel::BuildJoinedRewriteHighlight(path, candidate, syllable,
++                                                   13.f*scale, 6.f*scale, 4.f*scale));
++        Gdiplus::Pen border(Gdiplus::Color(255,0,0,0), (float)scale);
++        const float seam = (float)(above ? candidate.top : candidate.bottom);
++        assert(path.IsVisible(50.f*scale, seam));
++        assert(!path.IsOutlineVisible(50.f*scale, seam, &border));
++        syllable.OffsetRect(150*scale, 0);
++        Gdiplus::GraphicsPath separate;
++        assert(!weasel::BuildJoinedRewriteHighlight(separate, candidate, syllable, 13, 6, 4));
++        assert(separate.GetPointCount() == 0);
++      }
+       UINT bytes = 0, count = 0; Gdiplus::GetImageEncodersSize(&count, &bytes);
+       std::vector<BYTE> codecs(bytes);
+       auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(codecs.data());
+@@ -154,6 +171,7 @@ int main() {
+         if (mode == 2) assert(cell.labelBack.bottom < cell.text.top);
+         else assert(cell.labelBack.right < cell.text.left);
+         assert(cell.label.left > cell.labelBack.left);
++        if (mode != 2) assert(cell.label.top == cell.text.top);
+         assert(cell.labelBack.right <= cell.back.right);
+       }
+       assert(layout->GetPreeditRect().Width() >= measured.size.cx);
+@@ -289,6 +307,14 @@ int main() {
+       assert(actual.top == before.top && actual.left == before.left);
+ 
+     }
++    // Real painting must choose joined versus separate selected backgrounds.
++    auto compact = armed; compact.cinfo = normal.cinfo;
++    for (auto& text : compact.cinfo.candies) text.str = L"测";
++    host.ctx() = compact; panel.Refresh(); panel.MoveTo(CRect(200,200,200,224));
++    panel.RedrawWindow(); assert(panel.RewriteHighlightsJoined());
++    compact.rewrite.stage = L"index"; compact.rewrite.index = L"4";
++    host.ctx() = compact; panel.Refresh(); panel.RedrawWindow();
++    assert(!panel.RewriteHighlightsJoined());
+     // Typing interleaves context refresh and TSF caret notifications. Neither
+     // phase may move the panel by the shadow-buffer height at an unchanged caret.
+     for (int repeat = 0; repeat < 12; ++repeat) {
+-- 
+2.53.0.windows.2
+
