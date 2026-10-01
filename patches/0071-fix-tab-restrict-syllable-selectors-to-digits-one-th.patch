@@ -1,0 +1,195 @@
+From 921e65e38adfd19903ec2ea70782df90d247c099 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 19:58:42 +0800
+Subject: [PATCH] fix(tab): restrict syllable selectors to digits one through
+ four
+
+---
+ INSTALL-PATCH.md                 |  2 +-
+ REWRITE-UI.md                    |  2 +-
+ include/RewriteState.h           |  8 ++++----
+ rewrite-build.txt                |  2 +-
+ rime/lua/indexed_rewrite_pro.lua | 16 ++++++++++------
+ rime/skins/README.md             |  2 +-
+ test/installer_rime_test.cpp     | 16 +++++++++++++---
+ test/rewrite_state_test.cpp      |  8 ++++----
+ 8 files changed, 35 insertions(+), 21 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 135fd04..f7ceb33 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–6、11–16、21–26…（仅用 1–6），7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
++> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 普通双击包内 `Apply-Patch.cmd`，自动更新全部程序补丁，并一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+ 
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 0e488fb..d5adfed 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–6、11–16、21–26…（仅用 1–6），7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
++> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+ 
+ > **2026-10-01 窄连接圆角修复：** 主候选与 Tab 高亮的边缘接近时，横向与纵向圆角分别计算，避免几像素宽的台阶把纵向弧线一起压缩成尖角。相交填充仍为一条连续轮廓，文字、padding、窗口高度和上下排列保持原样。
+diff --git a/include/RewriteState.h b/include/RewriteState.h
+index 4d4b0d8..a76194f 100644
+--- a/include/RewriteState.h
++++ b/include/RewriteState.h
+@@ -22,8 +22,8 @@ struct RewriteState {
+     std::wstring label;
+     while (ordinal) {
+       --ordinal;
+-      label.insert(label.begin(), wchar_t(L'1' + ordinal % 6));
+-      ordinal /= 6;
++      label.insert(label.begin(), wchar_t(L'1' + ordinal % 4));
++      ordinal /= 4;
+     }
+     return label;
+   }
+@@ -31,8 +31,8 @@ struct RewriteState {
+     ordinal = 0;
+     if (label.empty()) return false;
+     for (auto digit : label) {
+-      if (digit < L'1' || digit > L'6') return false;
+-      ordinal = ordinal * 6 + digit - L'0';
++      if (digit < L'1' || digit > L'4') return false;
++      ordinal = ordinal * 4 + digit - L'0';
+       if (ordinal > 256) return false;
+     }
+     return true;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 5823793..7650deb 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-tone-index-20261001
++Build-ID: rewrite-ui-tab-four-keys-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+index e5ada02..3028999 100644
+--- a/rime/lua/indexed_rewrite_pro.lua
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -15,9 +15,9 @@
+ --      jxjirzbj//3jm
+ --      -> 把第 3 音节替换为 jm
+ --
+--- 原生 Weasel UI 读取 property；索引仅用 1–6，7–0 为声调。
++-- 原生 Weasel UI 读取 property；索引仅用 1–4，5/6 不操作，7–0 为声调。
+ --   //      -> 进入音节选择
+---   //3     -> 选择第三音节；第七项编号为 11
++--   //3     -> 选择第三音节；第五项编号为 11
+ --
+ -- 单个 / 始终先交给万象 Pro。
+ -- 只有第二个连续 / 到来时才进入本脚本。
+@@ -76,20 +76,20 @@ local function is_slash(repr)
+ end
+ 
+ local function is_digit(repr)
+-    return #repr == 1 and repr:match("^[1-6]$") ~= nil
++    return #repr == 1 and repr:match("^[1-4]$") ~= nil
+ end
+ 
+ local function is_tone(repr)
+     return #repr == 1 and repr:match("^[7890]$") ~= nil
+ end
+ 
+--- Bijective base six: 1..6, 11..16, 21..26, ...; never use tone keys.
++-- Bijective base four: 1..4, 11..14, 21..24, ...; never use tone keys.
+ local function decode_index(label)
+     if label == "" then return nil end
+     local n = 0
+     for digit in label:gmatch(".") do
+-        if not digit:match("^[1-6]$") then return nil end
+-        n = n * 6 + tonumber(digit)
++        if not digit:match("^[1-4]$") then return nil end
++        n = n * 4 + tonumber(digit)
+         if n > 256 then return nil end
+     end
+     return n
+@@ -331,6 +331,10 @@ function M.func(key, env)
+         stage = ""
+     end
+ 
++    if stage ~= "" and (repr == "5" or repr == "6") then
++        return ACCEPTED
++    end
++
+     if stage ~= "" and is_digit(repr) then
+         local ranges = parse_ranges(get_prop(ctx, PROP_RANGES))
+         local prefix = get_prop(ctx, PROP_INDEX_PREFIX)
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 1c3fe26..e3dd00c 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–6、11–16、21–26…（仅用 1–6），7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
++> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 完整安装只需双击包内 `Apply-Patch.cmd`，自动更新程序并安装全部皮肤；仅补装皮肤时双击 `Apply-Skin-All.cmd`，一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+ 
+ > **2026-10-01 悬停与间距：** 次要候选悬停背景为浅灰色 `#EEEEEE`，文字保持黑色；Tab 前 4 个音节隐藏编号，新增音节间距缩小为隐藏编号占位的一半，首音节仍与主候选文字对齐，第 5 项起保留编号。
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index e089444..341a2fe 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -106,9 +106,19 @@ int wmain(int argc, wchar_t** argv) {
+       std::string expected(1, digit); expectIndex(expected.c_str());
+       check(std::string(api->get_input(session)) == "jxjirzbj", "Selection changed input");
+     }
+-    api->process_key(session, '6', 0); expectIndex("4");
++    for (char ignored : std::string("56")) {
++      api->process_key(session, ignored, 0); expectIndex("4");
++      check(std::string(api->get_input(session)) == "jxjirzbj", "Ignored digit changed input");
++    }
+     api->process_key(session, '3', 0);
+     for (char letter : std::string("jm")) api->process_key(session, letter, 0);
++    for (char ignored : std::string("56")) {
++      api->process_key(session, ignored, 0); expectIndex("3");
++      char editingStage[64] = {};
++      check(api->get_property(session, "_indexed_rewrite_stage", editingStage, sizeof(editingStage)) &&
++            std::string(editingStage) == "index_replace", "Ignored digit exited edit mode");
++      check(std::string(api->get_input(session)) == "jxjijmbj", "Ignored digit committed or changed edit");
++    }
+     for (char tone : std::string("7890")) {
+       api->process_key(session, tone, 0); expectIndex("3");
+       check(std::string(api->get_input(session)) == std::string("jxjijm") + tone + "bj", "Tone was swallowed or replaced the suffix");
+@@ -139,8 +149,8 @@ int wmain(int argc, wchar_t** argv) {
+     api->process_key(session, '1', 0); expectIndex("1");
+     api->process_key(session, '1', 0); expectIndex("11");
+     api->process_key(session, 'j', 0); api->process_key(session, 'm', 0);
+-    check(std::string(api->get_input(session)) == longInput.substr(0, 12) + "jm" + longInput.substr(14),
+-          "Label 11 did not select seventh original syllable");
++    check(std::string(api->get_input(session)) == longInput.substr(0, 8) + "jm" + longInput.substr(10),
++          "Label 11 did not select fifth original syllable");
+     api->process_key(session, 0xff1b, 0);
+     api->clear_composition(session);
+     for (char key : std::string("jxjirzbj")) api->process_key(session, key, 0);
+diff --git a/test/rewrite_state_test.cpp b/test/rewrite_state_test.cpp
+index 4f847b0..2ecc6c0 100644
+--- a/test/rewrite_state_test.cpp
++++ b/test/rewrite_state_test.cpp
+@@ -80,12 +80,12 @@ int main() {
+   for (size_t ordinal = 1; ordinal <= 256; ++ordinal) {
+     size_t decoded = 0;
+     auto label = weasel::RewriteState::IndexLabel(ordinal);
+-    assert(label.find_first_of(L"7890") == std::wstring::npos);
++    assert(label.find_first_of(L"567890") == std::wstring::npos);
+     assert(weasel::RewriteState::IndexOrdinal(label, decoded) && decoded == ordinal);
+   }
+-  assert(weasel::RewriteState::IndexLabel(7) == L"11");
+-  assert(weasel::RewriteState::IndexLabel(12) == L"16");
+-  assert(weasel::RewriteState::IndexLabel(13) == L"21");
++  assert(weasel::RewriteState::IndexLabel(5) == L"11");
++  assert(weasel::RewriteState::IndexLabel(8) == L"14");
++  assert(weasel::RewriteState::IndexLabel(9) == L"21");
+   assert(!r.active() && r.original.empty());
+   std::cout << "RewriteState tests passed\n";
+ }
+-- 
+2.53.0.windows.2
+

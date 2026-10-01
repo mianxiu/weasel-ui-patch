@@ -1,0 +1,234 @@
+From 4d69cba8f8dfd49aa62c3e13d92fc81db211d08a Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 20:20:42 +0800
+Subject: [PATCH] Constrain Tab rows to candidate width and show group prefixes
+
+---
+ INSTALL-PATCH.md                  |  1 +
+ REWRITE-UI.md                     |  1 +
+ WeaselUI/DirectWriteResources.cpp |  4 +--
+ WeaselUI/HorizontalLayout.cpp     | 12 ++++++++-
+ WeaselUI/Layout.h                 |  1 +
+ WeaselUI/RewriteLayout.h          | 20 ++++++++++----
+ rewrite-build.txt                 |  2 +-
+ rime/skins/README.md              |  1 +
+ test/rewrite_pipeline_test.cpp    | 45 +++++++++++++++++++++++++++++--
+ 9 files changed, 76 insertions(+), 11 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index f7ceb33..8646af6 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+ > **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 普通双击包内 `Apply-Patch.cmd`，自动更新全部程序补丁，并一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index d5adfed..5a3f6c7 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+ > **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+ 
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index b9925ec..3ef6ee8 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -126,7 +126,7 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+ 
+       HR(_pTextFormat->SetParagraphAlignment(
+           DWRITE_PARAGRAPH_ALIGNMENT_CENTER));
+-      HR(_pTextFormat->SetWordWrapping(wrapping));
++      HR(_pTextFormat->SetWordWrapping(wrap));
+       _SetFontFallback(_pTextFormat, fontFaceStrVector);
+       if (_style.linespacing && _style.baseline)
+         _pTextFormat->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM,
+@@ -138,7 +138,7 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   init_font(font_face, font_point, pTextFormat, wrapping);
+   init_font(font_face, font_point, pPreeditTextFormat, wrapping_preedit);
+   const float rewritePoint = (std::max)(10.f, font_point * 0.80f);
+-  init_font(font_face, rewritePoint, pRewriteTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
++  init_font(font_face, rewritePoint, pRewriteTextFormat, DWRITE_WORD_WRAPPING_CHARACTER);
+   // Measure the real fallback glyphs: digits should match lowercase x-height.
+   const auto glyphMetrics = [&](ComPtr<IDWriteTextFormat1>& format, const wchar_t* glyph) {
+     std::pair<float,float> result{format->GetFontSize() * .7f, format->GetFontSize()};
+diff --git a/WeaselUI/HorizontalLayout.cpp b/WeaselUI/HorizontalLayout.cpp
+index 73bb613..e457e29 100644
+--- a/WeaselUI/HorizontalLayout.cpp
++++ b/WeaselUI/HorizontalLayout.cpp
+@@ -4,6 +4,15 @@
+ using namespace weasel;
+ 
+ void HorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
++  if (_context.rewrite.active() && candidates_count) {
++    // Measure the candidate body independently so the Tab row cannot widen it.
++    auto body = _context;
++    body.rewrite.clear(); body.preedit.clear(); body.aux.clear();
++    HorizontalLayout candidateLayout(_style, body, _status, nullptr);
++    candidateLayout.DoLayout(dc, pDWR);  // _style is already DPI-scaled.
++    rewrite_max_width = (std::max)(1, candidateLayout.GetContentRect().Width() -
++        real_margin_x * 2 - (int)ceil(4 * pDWR->dpiScaleLayout));
++  }
+   CSize size;
+   int width = offsetX + real_margin_x, height = offsetY + real_margin_y;
+   int w = offsetX + real_margin_x;
+@@ -57,7 +66,8 @@ void HorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+     _preeditRect.SetRect(w, height + yoffset, w + size.cx,
+                          height + yoffset + size.cy);
+     height += szy + 2 * yoffset + _style.spacing;
+-    width = max(width, real_margin_x * 2 + size.cx + szx);
++    width = max(width, (_context.rewrite.active() ? offsetX + real_margin_x :
++                        real_margin_x * 2) + size.cx + szx);
+     if (ShouldDisplayStatusIcon())
+       width += STATUS_ICON_SIZE;
+   }
+diff --git a/WeaselUI/Layout.h b/WeaselUI/Layout.h
+index 7433ea0..603d0e7 100644
+--- a/WeaselUI/Layout.h
++++ b/WeaselUI/Layout.h
+@@ -113,6 +113,7 @@ class Layout {
+   int mark_height = 0;
+   int real_margin_x;
+   int real_margin_y;
++  int rewrite_max_width = 0;  // Physical content width, excluding outer padding.
+   UIStyle _style;
+ 
+  protected:
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index f9b2928..fd8451b 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -20,17 +20,18 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+   const int py = 0;  // Font metrics already include the complete line height.
+   const int margin = (std::max)(2, (int)(4 * dwr->dpiScaleLayout));
+   const int gap = margin * 2;
+-  const int limit = vertical ? style.max_height : style.max_width;
++  const int rightPadding = (int)ceil(4 * dwr->dpiScaleLayout);
++  const int limit = vertical ? style.max_height :
++      (layout.rewrite_max_width > 0 ? layout.rewrite_max_width :
++       (style.max_width > 0 ? (std::max)(1, style.max_width - rightPadding) : 0));
+   int advance = 0, cross = 0, line = 0;
+   const auto units = state.Units();
+   const auto hiddenNumber = [](const std::wstring& label) {
+-    return label == L"1" || label == L"2" || label == L"3" || label == L"4";
++    return !label.empty() && (label.size() == 1 || label.back() != L'1');
+   };
+   for (size_t unitIndex = 0; unitIndex < units.size(); ++unitIndex) {
+     const auto& unit = units[unitIndex];
+     CSize text(0, 0), label(0, 0);
+-    layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pRewriteTextFormat,
+-                        dwr, &text);
+     std::wstring number;
+     if (!unit.label.empty() && !hiddenNumber(unit.label)) {
+       wchar_t formatted[128];
+@@ -40,6 +41,14 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     }
+     const int labelOffset = vertical ? 0 : (std::max)(0, (int)ceil(dwr->rewriteLabelBaselineOffset));
+     const int lw = number.empty() ? 0 : label.cx + px * 2;
++    // A replacement may contain many pronunciations in one original slot.
++    // Wrap that text too, leaving room for its visible group prefix.
++    const int savedWidth = layout._style.max_width;
++    if (!vertical && !unwrapped && limit > 0)
++      layout._style.max_width = (std::max)(1, limit - (lw ? lw + margin : 0));
++    layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pRewriteTextFormat,
++                        dwr, &text);
++    layout._style.max_width = savedWidth;
+     const int lh = number.empty() ? 0 : label.cy + py * 2 + labelOffset;
+     const int w = vertical ? (std::max<LONG>)(text.cx, lw) : text.cx + (lw ? margin + lw : 0);
+     const int h = vertical ? text.cy + (lh ? margin + lh : 0) : (std::max<LONG>)(text.cy, lh);
+@@ -62,7 +71,8 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
+     result.size.cy = (std::max<LONG>)(result.size.cy, y + h);
+     int hiddenMargin = 0;
+-    if (unitIndex + 1 < units.size() && hiddenNumber(units[unitIndex + 1].label)) {
++    if (unitIndex + 1 < units.size() && units[unitIndex + 1].label.size() == 1 &&
++        hiddenNumber(units[unitIndex + 1].label)) {
+       // Reserve half the next hidden prefix in the inter-syllable margin, keeping
+       // the first pronunciation aligned with the candidate text.
+       wchar_t formatted[128];
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 7650deb..56ad2bb 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-four-keys-20261001
++Build-ID: rewrite-ui-tab-wrap-groups-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index e3dd00c..7c1bda0 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+ > **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 完整安装只需双击包内 `Apply-Patch.cmd`，自动更新程序并安装全部皮肤；仅补装皮肤时双击 `Apply-Skin-All.cmd`，一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+ 
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index b23ef14..2a3f84f 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -266,13 +266,54 @@ int main() {
+             fiveLayout.cells[4].text.top - fiveLayout.cells[3].text.bottom :
+             fiveLayout.cells[4].text.left - fiveLayout.cells[3].text.right;
+         const int baseGap = 2 * (std::max)(2, (int)(4 * dwr->dpiScaleLayout));
+-        const int expectedGap = i < 4 ? baseGap + (lastGap - baseGap + 1) / 2 : lastGap;
+-        assert(abs(visualGap - expectedGap) <= (int)ceil(dwr->dpiScaleLayout));
++        if (i < 4) {
++          // Hidden single-digit spacing stays compact even when the next
++          // visible group prefix has two or more digits (11, 111, ...).
++          assert(visualGap >= baseGap && visualGap < lastGap);
++        }
+       }
+       assert(dwr->pRewriteLabelTextFormat->GetFontSize() <= dwr->pRewriteTextFormat->GetFontSize());
+       assert(dwr->pRewriteTextFormat->GetFontSize() >= 10 * dwr->dpiScaleFontPoint);
+       assert(dwr->pRewriteTextFormat->GetFontSize() < dwr->pPreeditTextFormat->GetFontSize());
+       if (mode == 1) {
++        auto wrapStyle = style; wrapStyle.max_width = 1000;
++        auto wrapped = indexed;
++        wrapped.cinfo.clear();
++        for (int i = 0; i < 6; ++i) {
++          wrapped.cinfo.candies.push_back(weasel::Text{L"测试候选"});
++          wrapped.cinfo.comments.push_back(weasel::Text{L""});
++          wrapped.cinfo.labels.push_back(weasel::Text{std::to_wstring(i + 1)});
++        }
++        wrapped.rewrite.original.clear(); wrapped.rewrite.ranges.clear();
++        wrapped.rewrite.pinyin.clear(); wrapped.rewrite.index = L"11";
++        for (int i = 0; i < 24; ++i) {
++          wrapped.rewrite.original += L"jx";
++          if (i) { wrapped.rewrite.ranges += L","; wrapped.rewrite.pinyin += L"|"; }
++          wrapped.rewrite.ranges += std::to_wstring(i*2) + L"-" + std::to_wstring(i*2+2);
++          wrapped.rewrite.pinyin += L"cháng";
++        }
++        wrapped.rewrite.input = wrapped.rewrite.original;
++        auto body = wrapped; body.rewrite.clear(); body.preedit.clear();
++        weasel::HorizontalLayout bodyLayout(wrapStyle, body, status, dwr);
++        bodyLayout.DoLayout(dc, dwr);
++        weasel::HorizontalLayout wrappedLayout(wrapStyle, wrapped, status, dwr);
++        wrappedLayout.DoLayout(dc, dwr);
++        const auto wrappedCells = weasel::MeasureRewrite(wrappedLayout, wrapped.rewrite, dwr);
++        assert(wrappedLayout.GetContentSize().cx == bodyLayout.GetContentSize().cx);
++        assert(wrappedCells.cells[23].back.top > wrappedCells.cells[0].back.top);
++        for (size_t i = 0; i < 24; ++i) {
++          const auto& cell = wrappedCells.cells[i];
++          assert(cell.unit.label.empty() == (i < 4 || i % 4 != 0));
++          assert(cell.back.right <= wrappedLayout.rewrite_max_width + (int)ceil(2*dwr->dpiScaleLayout));
++          const int right = wrappedLayout.GetPreeditRect().left + cell.back.right + (int)ceil(4*dwr->dpiScaleLayout);
++          assert(right <= wrappedLayout.GetContentRect().right - wrappedLayout.real_margin_x + (int)ceil(2*dwr->dpiScaleLayout));
++        }
++        wrapped.rewrite.pinyin = std::wstring(250, L'a') + wrapped.rewrite.pinyin.substr(wrapped.rewrite.pinyin.find(L'|'));
++        weasel::HorizontalLayout longSlot(wrapStyle, wrapped, status, dwr);
++        longSlot.DoLayout(dc, dwr);
++        const auto longCells = weasel::MeasureRewrite(longSlot, wrapped.rewrite, dwr);
++        assert(longSlot.GetContentSize().cx <= bodyLayout.GetContentSize().cx + (int)ceil(2*dwr->dpiScaleLayout));
++        assert(longCells.cells[0].text.Height() > wrappedCells.cells[0].text.Height());
+         auto inkHeight = [&](IDWriteTextFormat1* format, const wchar_t* glyph) {
+           ComPtr<IDWriteTextLayout> text;
+           assert(SUCCEEDED(dwr->pDWFactory->CreateTextLayout(glyph,1,format,1000,1000,&text)));
+-- 
+2.53.0.windows.2
+

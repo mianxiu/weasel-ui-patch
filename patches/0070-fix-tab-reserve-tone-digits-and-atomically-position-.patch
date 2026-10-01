@@ -1,0 +1,623 @@
+From 891a5239348fe65f595b600ce6c7e66f8f1f80fb Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 19:50:56 +0800
+Subject: [PATCH] fix(tab): reserve tone digits and atomically position padded
+ rewrite rows
+
+---
+ INSTALL-PATCH.md                 |   1 +
+ REWRITE-UI.md                    |   1 +
+ WeaselUI/WeaselPanel.cpp         |  26 ++---
+ WeaselUI/WeaselPanel.h           |   2 +-
+ include/RewriteState.h           |  34 ++++++-
+ rewrite-build.txt                |   2 +-
+ rime/lua/indexed_rewrite_pro.lua | 158 ++++++++++++++++++++++++-------
+ rime/skins/README.md             |   1 +
+ test/installer_rime_test.cpp     |  49 ++++++++++
+ test/installer_rime_test.ps1     |   7 +-
+ test/rewrite_pipeline_test.cpp   |  23 +++++
+ test/rewrite_state_test.cpp      |   9 ++
+ 12 files changed, 261 insertions(+), 52 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index b1b26ca..135fd04 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–6、11–16、21–26…（仅用 1–6），7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 普通双击包内 `Apply-Patch.cmd`，自动更新全部程序补丁，并一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+ 
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 527d764..0e488fb 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–6、11–16、21–26…（仅用 1–6），7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+ 
+ > **2026-10-01 窄连接圆角修复：** 主候选与 Tab 高亮的边缘接近时，横向与纵向圆角分别计算，避免几像素宽的台阶把纵向弧线一起压缩成尖角。相交填充仍为一条连续轮廓，文字、padding、窗口高度和上下排列保持原样。
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 447f625..d314e02 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -240,7 +240,7 @@ void WeaselPanel::Refresh() {
+     CDCHandle dc = GetDC();
+     m_layout->DoLayout(dc, pDWR);
+     ReleaseDC(dc);
+-    _ResizeWindow();
++    if (m_editOnly) _ResizeWindow();
+     // A resized Tab row must use the same shadow correction as TSF MoveTo.
+     // Ordinary typing keeps the original adjusted position and jitter filtering.
+     const bool fromCaret = (wasRewrite || m_ctx.rewrite.active()) &&
+@@ -248,7 +248,7 @@ void WeaselPanel::Refresh() {
+     if (fromCaret) {
+       m_inputPos = m_lastCaretRect; m_inputPos.OffsetRect(0, 6);
+     }
+-    _RepositionWindow(fromCaret);
++    _RepositionWindow(fromCaret, false);
+     if (m_ctx != m_octx) {
+       m_octx = m_ctx;
+       RedrawWindow();
+@@ -903,11 +903,12 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+       if (cell.unit.active) {
+         auto back = cell.back; back.OffsetRect(rc.left, rc.top);
+         // Pad the painted fill, without changing text layout or window height.
+-        back.InflateRect(DPI_SCALE(4), DPI_SCALE(2));
+-        back.top -= DPI_SCALE(4);
++        back.InflateRect(DPI_SCALE(4), DPI_SCALE(m_style.hilite_padding_y));
+         // Leave 4px between the text and the main highlight edge on either side.
+         if (m_candidateCount && rc.bottom <= m_layout->GetCandidateTextRect(0).top)
+           back.bottom += DPI_SCALE(4);
++        else
++          back.top -= DPI_SCALE(4);
+         Gdiplus::GraphicsPath joined;
+         CRect candidate, bounds;
+         if (m_candidateCount && !stable) {
+@@ -1594,7 +1595,7 @@ void WeaselPanel::MoveTo(RECT const& rc, HWND host) {
+   }
+ }
+ 
+-void WeaselPanel::_RepositionWindow(const bool& adj) {
++void WeaselPanel::_RepositionWindow(const bool& adj, bool repaintRow) {
+   RECT rcWorkArea;
+   memset(&rcWorkArea, 0, sizeof(rcWorkArea));
+   HMONITOR hMonitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
+@@ -1609,10 +1610,11 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
+       m_redraw_by_monitor_change = true;
+     }
+   }
+-  RECT rcWindow;
+-  GetWindowRect(&rcWindow);
+-  int width = (rcWindow.right - rcWindow.left);
+-  int height = (rcWindow.bottom - rcWindow.top);
++  // Resize and move together. An above-caret row must never first grow down
++  // at the old top edge before being moved up into its final position.
++  const auto size = m_layout->GetContentSize();
++  int width = size.cx;
++  int height = size.cy;
+   if (m_editOnly) return;  // The owning candidate window positions this window.
+   // keep panel visible
+   rcWorkArea.right -= width;
+@@ -1665,10 +1667,10 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
+   if (m_ctx.rewrite.active()) m_istorepos = false;
+   // memorize adjusted position (to avoid window bouncing on height change)
+   m_inputPos.bottom = y;
+-  SetWindowPos(HWND_TOPMOST, x, y, 0, 0,
+-               SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
++  SetWindowPos(HWND_TOPMOST, x, y, width, height,
++               SWP_NOACTIVATE | SWP_NOREDRAW);
+   _UpdateRewriteWindow();
+-  if (rowChanged) RedrawWindow();
++  if (rowChanged && repaintRow) RedrawWindow();
+ }
+ 
+ LRESULT WeaselPanel::OnShowWindow(UINT, WPARAM visible, LPARAM, BOOL& handled) {
+diff --git a/WeaselUI/WeaselPanel.h b/WeaselUI/WeaselPanel.h
+index d641229..298780b 100644
+--- a/WeaselUI/WeaselPanel.h
++++ b/WeaselUI/WeaselPanel.h
+@@ -120,7 +120,7 @@ class WeaselPanel
+   CPoint m_lastMousePos = {-1, -1};
+   void _CreateLayout();
+   void _ResizeWindow();
+-  void _RepositionWindow(const bool& adj = false);
++  void _RepositionWindow(const bool& adj = false, bool repaintRow = true);
+   void _UpdateRewriteWindow();
+   bool _DrawPreedit(const Text& text, CDCHandle dc, const CRect& rc);
+   bool _DrawRewrite(CDCHandle dc, const CRect& rc, bool background);
+diff --git a/include/RewriteState.h b/include/RewriteState.h
+index 311c09b..4d4b0d8 100644
+--- a/include/RewriteState.h
++++ b/include/RewriteState.h
+@@ -18,6 +18,25 @@ struct RewriteState {
+            ranges == r.ranges && replacement == r.replacement && input == r.input && pinyin == r.pinyin;
+   }
+   void clear() { *this = RewriteState(); }
++  static std::wstring IndexLabel(size_t ordinal) {
++    std::wstring label;
++    while (ordinal) {
++      --ordinal;
++      label.insert(label.begin(), wchar_t(L'1' + ordinal % 6));
++      ordinal /= 6;
++    }
++    return label;
++  }
++  static bool IndexOrdinal(const std::wstring& label, size_t& ordinal) {
++    ordinal = 0;
++    if (label.empty()) return false;
++    for (auto digit : label) {
++      if (digit < L'1' || digit > L'6') return false;
++      ordinal = ordinal * 6 + digit - L'0';
++      if (ordinal > 256) return false;
++    }
++    return true;
++  }
+   static std::wstring Superscript(const std::wstring& digits) {
+     const wchar_t* glyphs = L"⁰¹²³⁴⁵⁶⁷⁸⁹";
+     std::wstring out;
+@@ -59,13 +78,18 @@ struct RewriteState {
+     if (spans.empty()) return {};
+     size_t target = 1;
+     if (!index.empty()) {
+-      p = 0;
+-      if (!Number(index, p, target) || p != index.size()) return {};
++      if (!IndexOrdinal(index, target)) return {};
+     }
+     if (stage == L"head_replace") {
+       target = spans.size();
+-      for (size_t i = 0; i < spans.size(); ++i)
+-        if (replacement.size() <= spans[i].second) { target = i + 1; break; }
++      const auto isLetter = [](wchar_t c) { return c != L'7' && c != L'8' && c != L'9' && c != L'0'; };
++      size_t length = 0;
++      for (auto c : replacement) if (isLetter(c)) ++length;
++      for (size_t i = 0; i < spans.size(); ++i) {
++        size_t endLetters = 0;
++        for (size_t j = 0; j < spans[i].second; ++j) if (isLetter(original[j])) ++endLetters;
++        if (length <= endLetters) { target = i + 1; break; }
++      }
+     }
+     std::vector<std::wstring> pronunciations;
+     std::wstring token;
+@@ -92,7 +116,7 @@ struct RewriteState {
+       if (mapped && i < pronunciations.size() && !pronunciations[i].empty())
+         text = pronunciations[i];
+       out.push_back({text, i + 1 == target, false,
+-                     std::to_wstring(i + 1)});
++                     IndexLabel(i + 1)});
+     }
+     if (!index.empty() || !replacement.empty())
+       out.push_back({index + replacement, false, true, L""});
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 0caf536..5823793 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-all-in-one-20261001
++Build-ID: rewrite-ui-tab-tone-index-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+index adf775e..e5ada02 100644
+--- a/rime/lua/indexed_rewrite_pro.lua
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -15,9 +15,9 @@
+ --      jxjirzbj//3jm
+ --      -> 把第 3 音节替换为 jm
+ --
+--- UI 与 indexed_rewrite_preedit.lua 配合：
+---   //      -> jx¹ ji² rz³ bj⁴
+---   //3     -> jx¹ ji² 【rz³】 bj⁴
++-- 原生 Weasel UI 读取 property；索引仅用 1–6，7–0 为声调。
++--   //      -> 进入音节选择
++--   //3     -> 选择第三音节；第七项编号为 11
+ --
+ -- 单个 / 始终先交给万象 Pro。
+ -- 只有第二个连续 / 到来时才进入本脚本。
+@@ -36,6 +36,8 @@ local PROP_PENDING = "_indexed_rewrite_pending"
+ local PROP_PENDING_RANGES = "_indexed_rewrite_pending_ranges"
+ local PROP_HINTS = "_indexed_rewrite_hints"
+ local PROP_REPLACEMENT = "_indexed_rewrite_replacement"
++local PROP_CANCEL_ORIGINAL = "_indexed_rewrite_cancel_original"
++local PROP_INDEX_PREFIX = "_indexed_rewrite_index_prefix"
+ 
+ local function set_prop(ctx, key, value)
+     ctx:set_property(key, value or "")
+@@ -65,6 +67,8 @@ local function clear_props(ctx)
+     set_prop(ctx, PROP_INDEX, "")
+     set_prop(ctx, PROP_RANGES, "")
+     set_prop(ctx, PROP_REPLACEMENT, "")
++    set_prop(ctx, PROP_CANCEL_ORIGINAL, "")
++    set_prop(ctx, PROP_INDEX_PREFIX, "")
+ end
+ 
+ local function is_slash(repr)
+@@ -72,7 +76,23 @@ local function is_slash(repr)
+ end
+ 
+ local function is_digit(repr)
+-    return #repr == 1 and repr:match("^[0-9]$") ~= nil
++    return #repr == 1 and repr:match("^[1-6]$") ~= nil
++end
++
++local function is_tone(repr)
++    return #repr == 1 and repr:match("^[7890]$") ~= nil
++end
++
++-- Bijective base six: 1..6, 11..16, 21..26, ...; never use tone keys.
++local function decode_index(label)
++    if label == "" then return nil end
++    local n = 0
++    for digit in label:gmatch(".") do
++        if not digit:match("^[1-6]$") then return nil end
++        n = n * 6 + tonumber(digit)
++        if n > 256 then return nil end
++    end
++    return n
+ end
+ 
+ local function is_lower_letter(repr)
+@@ -191,7 +211,14 @@ local function ranges_fallback_xiaohe(raw)
+     local pos = 0
+ 
+     while pos < n do
+-        local next_pos = math.min(pos + 2, n)
++        local next_pos, letters = pos, 0
++        while next_pos < n and letters < 2 do
++            next_pos = next_pos + 1
++            if not is_tone(raw:sub(next_pos, next_pos)) then letters = letters + 1 end
++        end
++        while next_pos < n and is_tone(raw:sub(next_pos + 1, next_pos + 1)) do
++            next_pos = next_pos + 1
++        end
+         ranges[#ranges + 1] = { pos, next_pos }
+         pos = next_pos
+     end
+@@ -227,10 +254,13 @@ end
+ 
+ -- 旧版 // 从头覆盖行为
+ local function overwrite_from_start(original, typed)
+-    local n = #typed
+-    if n >= #original then
+-        return typed
++    local letters = #typed:gsub("[7890]", "")
++    local n, consumed = 0, 0
++    while n < #original and consumed < letters do
++        n = n + 1
++        if not is_tone(original:sub(n, n)) then consumed = consumed + 1 end
+     end
++    while n < #original and is_tone(original:sub(n + 1, n + 1)) do n = n + 1 end
+     return typed .. original:sub(n + 1)
+ end
+ 
+@@ -243,7 +273,8 @@ local function finish(ctx)
+ end
+ 
+ local function cancel(ctx)
+-    local original = get_prop(ctx, PROP_ORIGINAL)
++    local original = get_prop(ctx, PROP_CANCEL_ORIGINAL)
++    if original == "" then original = get_prop(ctx, PROP_ORIGINAL) end
+     if original ~= "" then
+         ctx.input = original
+         ctx.caret_pos = #original
+@@ -252,7 +283,7 @@ local function cancel(ctx)
+ end
+ 
+ local function get_target_range(ctx)
+-    local n = tonumber(get_prop(ctx, PROP_INDEX))
++    local n = decode_index(get_prop(ctx, PROP_INDEX))
+     if not n or n < 1 then
+         return nil, nil, nil
+     end
+@@ -300,6 +331,83 @@ function M.func(key, env)
+         stage = ""
+     end
+ 
++    if stage ~= "" and is_digit(repr) then
++        local ranges = parse_ranges(get_prop(ctx, PROP_RANGES))
++        local prefix = get_prop(ctx, PROP_INDEX_PREFIX)
++        local label = prefix .. repr
++        local target = decode_index(label)
++        if not target or not ranges[target] then
++            label = repr
++            target = decode_index(label)
++        end
++        if not target or not ranges[target] then return ACCEPTED end
++        -- Preserve completed edits when moving to another original syllable.
++        if stage == "index_replace" then
++            local _, _, previous = get_target_range(ctx)
++            if previous then
++                local r = ranges[previous]
++                local delta = #get_prop(ctx, PROP_REPLACEMENT) - (r[2] - r[1])
++                r[2] = r[2] + delta
++                for i = previous + 1, #ranges do
++                    ranges[i][1] = ranges[i][1] + delta
++                    ranges[i][2] = ranges[i][2] + delta
++                end
++            end
++        elseif stage == "head_replace" then
++            -- Tone digits change byte offsets, not the original slot count.
++            local original = get_prop(ctx, PROP_ORIGINAL)
++            local first = 0
++            for i, r in ipairs(ranges) do
++                local wanted = #original:sub(1, r[2]):gsub("[7890]", "")
++                local stop, letters = 0, 0
++                while stop < #ctx.input and letters < wanted do
++                    stop = stop + 1
++                    if not is_tone(ctx.input:sub(stop, stop)) then letters = letters + 1 end
++                end
++                while stop < #ctx.input and is_tone(ctx.input:sub(stop + 1, stop + 1)) do stop = stop + 1 end
++                if i == #ranges then stop = #ctx.input end
++                ranges[i] = { first, stop }
++                first = stop
++            end
++        end
++        if stage == "index_replace" or stage == "head_replace" then
++            set_prop(ctx, PROP_ORIGINAL, ctx.input)
++            set_prop(ctx, PROP_RANGES, serialize_ranges(ranges))
++            set_prop(ctx, PROP_PENDING, get_prop(ctx, PROP_PINYIN))
++        end
++        set_prop(ctx, PROP_REPLACEMENT, "")
++        set_prop(ctx, PROP_INDEX, label)
++        set_prop(ctx, PROP_INDEX_PREFIX, label)
++        set_prop(ctx, PROP_STAGE, "index")
++        sync_ui(env, ctx)
++        return ACCEPTED
++    end
++
++    if stage ~= "" and is_tone(repr) then
++        set_prop(ctx, PROP_INDEX_PREFIX, "")
++        if stage == "head_replace" then
++            local typed = get_prop(ctx, PROP_REPLACEMENT) .. repr
++            set_prop(ctx, PROP_REPLACEMENT, typed)
++            ctx.input = overwrite_from_start(get_prop(ctx, PROP_ORIGINAL), typed)
++        else
++            if stage == "armed" then set_prop(ctx, PROP_INDEX, "1") end
++            local first, last = get_target_range(ctx)
++            if not first then return ACCEPTED end
++            local original = get_prop(ctx, PROP_ORIGINAL)
++            local typed = get_prop(ctx, PROP_REPLACEMENT)
++            if stage ~= "index_replace" then typed = original:sub(first + 1, last) end
++            typed = typed .. repr
++            set_prop(ctx, PROP_REPLACEMENT, typed)
++            set_prop(ctx, PROP_STAGE, "index_replace")
++            ctx.input = replace_range(original, first, last, typed)
++        end
++        ctx.caret_pos = #ctx.input
++        return ACCEPTED
++    end
++    if stage ~= "" and is_lower_letter(repr) then
++        set_prop(ctx, PROP_INDEX_PREFIX, "")
++    end
++
+     --------------------------------------------------------
+     -- armed:
+     -- 已按 //，下一键决定模式：
+@@ -309,17 +417,6 @@ function M.func(key, env)
+ 
+     if stage == "armed" then
+ 
+-        if is_digit(repr) then
+-            if repr == "0" then
+-                return ACCEPTED
+-            end
+-
+-            set_prop(ctx, PROP_INDEX, repr)
+-            set_prop(ctx, PROP_STAGE, "index")
+-            sync_ui(env, ctx)
+-            return ACCEPTED
+-        end
+-
+         if is_lower_letter(repr) then
+             local original = get_prop(ctx, PROP_ORIGINAL)
+             local typed = repr
+@@ -360,22 +457,16 @@ function M.func(key, env)
+ 
+     if stage == "index" then
+ 
+-        if is_digit(repr) then
+-            local current = get_prop(ctx, PROP_INDEX)
+-            current = current .. repr
+-            set_prop(ctx, PROP_INDEX, current)
+-            sync_ui(env, ctx)
+-            return ACCEPTED
+-        end
+-
+         if repr == "BackSpace" then
+             local current = get_prop(ctx, PROP_INDEX)
+ 
+             if #current > 1 then
+                 current = current:sub(1, #current - 1)
+                 set_prop(ctx, PROP_INDEX, current)
++                set_prop(ctx, PROP_INDEX_PREFIX, current)
+             else
+                 set_prop(ctx, PROP_INDEX, "")
++                set_prop(ctx, PROP_INDEX_PREFIX, "")
+                 set_prop(ctx, PROP_PINYIN, get_prop(ctx, PROP_PENDING))
+                 set_prop(ctx, PROP_STAGE, "armed")
+             end
+@@ -613,6 +704,8 @@ function M.func(key, env)
+                 set_prop(ctx, PROP_PINYIN, get_prop(ctx, PROP_PENDING))
+                 set_prop(ctx, PROP_STAGE, "armed")
+                 set_prop(ctx, PROP_ORIGINAL, original)
++                set_prop(ctx, PROP_CANCEL_ORIGINAL, original)
++                set_prop(ctx, PROP_INDEX_PREFIX, "")
+                 set_prop(ctx, PROP_INDEX, "")
+                 set_prop(ctx, PROP_RANGES, serialize_ranges(ranges))
+                 set_prop(ctx, PROP_REPLACEMENT, "")
+@@ -712,12 +805,13 @@ func = function(input, env)
+                 local original = split_pinyin(get_prop(ctx, PROP_PENDING))
+                 local current = {}
+                 for i = 1, #ranges do current[i] = original[i] or "" end
+-                local target = tonumber(get_prop(ctx, PROP_INDEX))
++                local target = decode_index(get_prop(ctx, PROP_INDEX))
+                 if stage == "head_replace" then
+                     target = #ranges
+-                    local length = #get_prop(ctx, PROP_REPLACEMENT)
++                    local length = #get_prop(ctx, PROP_REPLACEMENT):gsub("[7890]", "")
+                     for i, r in ipairs(ranges) do
+-                        if length <= r[2] then target = i; break end
++                        local end_letters = #get_prop(ctx, PROP_ORIGINAL):sub(1, r[2]):gsub("[7890]", "")
++                        if length <= end_letters then target = i; break end
+                     end
+                 end
+                 -- A single original slot may now contain several syllables.
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index c9f35cd..1c3fe26 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–6、11–16、21–26…（仅用 1–6），7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 完整安装只需双击包内 `Apply-Patch.cmd`，自动更新程序并安装全部皮肤；仅补装皮肤时双击 `Apply-Skin-All.cmd`，一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+ 
+ > **2026-10-01 悬停与间距：** 次要候选悬停背景为浅灰色 `#EEEEEE`，文字保持黑色；Tab 前 4 个音节隐藏编号，新增音节间距缩小为隐藏编号占位的一半，首音节仍与主候选文字对齐，第 5 项起保留编号。
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index 4dfaf40..e089444 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -95,6 +95,55 @@ int wmain(int argc, wchar_t** argv) {
+     expectPinyin(u8"jiǎng|jī|rén|běi");
+     api->process_key(session, 0xff1b, 0);
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Head Escape did not restore input");
++    auto expectIndex = [&](const char* expected) {
++      char selected[64] = {};
++      check(api->get_property(session, "_indexed_rewrite_index", selected, sizeof(selected)) &&
++            std::string(selected) == expected, "Reserved-digit index selection mismatch");
++    };
++    api->process_key(session, 0xff09, 0);
++    for (char digit : std::string("1234")) {
++      api->process_key(session, digit, 0);
++      std::string expected(1, digit); expectIndex(expected.c_str());
++      check(std::string(api->get_input(session)) == "jxjirzbj", "Selection changed input");
++    }
++    api->process_key(session, '6', 0); expectIndex("4");
++    api->process_key(session, '3', 0);
++    for (char letter : std::string("jm")) api->process_key(session, letter, 0);
++    for (char tone : std::string("7890")) {
++      api->process_key(session, tone, 0); expectIndex("3");
++      check(std::string(api->get_input(session)) == std::string("jxjijm") + tone + "bj", "Tone was swallowed or replaced the suffix");
++      api->process_key(session, 0xff08, 0);
++      check(std::string(api->get_input(session)) == "jxjijmbj", "Tone backspace failed");
++    }
++    api->process_key(session, '4', 0); expectIndex("4");
++    check(std::string(api->get_input(session)) == "jxjijmbj", "Selecting another slot lost completed edit");
++    for (char letter : std::string("wf")) api->process_key(session, letter, 0);
++    check(std::string(api->get_input(session)) == "jxjijmwf", "Next selected slot replacement failed");
++    api->process_key(session, 0xff1b, 0);
++    check(std::string(api->get_input(session)) == "jxjirzbj", "Escape lost entry snapshot after multiple selections");
++    api->process_key(session, 0xff09, 0);
++    api->process_key(session, '7', 0);
++    check(std::string(api->get_input(session)) == "jx7jirzbj", "Tone on initially selected slot failed");
++    api->process_key(session, 0xff1b, 0);
++    api->process_key(session, 0xff09, 0);
++    for (char key : std::string("bu7")) api->process_key(session, key, 0);
++    check(std::string(api->get_input(session)) == "bu7jirzbj", "Head tone consumed an untouched letter");
++    api->process_key(session, 0xff1b, 0);
++    api->clear_composition(session);
++    std::string longInput;
++    for (int i = 0; i < 12; ++i) longInput += "jx";
++    for (char key : longInput) api->process_key(session, key, 0);
++    api->process_key(session, 0xff09, 0);
++    api->process_key(session, '1', 0); expectIndex("1");
++    api->process_key(session, '2', 0); expectIndex("12");
++    api->process_key(session, '1', 0); expectIndex("1");
++    api->process_key(session, '1', 0); expectIndex("11");
++    api->process_key(session, 'j', 0); api->process_key(session, 'm', 0);
++    check(std::string(api->get_input(session)) == longInput.substr(0, 12) + "jm" + longInput.substr(14),
++          "Label 11 did not select seventh original syllable");
++    api->process_key(session, 0xff1b, 0);
++    api->clear_composition(session);
++    for (char key : std::string("jxjirzbj")) api->process_key(session, key, 0);
+     auto other = api->create_session();
+     check(other && api->select_schema(other, "wanxiang_pro"), "Second window session missing");
+     for (char key : std::string("buui")) api->process_key(other, key, 0);
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index 00948f4..54b3d9c 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -17,7 +17,7 @@ engine:
+   translators: [lua_translator@*tone_fixture]
+   filters: [lua_filter@*tone_fixture*clear_comment]
+ speller:
+-  alphabet: abcdefghijklmnopqrstuvwxyz/
++  alphabet: abcdefghijklmnopqrstuvwxyz/7890
+ key_binder:
+   bindings:
+     - {when: has_menu, accept: Tab, send: Down}
+@@ -53,6 +53,11 @@ M.func = function(input, seg)
+   local first = input:sub(1, 2) == "bu" and "bù" or "jiǎng"
+   local second = input:sub(3, 4) == "ui" and "shì" or "jī"
+   local cand = Candidate("test", seg.start, seg._end, "测试", first .. ";ab " .. second .. ";cd " .. tone .. ";ef běi;gh")
++  if #input >= 12 and input:gsub("jx", "") == "" then
++    local parts = {}
++    for i = 1, #input / 2 do parts[i] = "jiǎng;ab" end
++    cand.comment = table.concat(parts, " ")
++  end
+   cand.preedit = input
+   yield(cand)
+ end
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 93a0732..b23ef14 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -19,6 +19,18 @@
+ 
+ CAppModule _Module;
+ 
++LRESULT CALLBACK RecordResize(HWND window, UINT message, WPARAM wparam, LPARAM lparam,
++                              UINT_PTR, DWORD_PTR data) {
++  if (message == WM_WINDOWPOSCHANGING) {
++    auto position = reinterpret_cast<WINDOWPOS*>(lparam);
++    RECT before; GetWindowRect(window, &before);
++    if (!(position->flags & SWP_NOSIZE) &&
++        (position->cx != before.right - before.left || position->cy != before.bottom - before.top))
++      reinterpret_cast<std::vector<WINDOWPOS>*>(data)->push_back(*position);
++  }
++  return DefSubclassProc(window, message, wparam, lparam);
++}
++
+ weasel::Context snapshot(const std::wstring& stage, const std::wstring& index,
+                          const std::wstring& replacement = L"",
+                          const std::wstring& pinyin = L"jiǎng|jī|rén|běi") {
+@@ -573,6 +585,17 @@ int main() {
+     GetMonitorInfo(MonitorFromWindow(panel.m_hWnd, MONITOR_DEFAULTTONEAREST), &monitor);
+     CRect bottomCaret(200, monitor.rcWork.bottom - 25, 200, monitor.rcWork.bottom - 5);
+     panel.MoveTo(bottomCaret);
++    std::vector<WINDOWPOS> resizes;
++    assert(SetWindowSubclass(panel.m_hWnd, RecordResize, 1, reinterpret_cast<DWORD_PTR>(&resizes)));
++    for (int cycle = 0; cycle < 4; ++cycle) {
++      host.ctx() = normal; panel.Refresh(); panel.MoveTo(bottomCaret);
++      resizes.clear();
++      auto atomicEdit = armed; atomicEdit.cinfo = normal.cinfo;
++      host.ctx() = atomicEdit; panel.Refresh();
++      assert(resizes.size() == 1 && !(resizes[0].flags & SWP_NOMOVE));
++      assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
++    }
++    RemoveWindowSubclass(panel.m_hWnd, RecordResize, 1);
+     auto editing = indexed; editing.cinfo = normal.cinfo;
+     host.ctx() = editing; panel.Refresh(); panel.MoveTo(bottomCaret);
+     CRect candidateAbove, editAbove;
+diff --git a/test/rewrite_state_test.cpp b/test/rewrite_state_test.cpp
+index a4a2339..4f847b0 100644
+--- a/test/rewrite_state_test.cpp
++++ b/test/rewrite_state_test.cpp
+@@ -77,6 +77,15 @@ int main() {
+   assert(r.Units()[0].text == L"jx");
+   r = original;
+   r.clear();
++  for (size_t ordinal = 1; ordinal <= 256; ++ordinal) {
++    size_t decoded = 0;
++    auto label = weasel::RewriteState::IndexLabel(ordinal);
++    assert(label.find_first_of(L"7890") == std::wstring::npos);
++    assert(weasel::RewriteState::IndexOrdinal(label, decoded) && decoded == ordinal);
++  }
++  assert(weasel::RewriteState::IndexLabel(7) == L"11");
++  assert(weasel::RewriteState::IndexLabel(12) == L"16");
++  assert(weasel::RewriteState::IndexLabel(13) == L"21");
+   assert(!r.active() && r.original.empty());
+   std::cout << "RewriteState tests passed\n";
+ }
+-- 
+2.53.0.windows.2
+
