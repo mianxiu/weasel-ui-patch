@@ -1,0 +1,430 @@
+From 3a976bda0bb1673e2fb825f31f32d7c79ec7b7a8 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 12:41:35 +0800
+Subject: [PATCH 60/60] fix(rewrite): remove single-syllable limits and
+ document continuous Tab editing
+
+---
+ INSTALL-PATCH.md                 | 14 ++++--
+ Install-Binaries.ps1             |  2 +-
+ README.md                        | 82 +++++++++-----------------------
+ REWRITE-UI.md                    |  2 +-
+ rewrite-build.txt                |  2 +-
+ rime/README.md                   | 10 +++-
+ rime/lua/indexed_rewrite_pro.lua | 12 +----
+ rime/skins/README.md             |  2 +-
+ rime/wanxiang_pro.custom.yaml    |  1 -
+ test-floating-rewrite.cmd        |  2 -
+ test/installer_rime_test.cpp     | 22 ++-------
+ test/installer_rime_test.ps1     |  5 +-
+ 12 files changed, 55 insertions(+), 101 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index c1c9108..5758257 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 默认单音节编辑：** 连续多音节替换为可选功能，默认关闭。按原目标音节的编码长度限制字母输入（双拼通常两码），多余字母不进入替换缓存；退格后可继续修改。直接输入字母的从头覆盖模式也限制为首音节。需要连续替换时，在 `wanxiang_pro.custom.yaml` 的 `patch:` 下添加 `indexed_rewrite/allow_multi_syllable: true`，重新部署后生效；删除该项或设为 `false` 恢复默认。下方多音节说明仅适用于开启此选项。
++> **2026-10-01 当前编辑逻辑：** 默认支持连续多音节替换，不再限制替换编码长度，也不需要额外开关；Tab 行实时显示被编辑位置的全部词典拼音，其他原音节与编号保持，退格和 Esc 可恢复。
+ 
+ > **2026-10-01 连续多音节替换：** 输入序号后可连续替换为多个音节，例如第 3 项从 `bǐ` 改成 `bù shì hǎo`，Tab 行完整显示替换读音；这些音节归属原第 3 项，后续原音节及其编号保持。退格逐步缩短读音，清空后恢复原音节。
+ 
+@@ -36,8 +36,8 @@
+ 
+ 运行 `Apply-Patch.cmd`。本包恢复普通行内输入，不再向输入框写入音节编号或额外高亮。
+ Tab 编辑时，原候选框增加一行万象词典声调全拼，候选保持在同一个圆角外框内；退出 Tab 后恢复原高度。
+-音节编号复用皮肤的普通编号格式，放在拼音前面，例如 `1. shū  2. rù`；编号与拼音同一基线，不使用上标或独立徽章。
+-编码字号保持候选字号的 60%（至少 8pt）；选中音节使用主题强调色背景，未选中编码使用主题文字颜色。
++音节编号复用皮肤的普通前置格式；第 1–3 项隐藏编号显示，后续如 `4. shū`，数字定位仍从 1 开始。编号为灰色，与拼音同一基线，不使用上标或独立徽章。
++编码字号约为候选字号的 80%（至少 10pt）；选中音节使用主题强调色背景，未选中编码使用主题文字颜色。
+ 输入序号及替换字母显示在整串拼音最后。被编辑音节随当前首候选的词典读音实时更新，其他音节保留进入 Tab 时的读音。
+ 候选、编号和注释字号保持旧皮肤的 12pt，外框 padding 和阴影继续使用当前皮肤。
+ 使用原候选框的定位和自动避让；长内容按布局宽度换行，不再使用独立编辑框的固定输入槽。
+@@ -50,6 +50,14 @@ Tab 编辑时，原候选框增加一行万象词典声调全拼，候选保持
+ 
+ 适用于已经安装小狼毫和万象 Pro 方案、词库的 Windows x64 / x86 电脑。不支持 ARM64。
+ 
++## Tab 音节编辑
++
++按 `Tab` 后输入序号定位原音节，再输入替换编码。默认支持连续多音节替换：例如把第 3 项从 `bǐ` 改成 `bù shì hǎo`，所有替换读音显示在原第 3 项的位置，后续原音节及编号保持不变。直接输入字母则从头连续覆盖原编码。
++
++被编辑部分随当前首候选的词典读音实时更新，其他音节保持原读音。按 `Backspace` 逐步删除替换内容，清空后恢复原读音；`Esc` 恢复进入 Tab 前的原输入。缺少可靠读音时保留已有读音，原本缺少读音的音节单独显示编码。
++
++不限制替换字母的长度，也不需要额外配置开关。
++
+ ## 使用
+ 
+ 1. 把 ZIP **完整解压**到小狼毫安装目录之外。不要在压缩包内直接运行。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index 03869e0..be330ee 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-single-tab-default-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-continuous-tab-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/README.md b/README.md
+index b597058..73367bf 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,6 @@
+ # 小狼毫 · 万象 Pro 编码重写补丁
+ 
+-> **2026-09-29 分发包更新：** 完整解压后双击 `Apply-Patch.cmd`，自动安装程序、合并 YAML、安装 Lua、启用并部署。
+-> 当前安装与恢复步骤请看 [INSTALL-PATCH.md](INSTALL-PATCH.md)，下文保留旧版维护说明。
++> **当前版本：** 候选框内 Tab 声调拼音编辑，默认支持连续多音节替换。完整解压 `dist/Weasel-Rewrite-UI-Floating-Preview.zip` 后运行 `Apply-Patch.cmd`；安装说明见 [INSTALL-PATCH.md](INSTALL-PATCH.md)。
+ 
+ 基于 [rime/weasel](https://github.com/rime/weasel) 的个人定制，为 Windows
+ 小狼毫增加「未上屏编码快速重写」的**原生 UI**。
+@@ -10,7 +9,7 @@
+ >
+ > 正式产物是**补丁系列**，托管在
+ > [mianxiu/weasel-ui-patch](https://github.com/mianxiu/weasel-ui-patch)：
+-> 只有补丁系列加几个脚本，**约 300 KB，不含上游源码**。
++> 只有补丁系列加几个脚本，**不含上游源码**。
+ >
+ > **你现在看到的这棵树是重建出来的工作副本** —— 由补丁仓库里的 `setup.ps1`
+ > 执行「clone 官方 weasel + `git am` 打上全部补丁」得到。因此它同时拥有
+@@ -18,38 +17,35 @@
+ 
+ ## 这是什么
+ 
+-在 Rime 里，未上屏的编码可以用 `Tab` 进入编辑模式，按音节重写，
+-全程不把编辑状态写进真实编码：
++为未上屏编码提供按音节编辑。应用内仍显示原始输入；按 Tab 时，主候选框增加一行万象词典声调拼音，退出后恢复原高度。候选框在光标下方时编辑行在候选下方，反之在上方，共用圆角外框和阴影。
+ 
+-```text
+-普通输入     jxjirzbj
+-Tab          jx¹   ji²   rz³   bj⁴            ← 第 1 音节高亮
+-3            jx¹   ji²  [rz³]  bj⁴      ³     ← 高亮即时移动 + 索引 badge
+-jm           jx¹   ji²  [jm³]  bj⁴      ³     ← replacement 即时更新
+-Esc          jxjirzbj                         ← 恢复原编码
+-```
+-
+-`[ ]` 表示真正的圆角背景高亮，界面上不显示括号；`³` 是独立的弱背景 badge。
++Tab 拼音约为候选字号的 80%（至少 10pt）；普通前置编号为灰色，与拼音同一基线，第 1–3 项隐藏编号显示，但数字定位仍从 1 开始。序号和替换输入显示在整串拼音末尾。选中音节使用皮肤强调色，普通及悬停候选使用黑字。
+ 
+ | 操作 | 作用 |
+ |---|---|
+ | `Tab` | 进入编辑模式 |
+-| `Tab` + 字母 | 从头覆盖当前编码 |
+-| `Tab` + 数字 | 选择第 N 个音节 |
+-| `Tab` + 数字 + 字母 | 替换第 N 个音节 |
+-| `Backspace` | 撤销本次 replacement 或索引输入 |
++| `Tab` + 字母 | 从头连续覆盖原编码 |
++| `Tab` + 数字 | 选择第 N 个原音节，支持多位序号 |
++| `Tab` + 数字 + 字母 | 定位第 N 个原音节，可连续替换为多个音节，实时更新读音 |
++| `Backspace` | 删除替换字母或索引；清空替换恢复原读音 |
+ | `Esc` | 恢复进入编辑模式前的原始编码 |
+ | `Space` / `Enter` / 标点 | 保留修改并退出编辑模式，交给 Rime 正常处理 |
+ 
++## Tab 音节编辑
++
++按 `Tab` 后输入序号定位原音节，再输入替换编码。默认支持连续多音节替换：例如把第 3 项从 `bǐ` 改成 `bù shì hǎo`，所有替换读音显示在原第 3 项的位置，后续原音节及编号保持不变。直接输入字母则从头连续覆盖原编码。
++
++被编辑部分随当前首候选的词典读音实时更新，其他音节保持原读音。按 `Backspace` 逐步删除替换内容，清空后恢复原读音；`Esc` 恢复进入 Tab 前的原输入。缺少可靠读音时保留已有读音，原本缺少读音的音节单独显示编码。
++
++不限制替换字母的长度，也不需要额外配置开关。
++
+ ## 为什么要改 Weasel 本体
+ 
+ 编辑算法（Lua processor）早就跑通了，卡住的是**刷新**：
+ 
+ 按数字选音节时，数字被 processor 吃掉、只写进 `_indexed_rewrite_index`，
+ `context.input` 没有变化，因此 translation / filter / preedit 都不会重算，UI 不动。
+-在纯 Lua 侧试过的几条刷新路线——`refresh_non_confirmed_composition()`、
+-`env.engine:compose(ctx)`、caret 原地写回、手工改 composition 制造原生 selection——
+-全部无效，或直接破坏输入状态。
++当前 Lua 使用 `Engine:compose(Context)` 刷新属性变化后的候选；Weasel 通过独立状态快照把编辑状态传到原生界面。早期失败的刷新尝试保留在 `agent.md` 中。
+ 
+ 最终方案是把刷新交给 Weasel 侧：
+ 
+@@ -71,8 +67,8 @@ Weasel 只负责收状态、布局、绘制，没有一行拼音逻辑，也没
+ ## 补丁式维护
+ 
+ ```text
+-GitHub  mianxiu/weasel-ui-patch       ← 只有补丁，约 300 KB
+-        ├─ patches/0001..0017.patch     完整改动集（含本树里所有新增文件）
++GitHub  mianxiu/weasel-ui-patch       ← 只有补丁与维护脚本
++        ├─ patches/0001..00NN.patch     完整改动集（含本树里所有新增文件）
+         ├─ BASE-COMMIT.txt              补丁基于哪个上游提交
+         ├─ setup.ps1                    重建工作副本
+         └─ resync.ps1                   同步上游并重新导出补丁
+@@ -107,47 +103,15 @@ GitHub  mianxiu/weasel-ui-patch       ← 只有补丁，约 300 KB
+ 
+ ## 安装使用
+ 
+-完整步骤见 [`REWRITE-UI.md`](REWRITE-UI.md)，要点：
+-
+-1. 需要已有小狼毫和万象 Pro（本项目不含万象词库与方案数据）。
+-2. 把工作副本自带的运行期文件装进 Rime 用户目录：
+-
+-   ```powershell
+-   pwsh -NoProfile -File .\rime\install-rime-files.ps1 -Apply
+-   ```
++需要已安装小狼毫和万象 Pro，本包不带万象词库。完整解压当前分发 ZIP，运行 `Apply-Patch.cmd`，安装器会备份程序和配置、合并 YAML、安装 Lua、启用 Rewrite UI、部署并校验。开头的 `CHECK ONLY` 是正常预检，结果以最后的 `SUCCESS` 或 `INSTALL FAILED` 为准。
+ 
+-   它会安装核心 `indexed_rewrite_pro.lua`、`wanxiang_pro.custom.yaml`
+-   （`Tab` 绑定与 processor 注册），**删掉 `wanxiang_pro.custom.yaml` 里已废弃的
+-   `lua_filter@*indexed_rewrite_tab_ui_v2` 行**（先备份），并只补齐
+-   `weasel.custom.yaml` 里**缺失**的开关行 —— 你原有的主题配置不会被覆盖。
+-   详见 [`rime/README.md`](rime/README.md)。
+-3. 确认 `weasel.custom.yaml` 的 `patch:` 下有这两行：
++安装程序后完全退出并重开测试应用（包括后台进程），以加载新 TSF DLL；仍未刷新时再注销或重启 Windows。只修改皮肤或方案配置时，重新部署并重启输入法服务即可。
+ 
+-   ```yaml
+-   rewrite_ui/enabled: true
+-   rewrite_ui/debug: false
+-   ```
+-
+-   脚本**不会**把已有的 `enabled: false` 擅自改成 `true`（那是你的开关），
+-   只会打印警告提醒你补丁不会生效。
+-
+-4. 改动后**必须重新部署（`WeaselDeployer.exe /deploy`）并重启服务**。
+-   服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`，
+-   不是同目录的 `weasel.yaml`，也不是 `weasel.custom.yaml`；
+-   只改 custom 文件不部署是无效的。
+-5. 旧 filter 行如果没被删掉（比如脚本报告 `MISSING required lines` 而跳过了
+-   那个文件），编号会被 Lua filter 和 Weasel 各画一遍 —— 手动删掉
+-   `engine/filters` 段里那一行即可。
++同一分发文件夹内可运行 `Apply-Skin.cmd`、`Apply-Skin-navy.cmd`、`Apply-Skin-black.cmd` 或 `Apply-Skin-green.cmd` 切换蓝、深蓝、深黑、深绿皮肤。详细安装与恢复步骤见 [INSTALL-PATCH.md](INSTALL-PATCH.md)。
+ 
+ ## 验证情况
+ 
+-已在真实万象 Pro + 小鹤双拼 + 直接辅助配置上完成真机验收：`Tab` 进入编辑、
+-按数字即时移动高亮并显示 badge、多位索引（`32` / `321` / 退格）、
+-`j` → `jm` → 退格的 replacement 实时更新、`Esc` 恢复原编码；
+-普通输入、候选与直接辅助未受影响。
+-
+-尚未覆盖：多位索引 badge 的肉眼确认、`Space` / `Enter` / 标点提交后的上屏结果、
+-`Tab` 后直接打字母的 `head_replace` 路径。详见 `REWRITE-UI.md`。
++自动测试覆盖默认连续多音节替换、实时读音、索引编辑、从头编辑、退格恢复和 Esc；并通过真实 librime 隔离部署、IPC/原生窗口/DPI/位置稳定性以及安装配置保留和失败回滚测试。本机安装和部署校验已通过，实际应用中的视觉效果仍需实测。
+ 
+ ## 构建
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 2c0d5fb..66a4e83 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,4 +1,4 @@
+-> **2026-10-01 默认单音节编辑：** 连续多音节替换为可选功能，默认关闭。按原目标音节的编码长度限制字母输入（双拼通常两码），多余字母不进入替换缓存；退格后可继续修改。直接输入字母的从头覆盖模式也限制为首音节。需要连续替换时，在 `wanxiang_pro.custom.yaml` 的 `patch:` 下添加 `indexed_rewrite/allow_multi_syllable: true`，重新部署后生效；删除该项或设为 `false` 恢复默认。下方多音节说明仅适用于开启此选项。
++> **2026-10-01 当前编辑逻辑：** 默认支持连续多音节替换，不再限制替换编码长度，也不需要额外开关；Tab 行实时显示被编辑位置的全部词典拼音，其他原音节与编号保持，退格和 Esc 可恢复。
+ 
+ > **2026-10-01 连续多音节替换：** 输入序号后可连续替换为多个音节，例如第 3 项从 `bǐ` 改成 `bù shì hǎo`，Tab 行完整显示替换读音；这些音节归属原第 3 项，后续原音节及其编号保持。退格逐步缩短读音，清空后恢复原音节。
+ 
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index f9a1ff0..a4d114c 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-single-tab-default-20261001
++Build-ID: rewrite-ui-continuous-tab-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/README.md b/rime/README.md
+index b80224e..fc8726c 100644
+--- a/rime/README.md
++++ b/rime/README.md
+@@ -14,6 +14,14 @@
+ `indexed_rewrite_tab_ui_v2.lua`（已被 Weasel 原生绘制取代，已于 2026-09-28
+ 从用户目录删除，不再需要）。
+ 
++## Tab 音节编辑
++
++按 `Tab` 后输入序号定位原音节，再输入替换编码。默认支持连续多音节替换：例如把第 3 项从 `bǐ` 改成 `bù shì hǎo`，所有替换读音显示在原第 3 项的位置，后续原音节及编号保持不变。直接输入字母则从头连续覆盖原编码。
++
++被编辑部分随当前首候选的词典读音实时更新，其他音节保持原读音。按 `Backspace` 逐步删除替换内容，清空后恢复原读音；`Esc` 恢复进入 Tab 前的原输入。缺少可靠读音时保留已有读音，原本缺少读音的音节单独显示编码。
++
++不限制替换字母的长度，也不需要额外配置开关。
++
+ ## 安装
+ 
+ ```powershell
+@@ -46,7 +54,7 @@ pwsh -NoProfile -File .\install-rime-files.ps1 -Apply
+ 4. 在工作副本里运行 `rime\install-rime-files.ps1 -Apply`
+ 5. 编译并安装补丁程序：`build-rewrite.cmd` → `package-rewrite.ps1` → `Apply-Patch.cmd`
+ 6. `WeaselDeployer.exe /deploy`，然后重启 `WeaselServer.exe`
+-7. 注销并重新登录 Windows，使宿主进程加载新的 TSF DLL
++7. 完全退出并重开应用，使宿主进程加载新的 TSF DLL；仍未刷新再注销或重启 Windows
+ 8. 按 `REWRITE-UI.md` 的验收项回归：`jxjirzbj` → `Tab` → `3` → `j` → `m` → `Backspace` → `Esc`
+ 
+ 只调 `rewrite_ui/*` 开关时不需要第 5、7 步，但第 6 步不能省。
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+index 66eaff6..adf775e 100644
+--- a/rime/lua/indexed_rewrite_pro.lua
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -271,7 +271,6 @@ end
+ ------------------------------------------------------------
+ 
+ function M.init(env)
+-    env.allow_multi_syllable = env.engine.schema.config:get_bool("indexed_rewrite/allow_multi_syllable") == true
+     clear_props(env.engine.context)
+ end
+ 
+@@ -436,10 +435,6 @@ function M.func(key, env)
+ 
+         if is_lower_letter(repr) then
+             local typed = get_prop(ctx, PROP_REPLACEMENT) .. repr
+-            local first = parse_ranges(get_prop(ctx, PROP_RANGES))[1]
+-            if not env.allow_multi_syllable and first and #typed > first[2] - first[1] then
+-                return ACCEPTED
+-            end
+             local original = get_prop(ctx, PROP_ORIGINAL)
+ 
+             set_prop(ctx, PROP_REPLACEMENT, typed)
+@@ -508,9 +503,6 @@ function M.func(key, env)
+             end
+ 
+             local replacement = get_prop(ctx, PROP_REPLACEMENT) .. repr
+-            if not env.allow_multi_syllable and #replacement > end_pos - start_pos then
+-                return ACCEPTED
+-            end
+             local original = get_prop(ctx, PROP_ORIGINAL)
+ 
+             set_prop(ctx, PROP_REPLACEMENT, replacement)
+@@ -688,7 +680,6 @@ end
+ 
+ M.hint = {
+ init = function(env)
+-    env.allow_multi_syllable = env.engine.schema.config:get_bool("indexed_rewrite/allow_multi_syllable") == true
+     local dictionary = env.engine.schema.config:get_string("translator/dictionary")
+     if dictionary and dictionary ~= "" then
+         local ok, reverse = pcall(ReverseLookup, dictionary)
+@@ -734,8 +725,7 @@ func = function(input, env)
+                 -- belong to the replacement, not to the next original slot.
+                 local replacement_count = #parts - #ranges + 1
+                 if replacement_count >= 1 and target and current[target] then
+-                    current[target] = env.allow_multi_syllable and
+-                        table.concat(parts, " ", target, target + replacement_count - 1) or parts[target]
++                    current[target] = table.concat(parts, " ", target, target + replacement_count - 1)
+                     if stage == "head_replace" then
+                         for i = 1, target - 1 do current[i] = parts[i] end
+                     end
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 74e1f36..f4d12c3 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -17,7 +17,7 @@
+ Tab 编辑时原候选框增加编码行，使用同一个圆角外框、留白和阴影。
+ 音节使用与候选相同的普通前置编号格式；编号与拼音同一基线，选中音节使用强调色背景。
+ 
+-打开独立皮肤包 `Weasel-Azure-Pill`，普通双击 `Apply-Skin.cmd`。
++打开当前分发文件夹 `Weasel-Rewrite-UI-Floating-Preview`，普通双击 `Apply-Skin.cmd`。
+ 当前 `dist` 只保留完整包 `Weasel-Rewrite-UI-Floating-Preview` 及其 ZIP；完整包根目录包含相同的皮肤切换脚本。
+ 四种强调色共用同一套白底圆角布局；未选中候选统一使用黑色，选中候选保持白字：
+ 
+diff --git a/rime/wanxiang_pro.custom.yaml b/rime/wanxiang_pro.custom.yaml
+index 2bd4798..af31e23 100644
+--- a/rime/wanxiang_pro.custom.yaml
++++ b/rime/wanxiang_pro.custom.yaml
+@@ -1,7 +1,6 @@
+ # 本文件的工作目录是在用户根目录，本目录携带是因为如果放外面就会更新的时候覆盖你的修改，因此我只能藏起来。
+ # 如果没有按初始化说明进行初始化那么你需要手动复制本文件到上层目录，请知悉。
+ patch:
+-  indexed_rewrite/allow_multi_syllable: false  # 默认单音节；true 开启连续多音节替换
+   engine/filters/@before 0: lua_filter@*indexed_rewrite_pro*hint
+   engine/processors/@before 0: lua_processor@*indexed_rewrite_pro
+ 
+diff --git a/test-floating-rewrite.cmd b/test-floating-rewrite.cmd
+index ecfd9c8..d4be6a9 100644
+--- a/test-floating-rewrite.cmd
++++ b/test-floating-rewrite.cmd
+@@ -15,8 +15,6 @@ cl /nologo /std:c++17 /EHsc /MT /utf-8 /Iinclude test\installer_rime_test.cpp /F
+ if errorlevel 1 exit /b 1
+ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_rime_test.ps1
+ if errorlevel 1 exit /b 1
+-powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_rime_test.ps1 -MultiSyllable
+-if errorlevel 1 exit /b 1
+ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_config_test.ps1
+ if errorlevel 1 exit /b 1
+ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\installer_transaction_test.ps1
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index d237e33..a1fc698 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -7,8 +7,7 @@
+ void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+ int wmain(int argc, wchar_t** argv) {
+   try {
+-    check(argc == 4, "Expected shared/user fixture paths and multi-syllable mode");
+-    const bool allowMulti = std::wstring(argv[3]) == L"1";
++    check(argc == 3, "Expected shared and user fixture paths");
+     auto shared = std::filesystem::absolute(argv[1]).u8string();
+     auto user = std::filesystem::absolute(argv[2]).u8string();
+     auto logs = (std::filesystem::absolute(argv[2]) / "logs").u8string();
+@@ -64,7 +63,6 @@ int wmain(int argc, wchar_t** argv) {
+     expectPinyin(u8"jiǎng|jī|rén|běi");
+     for (char key : std::string("bu")) api->process_key(session, key, 0);
+     expectPinyin(u8"jiǎng|jī|bù|běi");
+-    if (allowMulti) {
+     api->process_key(session, 'u', 0);
+     expectPinyin(u8"jiǎng|jī|bù shì|běi"); // Incomplete next syllable still appears.
+     api->process_key(session, 'i', 0);
+@@ -82,16 +80,6 @@ int wmain(int argc, wchar_t** argv) {
+     expectPinyin(u8"jiǎng|jī|bù|běi");
+     api->process_key(session, 0xff08, 0);
+     api->process_key(session, 0xff08, 0);
+-    } else {
+-      for (char key : std::string("uihc")) api->process_key(session, key, 0);
+-      expectPinyin(u8"jiǎng|jī|bù|běi");
+-      check(std::string(api->get_input(session)) == "jxjibubj", "Default single-syllable limit failed");
+-      char replacement[64] = {};
+-      api->get_property(session, "_indexed_rewrite_replacement", replacement, sizeof(replacement));
+-      check(std::string(replacement) == "bu", "Ignored extra letters entered replacement buffer");
+-      api->process_key(session, 0xff08, 0);
+-      api->process_key(session, 0xff08, 0);
+-    }
+     expectPinyin(u8"jiǎng|jī|rén|běi");
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Empty replacement did not restore suffix");
+     api->process_key(session, 'q', 0);
+@@ -100,10 +88,10 @@ int wmain(int argc, wchar_t** argv) {
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Escape did not restore input");
+     check(api->process_key(session, 0xff09, 0), "Second Tab not handled");
+     for (char key : std::string("buui")) api->process_key(session, key, 0);
+-    expectPinyin(allowMulti ? u8"bù|shì|rén|běi" : u8"bù|jī|rén|běi");
+-    check(std::string(api->get_input(session)) == (allowMulti ? "buuirzbj" : "bujirzbj"),
+-          "Head replacement ignored mode limit");
+-    for (int n = 0; n < (allowMulti ? 4 : 2); ++n) api->process_key(session, 0xff08, 0);
++    expectPinyin(u8"bù|shì|rén|běi");
++    check(std::string(api->get_input(session)) == "buuirzbj",
++          "Head replacement did not continue across syllables");
++    for (int n = 0; n < 4; ++n) api->process_key(session, 0xff08, 0);
+     expectPinyin(u8"jiǎng|jī|rén|běi");
+     api->process_key(session, 0xff1b, 0);
+     check(std::string(api->get_input(session)) == "jxjirzbj", "Head Escape did not restore input");
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index c2673cf..218552a 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,4 +1,4 @@
+-﻿param([switch]$MultiSyllable, [switch]$AzurePill, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
++﻿param([switch]$AzurePill, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
+ $ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+@@ -24,7 +24,6 @@ key_binder:
+     - {when: composing, accept: Tab, send: Down}
+     - {when: always, accept: Tab, send: Down}
+ '@
+-if ($MultiSyllable) { $schema += "`nindexed_rewrite:`n  allow_multi_syllable: true`n" }
+ [IO.File]::WriteAllText((Join-Path $shared 'wanxiang_pro.schema.yaml'), $schema, $utf8)
+ $repo=Split-Path $PSScriptRoot -Parent
+ & (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
+@@ -57,7 +56,7 @@ end}
+ return M
+ '@, $utf8)
+ Copy-Item (Join-Path $repo 'rime/lua/indexed_rewrite_pro.lua') (Join-Path $user 'lua')
+-& (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user ([int][bool]$MultiSyllable)
++& (Join-Path $repo 'deps/installer_rime_test.exe') $shared $user
+ if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
+ & (Join-Path $repo 'output/RewriteConfig.exe') verify $user
+ if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
+-- 
+2.53.0.windows.2
+

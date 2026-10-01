@@ -1,18 +1,26 @@
-> **2026-09-30 当前分发包：** dist 已清理，只保留 weasel/dist/Weasel-Rewrite-UI-Floating-Preview 文件夹及同名 ZIP。运行 Apply-Patch.cmd 更新完整补丁；同一文件夹内 Apply-Skin.cmd 使用原蓝色，Apply-Skin-navy.cmd / Apply-Skin-black.cmd / Apply-Skin-green.cmd 分别切换深蓝、深黑、深绿。次要候选 hover 使用深色强调文字，正式选中保持白字；hover 修复需要安装本次程序。四种配色的真实 librime 部署、原生 UI 回归和分发包校验通过。
-
-> **紧凑贴合 Tab 标签：** 字号按旧皮肤备份恢复为 12pt（候选、编号、注释）。Tab 标签 padding 6×2px、圆角 6px、无独立阴影、末尾预留 48px；与候选左边缘对齐并重叠 2px。连接处取消圆角与内横边，外侧保留圆角，形成上下可翻转的混合轮廓。仍使用独立窗口，保持候选内容布局和高度；退出 Tab 后候选恢复完整圆角。32/64 位构建、连接轮廓/DPI/原生窗口回归、四种配色真实 librime 部署测试通过。Build-ID：rewrite-ui-compact-joined-editor-20260930。
-
-> **悬浮声调预览版：** 行内输入已恢复旧版。Tab 时显示万象词典声调全拼、小字号和独立圆角上标编号；序号及替换输入在末尾。没有可靠拼音时回退原始编码。皮肤定义在 rime/skins/azure_pill*.yaml。皮肤部署参数空格问题已修复。当前为本地预览分支，稳定线上 Release 保持原有版本。
-
 # weasel-ui-patch
 
 为 Windows 小狼毫（Weasel）加「未上屏编码快速重写」**原生 UI** 的个人补丁集。
 
-**这个仓库只有补丁，没有上游源码** —— 全部内容约 300 KB。
+**这个仓库只有补丁，没有上游源码**。
 上游 [rime/weasel](https://github.com/rime/weasel) 的源码由 `setup.ps1`
 在需要时从官方 clone（公开永久，几秒）。
 
 > **个人自用，不向上游提 PR。**
+
+## 当前预览版
+
+构建标识为 `rewrite-ui-continuous-tab-20261001`。当前本地分发目录是 `weasel/dist/Weasel-Rewrite-UI-Floating-Preview`，压缩包为同名 ZIP。候选框内显示 Tab 声调拼音行，共用主候选圆角；不再使用独立编辑窗口或上标。第 1–3 个音节隐藏编号显示，数字定位仍从 1 开始；字号约为候选的 80%（至少 10pt）。
+
+Azure Pill 提供蓝、深蓝、深黑、深绿四种配色，普通及悬停候选使用黑字。该版本为本地预览，更新文档和打包不会自动发布 Release。
+
+## Tab 音节编辑
+
+按 `Tab` 后输入序号定位原音节，再输入替换编码。默认支持连续多音节替换：例如把第 3 项从 `bǐ` 改成 `bù shì hǎo`，所有替换读音显示在原第 3 项的位置，后续原音节及编号保持不变。直接输入字母则从头连续覆盖原编码。
+
+被编辑部分随当前首候选的词典读音实时更新，其他音节保持原读音。按 `Backspace` 逐步删除替换内容，清空后恢复原读音；`Esc` 恢复进入 Tab 前的原输入。缺少可靠读音时保留已有读音，原本缺少读音的音节单独显示编码。
+
+不限制替换字母的长度，也不需要额外配置开关。
 
 ## 新电脑上快速部署
 
@@ -37,9 +45,9 @@ cd ..\weasel
 .\build-rewrite.cmd
 pwsh -NoProfile -File .\package-rewrite.ps1
 # 3. 一键安装：程序、YAML、Lua、启用、部署与验证
-.\dist\Weasel-Rewrite-UI\Apply-Patch.cmd
+.\dist\Weasel-Rewrite-UI-Floating-Preview\Apply-Patch.cmd
 
-# 4. 注销并重新登录 Windows
+# 4. 完全退出并重开测试应用；仍未刷新时再注销或重启 Windows
 ```
 
 构建依赖（`weasel.props`、`deps\boost_1_84_0`、`deps\rime-x64`、`deps\rime-x86`、
@@ -75,14 +83,14 @@ pwsh -NoProfile -File .\resync.ps1
 
 ## 发 Release（二进制包）
 
-编译好的安装包体积约 8.7 MB，不放进 git，而是作为 **Release 附件**上传
-—— 这样仓库始终只有几百 KB。
+编译好的安装包体积约 9 MB，不放进 git，而是作为 **Release 附件**上传
+—— 这样仓库始终只维护补丁与脚本。
 
 ```powershell
 # 1) 在工作副本里出包
 cd ..\weasel
 .\build-rewrite.cmd
-pwsh -NoProfile -File .\package-rewrite.ps1      # 生成 dist\Weasel-Rewrite-UI.zip
+pwsh -NoProfile -File .\package-rewrite.ps1      # 生成 dist\Weasel-Rewrite-UI-Floating-Preview.zip
 
 # 2) 准备令牌（推荐 fine-grained PAT，只勾本仓库的 Contents: Read and write）
 #    不要把它写进任何文件或贴到对话里
@@ -90,12 +98,12 @@ $env:GITHUB_TOKEN = '<你的令牌>'
 
 # 3) 发版（先加 -WhatIf 预览）
 cd ..\weasel-ui-patch
-pwsh -NoProfile -File .\release.ps1 -Tag v0.17.4.1-rewrite-ui -WhatIf
-pwsh -NoProfile -File .\release.ps1 -Tag v0.17.4.1-rewrite-ui
+pwsh -NoProfile -File .\release.ps1 -Tag '你的新版本标签' -Asset ..\weasel\dist\Weasel-Rewrite-UI-Floating-Preview.zip -WhatIf
+pwsh -NoProfile -File .\release.ps1 -Tag '你的新版本标签' -Asset ..\weasel\dist\Weasel-Rewrite-UI-Floating-Preview.zip
 ```
 
 不改脚本也可以，直接走网页：**Releases → Draft a new release** → 选 tag →
-正文粘贴 `RELEASE-NOTES.md` → 把 `weasel\dist\Weasel-Rewrite-UI.zip` 拖进附件区 →
+正文粘贴 `RELEASE-NOTES.md` → 把 `weasel\dist\Weasel-Rewrite-UI-Floating-Preview.zip` 拖进附件区 →
 Publish release。
 
 ## 两个必须知道的坑

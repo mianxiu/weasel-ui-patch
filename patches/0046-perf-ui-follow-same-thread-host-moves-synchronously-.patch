@@ -1,7 +1,7 @@
 From 810c3f5d12e15a764123aae3dc78932ac99f9340 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 00:36:43 +0800
-Subject: [PATCH 46/59] perf(ui): follow same-thread host moves synchronously
+Subject: [PATCH 46/60] perf(ui): follow same-thread host moves synchronously
  and preserve small deltas
 
 ---

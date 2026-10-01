@@ -1,7 +1,7 @@
 From f7f90190e1fb721e9746ae33b9b1e9834c207ecf Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 23:57:20 +0800
-Subject: [PATCH 43/59] fix(ui): accept zero-width TSF caret rectangles for
+Subject: [PATCH 43/60] fix(ui): accept zero-width TSF caret rectangles for
  popup following
 
 ---
