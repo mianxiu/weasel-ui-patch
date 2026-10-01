@@ -1,0 +1,1163 @@
+From c22f4205448f3af77b7c8bb40af3b387fcf249b9 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 18:54:40 +0800
+Subject: [PATCH] feat(skins): register all palettes independently and bundle
+ previews
+
+---
+ Apply-Skin-All.cmd                            |   8 +++
+ Apply-Skin.ps1                                |  34 ++++++++++--
+ INSTALL-PATCH.md                              |   2 +
+ WeaselDeployer/UIStyleSettings.cpp            |   7 ++-
+ WeaselDeployer/UIStyleSettingsDialog.cpp      |  31 +++++++++--
+ WeaselDeployer/UIStyleSettingsDialog.h        |   2 +
+ package-rewrite.ps1                           |   5 ++
+ package-skin.ps1                              |   1 +
+ rime/skins/README.md                          |   2 +
+ rime/skins/azure_pill_black.yaml              |   6 +-
+ rime/skins/azure_pill_green.yaml              |   6 +-
+ rime/skins/azure_pill_navy.yaml               |   6 +-
+ .../skins/preview/color_scheme_azure_pill.png | Bin 0 -> 7909 bytes
+ .../preview/color_scheme_azure_pill_black.png | Bin 0 -> 8075 bytes
+ .../preview/color_scheme_azure_pill_green.png | Bin 0 -> 8113 bytes
+ .../preview/color_scheme_azure_pill_navy.png  | Bin 0 -> 8049 bytes
+ test/installer_rime_test.ps1                  |  13 ++++-
+ test/skin_config_test.ps1                     |  13 +++++
+ tools/build-skin-deployer.cmd                 |   9 +++
+ tools/generate-skin-previews.ps1              |  50 +++++++++++++++++
+ tools/rewrite-config.cpp                      |  52 ++++++++++++++++--
+ 21 files changed, 222 insertions(+), 25 deletions(-)
+ create mode 100644 Apply-Skin-All.cmd
+ create mode 100644 rime/skins/preview/color_scheme_azure_pill.png
+ create mode 100644 rime/skins/preview/color_scheme_azure_pill_black.png
+ create mode 100644 rime/skins/preview/color_scheme_azure_pill_green.png
+ create mode 100644 rime/skins/preview/color_scheme_azure_pill_navy.png
+ create mode 100644 tools/build-skin-deployer.cmd
+ create mode 100644 tools/generate-skin-previews.ps1
+
+diff --git a/Apply-Skin-All.cmd b/Apply-Skin-All.cmd
+new file mode 100644
+index 0000000..ce05dd9
+--- /dev/null
++++ b/Apply-Skin-All.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Apply-Skin.ps1" -All
++set "skin_result=%errorlevel%"
++echo.
++pause
++exit /b %skin_result%
+diff --git a/Apply-Skin.ps1 b/Apply-Skin.ps1
+index 5477169..c28c229 100644
+--- a/Apply-Skin.ps1
++++ b/Apply-Skin.ps1
+@@ -1,8 +1,9 @@
+ ﻿[CmdletBinding()]
+-param([string]$UserDataRoot, [string]$Target, [switch]$CheckOnly,
++param([string]$UserDataRoot, [string]$Target, [switch]$CheckOnly, [switch]$All,
+       [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
+ $ErrorActionPreference = 'Stop'
+ $changed = $false; $saved = $null; $locked = $false; $mutex = $null
++$previewChanges = @()
+ function Run-Deploy {
+   # Start-Process may append whitespace, which older deployers interpret as setup.
+   $info = New-Object Diagnostics.ProcessStartInfo
+@@ -58,10 +59,17 @@ try {
+   $themeName = if ($Accent -eq 'blue') { 'azure_pill.yaml' } else { "azure_pill_$Accent.yaml" }
+   $theme = Join-Path $PSScriptRoot ("skins/" + $themeName)
+   if (!(Test-Path $theme)) { $theme = Join-Path $PSScriptRoot ("rime/skins/" + $themeName) }
++  $skinDirectory = Split-Path $theme -Parent
++  $previewDirectory = Join-Path $skinDirectory 'preview'
++  $skinId = if ($Accent -eq 'blue') { 'azure_pill' } else { "azure_pill_$Accent" }
++  $previewFiles = if ($All) { @(Get-ChildItem -LiteralPath $previewDirectory -Filter 'color_scheme_azure_pill*.png' -File) }
++                  else { @(Get-Item -LiteralPath (Join-Path $previewDirectory "color_scheme_$skinId.png")) }
++  if (!$previewFiles.Count) { throw '皮肤包缺少预览图。' }
+   $stage = Join-Path ([IO.Path]::GetTempPath()) ('azure-pill-' + [guid]::NewGuid().ToString('N'))
+   $destination = Join-Path $UserDataRoot 'weasel.custom.yaml'
+   $originalHash = if (Test-Path -LiteralPath $destination) { (Get-FileHash -LiteralPath $destination).Hash } else { $null }
+-  & $helper skin $UserDataRoot $theme $stage
++  if ($All) { & $helper skins $UserDataRoot $skinDirectory $stage }
++  else { & $helper skin $UserDataRoot $theme $stage }
+   if ($LASTEXITCODE) { throw '皮肤配置合并失败。' }
+   if ($CheckOnly) { Write-Host "CHECK PASSED：未修改用户配置。合并预览：$stage"; exit 0 }
+   if (!$Target) {
+@@ -88,8 +96,21 @@ try {
+   if ($existed) { Copy-Item -LiteralPath $destination -Destination $saved }
+   $changed = $true
+   Copy-Item -LiteralPath (Join-Path $stage 'weasel.custom.yaml') -Destination $destination -Force
++  $userPreview = Join-Path $UserDataRoot 'preview'
++  New-Item -ItemType Directory -Path $userPreview -Force | Out-Null
++  foreach ($file in $previewFiles) {
++    $previewTarget = Join-Path $userPreview $file.Name
++    $previewBackup = $null
++    if (Test-Path -LiteralPath $previewTarget) {
++      $previewBackup = Join-Path $stage ($file.Name + '.backup')
++      Copy-Item -LiteralPath $previewTarget -Destination $previewBackup
++    }
++    $previewChanges += @{Target=$previewTarget; Backup=$previewBackup}
++    Copy-Item -LiteralPath $file.FullName -Destination $previewTarget -Force
++  }
+   Run-Deploy
+-  & $helper skin-verify $UserDataRoot $theme
++  if ($All) { & $helper skins-verify $UserDataRoot $skinDirectory }
++  else { & $helper skin-verify $UserDataRoot $theme }
+   if ($LASTEXITCODE) { throw '部署后的皮肤校验失败。' }
+   $server = Join-Path $Target 'WeaselServer.exe'
+   $p = Start-Process -FilePath $server -ArgumentList '/q' -WindowStyle Hidden -PassThru
+@@ -105,7 +126,8 @@ try {
+   } while ([DateTime]::UtcNow -lt $deadline)
+   if ($running.Count) { throw '小狼毫尚未退出，请从托盘手动重启后再运行。' }
+   Start-Process -FilePath $server -WindowStyle Hidden | Out-Null
+-  Write-Host "SUCCESS：圆角皮肤已启用（$Accent），部署校验通过，服务已重启。无需重启 Windows。"
++  if ($All) { Write-Host 'SUCCESS：所有圆角皮肤及预览图已安装，当前皮肤保持不变。请重新打开配色方案窗口选择。' }
++  else { Write-Host "SUCCESS：圆角皮肤已启用（$Accent），部署校验通过，服务已重启。无需重启 Windows。" }
+   if ($existed) { Write-Host "原配置备份：$saved" }
+ } catch {
+   Write-Host "SKIN FAILED：$($_.Exception.Message)" -ForegroundColor Red
+@@ -113,6 +135,10 @@ try {
+     try {
+       if ($existed) { Copy-Item -LiteralPath $saved -Destination $destination -Force }
+       else { Remove-Item -LiteralPath $destination }
++      foreach ($item in $previewChanges) {
++        if ($item.Backup) { Copy-Item -LiteralPath $item.Backup -Destination $item.Target -Force }
++        elseif (Test-Path -LiteralPath $item.Target) { Remove-Item -LiteralPath $item.Target }
++      }
+       Run-Deploy
+       Start-Process -FilePath (Join-Path $Target 'WeaselServer.exe') -WindowStyle Hidden | Out-Null
+       Write-Host '原配置已恢复并重新部署。'
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 6dd9b3c..7cbddf5 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 皮肤列表与预览：** 普通双击包内 `Apply-Skin-All.cmd`，一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
++
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+ 
+ > **2026-10-01 窄连接圆角修复：** 主候选与 Tab 高亮的边缘接近时，横向与纵向圆角分别计算，避免几像素宽的台阶把纵向弧线一起压缩成尖角。相交填充仍为一条连续轮廓，文字、padding、窗口高度和上下排列保持原样。
+diff --git a/WeaselDeployer/UIStyleSettings.cpp b/WeaselDeployer/UIStyleSettings.cpp
+index 22e7380..d409fd9 100644
+--- a/WeaselDeployer/UIStyleSettings.cpp
++++ b/WeaselDeployer/UIStyleSettings.cpp
+@@ -40,7 +40,7 @@ bool UIStyleSettings::GetPresetColorSchemes(
+ 
+ // check if a file exists
+ static inline bool IfFileExist(std::string filename) {
+-  DWORD dwAttrib = GetFileAttributes(acptow(filename).c_str());
++  DWORD dwAttrib = GetFileAttributes(u8tow(filename).c_str());
+   return (INVALID_FILE_ATTRIBUTES != dwAttrib &&
+           0 == (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+ }
+@@ -71,5 +71,10 @@ std::string UIStyleSettings::GetActiveColorScheme() {
+ bool UIStyleSettings::SelectColorScheme(const std::string& color_scheme_id) {
+   api_->customize_string(settings_, "style/color_scheme",
+                          color_scheme_id.c_str());
++  if (color_scheme_id == "azure_pill" ||
++      color_scheme_id.rfind("azure_pill_", 0) == 0) {
++    api_->customize_string(settings_, "style/color_scheme_dark",
++                           color_scheme_id.c_str());
++  }
+   return true;
+ }
+diff --git a/WeaselDeployer/UIStyleSettingsDialog.cpp b/WeaselDeployer/UIStyleSettingsDialog.cpp
+index b00e82d..5583199 100644
+--- a/WeaselDeployer/UIStyleSettingsDialog.cpp
++++ b/WeaselDeployer/UIStyleSettingsDialog.cpp
+@@ -34,6 +34,7 @@ void UIStyleSettingsDialog::Populate() {
+ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+   color_schemes_.Attach(GetDlgItem(IDC_COLOR_SCHEME));
+   preview_.Attach(GetDlgItem(IDC_PREVIEW));
++  preview_.ModifyStyle(SS_TYPEMASK, SS_OWNERDRAW);
+   select_font_.Attach(GetDlgItem(IDC_SELECT_FONT));
+   select_font_.EnableWindow(FALSE);
+ 
+@@ -70,10 +71,30 @@ void UIStyleSettingsDialog::Preview(int index) {
+       settings_->GetColorSchemePreview(preset_[index].color_scheme_id));
+   if (file_path.empty())
+     return;
++  // A missing image must not leave the previous skin visible.
+   image_.Destroy();
+-  // it is from ansi coding, not utf8
+-  image_.Load(acptow(file_path).c_str());
+-  if (!image_.IsNull()) {
+-    preview_.SetBitmap(image_);
+-  }
++  image_.Load(u8tow(file_path).c_str());
++  preview_.Invalidate();
++}
++
++LRESULT UIStyleSettingsDialog::OnDrawPreview(UINT, WPARAM, LPARAM lparam,
++                                            BOOL& handled) {
++  auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
++  if (draw->CtlID != IDC_PREVIEW) { handled = FALSE; return 0; }
++  FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(COLOR_3DFACE));
++  if (image_.IsNull()) return TRUE;
++  const int available_width = draw->rcItem.right - draw->rcItem.left;
++  const int available_height = draw->rcItem.bottom - draw->rcItem.top;
++  const double scale = (std::min)(double(available_width) / image_.GetWidth(),
++                                 double(available_height) / image_.GetHeight());
++  const int width = int(image_.GetWidth() * scale);
++  const int height = int(image_.GetHeight() * scale);
++  const int old_mode = SetStretchBltMode(draw->hDC, HALFTONE);
++  POINT old_origin;
++  SetBrushOrgEx(draw->hDC, 0, 0, &old_origin);
++  image_.Draw(draw->hDC, draw->rcItem.left + (available_width - width) / 2,
++              draw->rcItem.top + (available_height - height) / 2, width, height);
++  SetBrushOrgEx(draw->hDC, old_origin.x, old_origin.y, NULL);
++  SetStretchBltMode(draw->hDC, old_mode);
++  return TRUE;
+ }
+diff --git a/WeaselDeployer/UIStyleSettingsDialog.h b/WeaselDeployer/UIStyleSettingsDialog.h
+index e81aad7..239e1ef 100644
+--- a/WeaselDeployer/UIStyleSettingsDialog.h
++++ b/WeaselDeployer/UIStyleSettingsDialog.h
+@@ -14,12 +14,14 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
+   BEGIN_MSG_MAP(UIStyleSettingsDialog)
+   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
+   MESSAGE_HANDLER(WM_CLOSE, OnClose)
++  MESSAGE_HANDLER(WM_DRAWITEM, OnDrawPreview)
+   COMMAND_ID_HANDLER(IDOK, OnOK)
+   COMMAND_HANDLER(IDC_COLOR_SCHEME, LBN_SELCHANGE, OnColorSchemeSelChange)
+   END_MSG_MAP()
+ 
+   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
+   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
++  LRESULT OnDrawPreview(UINT, WPARAM, LPARAM, BOOL&);
+   LRESULT OnOK(WORD, WORD code, HWND, BOOL&);
+   LRESULT OnColorSchemeSelChange(WORD, WORD, HWND, BOOL&);
+ 
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index b49e221..576f422 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -16,6 +16,7 @@ Copy-Item output/RewriteConfig.exe $destination -Force
+ Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1 $destination -Force
+ New-Item -ItemType Directory -Force "$destination/skins" | Out-Null
+ Copy-Item rime/skins/azure_pill*.yaml,rime/skins/README.md "$destination/skins" -Force
++Copy-Item rime/skins/preview "$destination/skins/preview" -Recurse -Force
+ New-Item -ItemType Directory -Force "$destination/rime/lua" | Out-Null
+ Copy-Item rime/lua/indexed_rewrite_pro.lua "$destination/rime/lua/" -Force
+ Copy-Item LICENSE.txt "$destination/licenses/Weasel-GPL-3.0.txt" -Force
+@@ -34,6 +35,7 @@ try {
+   if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate source files.' }
+   $files = $tracked + @(
+     'Install-Binaries.ps1', 'INSTALL-PATCH.md', 'build-rewrite-config.cmd', 'tools/rewrite-config.cpp',
++    'Apply-Skin-All.cmd', 'tools/generate-skin-previews.ps1',
+     'test/installer_config_test.ps1', 'test/installer_transaction_test.ps1',
+     'test/installer_diagnostics_test.ps1',
+     'test/installer_rime_test.cpp', 'test/installer_rime_test.ps1',
+@@ -42,6 +44,9 @@ try {
+     'package-rewrite.ps1', 'Apply-Patch.cmd', 'Apply-Patch.ps1', 'rewrite-build.txt', 'test/patch_shutdown_test.ps1', 'test/rewrite_state_test.cpp',
+     'test/rewrite_pipeline_test.cpp', 'test/rewrite_rime_test.cpp',
+     'test/rime-fixture/default.yaml', 'test/rime-fixture/rewrite_test.schema.yaml')
++  $files += @(Get-ChildItem rime/skins/preview -File | ForEach-Object {
++    [IO.Path]::GetRelativePath($PSScriptRoot, $_.FullName)
++  })
+   foreach ($file in ($files | Sort-Object -Unique)) {
+     if ($file -match '^(output|lib|lib64)/' -or !(Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+     [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+diff --git a/package-skin.ps1 b/package-skin.ps1
+index f1affd5..29e19c8 100644
+--- a/package-skin.ps1
++++ b/package-skin.ps1
+@@ -7,6 +7,7 @@ $stage = $final + '-stage-' + [guid]::NewGuid().ToString('N')
+ New-Item -ItemType Directory -Path (Join-Path $stage 'skins') -Force | Out-Null
+ Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1,output/RewriteConfig.exe -Destination $stage
+ Copy-Item rime/skins/azure_pill*.yaml -Destination (Join-Path $stage 'skins')
++Copy-Item rime/skins/preview -Destination (Join-Path $stage 'skins/preview') -Recurse
+ Copy-Item rime/skins/README.md -Destination (Join-Path $stage 'README.md')
+ Copy-Item librime/deps/yaml-cpp/LICENSE -Destination (Join-Path $stage 'yaml-cpp-MIT.txt')
+ Copy-Item LICENSE.txt -Destination (Join-Path $stage 'Weasel-GPL-3.0.txt')
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index 7ecf9b2..7990b37 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,3 +1,5 @@
++> **2026-10-01 皮肤列表与预览：** 普通双击包内 `Apply-Skin-All.cmd`，一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
++
+ > **2026-10-01 悬停与间距：** 次要候选悬停背景为浅灰色 `#EEEEEE`，文字保持黑色；Tab 前 4 个音节隐藏编号，新增音节间距缩小为隐藏编号占位的一半，首音节仍与主候选文字对齐，第 5 项起保留编号。
+ 
+ > **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–4 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
+diff --git a/rime/skins/azure_pill_black.yaml b/rime/skins/azure_pill_black.yaml
+index 77a4c5d..ac27002 100644
+--- a/rime/skins/azure_pill_black.yaml
++++ b/rime/skins/azure_pill_black.yaml
+@@ -1,8 +1,8 @@
+ # Reference-inspired white horizontal panel with a blue rounded selection.
+ # Color literals are RRGGBBAA because the palette declares rgba.
+ patch:
+-  style/color_scheme: azure_pill
+-  style/color_scheme_dark: azure_pill
++  style/color_scheme: azure_pill_black
++  style/color_scheme_dark: azure_pill_black
+   style/font_face: "Microsoft YaHei UI, Segoe UI"
+   style/font_point: 12
+   style/label_font_face: "Segoe UI, Microsoft YaHei UI"
+@@ -36,7 +36,7 @@ patch:
+   style/layout/shadow_radius: 12
+   style/layout/shadow_offset_x: 0
+   style/layout/shadow_offset_y: 5
+-  preset_color_schemes/azure_pill:
++  preset_color_schemes/azure_pill_black:
+     name: "Azure Pill / 深黑圆角"
+     author: "mianxiu"
+     color_format: rgba
+diff --git a/rime/skins/azure_pill_green.yaml b/rime/skins/azure_pill_green.yaml
+index 2075750..e29b67e 100644
+--- a/rime/skins/azure_pill_green.yaml
++++ b/rime/skins/azure_pill_green.yaml
+@@ -1,8 +1,8 @@
+ # Reference-inspired white horizontal panel with a blue rounded selection.
+ # Color literals are RRGGBBAA because the palette declares rgba.
+ patch:
+-  style/color_scheme: azure_pill
+-  style/color_scheme_dark: azure_pill
++  style/color_scheme: azure_pill_green
++  style/color_scheme_dark: azure_pill_green
+   style/font_face: "Microsoft YaHei UI, Segoe UI"
+   style/font_point: 12
+   style/label_font_face: "Segoe UI, Microsoft YaHei UI"
+@@ -36,7 +36,7 @@ patch:
+   style/layout/shadow_radius: 12
+   style/layout/shadow_offset_x: 0
+   style/layout/shadow_offset_y: 5
+-  preset_color_schemes/azure_pill:
++  preset_color_schemes/azure_pill_green:
+     name: "Azure Pill / 深绿圆角"
+     author: "mianxiu"
+     color_format: rgba
+diff --git a/rime/skins/azure_pill_navy.yaml b/rime/skins/azure_pill_navy.yaml
+index 85233bf..9608d83 100644
+--- a/rime/skins/azure_pill_navy.yaml
++++ b/rime/skins/azure_pill_navy.yaml
+@@ -1,8 +1,8 @@
+ # Reference-inspired white horizontal panel with a blue rounded selection.
+ # Color literals are RRGGBBAA because the palette declares rgba.
+ patch:
+-  style/color_scheme: azure_pill
+-  style/color_scheme_dark: azure_pill
++  style/color_scheme: azure_pill_navy
++  style/color_scheme_dark: azure_pill_navy
+   style/font_face: "Microsoft YaHei UI, Segoe UI"
+   style/font_point: 12
+   style/label_font_face: "Segoe UI, Microsoft YaHei UI"
+@@ -36,7 +36,7 @@ patch:
+   style/layout/shadow_radius: 12
+   style/layout/shadow_offset_x: 0
+   style/layout/shadow_offset_y: 5
+-  preset_color_schemes/azure_pill:
++  preset_color_schemes/azure_pill_navy:
+     name: "Azure Pill / 深蓝圆角"
+     author: "mianxiu"
+     color_format: rgba
+diff --git a/rime/skins/preview/color_scheme_azure_pill.png b/rime/skins/preview/color_scheme_azure_pill.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..30bc6aa5b49225dcf808837c7f12141b553b7b8e
+GIT binary patch
+literal 7909
+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
+z{#%0A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
+Rc$#L?)iKmAyJ`3IzX0q&7r_7k
+
+literal 0
+HcmV?d00001
+
+diff --git a/rime/skins/preview/color_scheme_azure_pill_black.png b/rime/skins/preview/color_scheme_azure_pill_black.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..d00a9f34ba386cb4907308635e379cf4566e52ca
+GIT binary patch
+literal 8075
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/rime/skins/preview/color_scheme_azure_pill_green.png b/rime/skins/preview/color_scheme_azure_pill_green.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..7f33f1eeff6fc470c6bcccc795390651a2189294
+GIT binary patch
+literal 8113
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/rime/skins/preview/color_scheme_azure_pill_navy.png b/rime/skins/preview/color_scheme_azure_pill_navy.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..f06e3351ab2d4e0a32fd053e948adaa26c5d0b75
+GIT binary patch
+literal 8049
+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
+WdejG!BXCU4VWe-WSA5&y+5Z6xou+;O
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/installer_rime_test.ps1 b/test/installer_rime_test.ps1
+index 218552a..00948f4 100644
+--- a/test/installer_rime_test.ps1
++++ b/test/installer_rime_test.ps1
+@@ -1,4 +1,4 @@
+-﻿param([switch]$AzurePill, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
++﻿param([switch]$AzurePill, [switch]$AllSkins, [ValidateSet('blue','navy','black','green')][string]$Accent = 'blue')
+ $ErrorActionPreference='Stop'
+ $root=Join-Path ([IO.Path]::GetTempPath()) ('rewrite-rime-integration-' + [guid]::NewGuid().ToString('N'))
+ $shared=Join-Path $root 'shared'; $user=Join-Path $root 'user'; $stage=Join-Path $root 'stage'
+@@ -29,6 +29,12 @@ $repo=Split-Path $PSScriptRoot -Parent
+ & (Join-Path $repo 'output/RewriteConfig.exe') prepare $user $stage
+ if ($LASTEXITCODE) { throw 'Merge failed' }
+ Copy-Item (Join-Path $stage '*.yaml') $user
++if ($AllSkins) {
++  $skinStage = Join-Path $root 'all-skin-stage'
++  & (Join-Path $repo 'output/RewriteConfig.exe') skins $user (Join-Path $repo 'rime/skins') $skinStage
++  if ($LASTEXITCODE) { throw 'Bulk skin merge failed' }
++  Copy-Item (Join-Path $skinStage 'weasel.custom.yaml') $user -Force
++}
+ if ($AzurePill) {
+   $skinStage = Join-Path $root 'skin-stage'
+   $themeName = if ($Accent -eq 'blue') { 'azure_pill.yaml' } else { "azure_pill_$Accent.yaml" }
+@@ -61,6 +67,11 @@ if ($LASTEXITCODE) { throw "Integration failed. Fixture: $root" }
+ & (Join-Path $repo 'output/RewriteConfig.exe') verify $user
+ if ($LASTEXITCODE) { throw 'Generated configuration rejected' }
+ Write-Host "PASS: actual librime deployment and generated YAML. Fixture: $root"
++if ($AllSkins) {
++  & (Join-Path $repo 'output/RewriteConfig.exe') skins-verify $user (Join-Path $repo 'rime/skins')
++  if ($LASTEXITCODE) { throw 'Bulk skin deployment verification failed' }
++  Write-Host 'PASS: actual librime deployed all four independent palettes'
++}
+ 
+ if ($AzurePill) {
+   & (Join-Path $repo 'output/RewriteConfig.exe') skin-verify $user $theme
+diff --git a/test/skin_config_test.ps1 b/test/skin_config_test.ps1
+index 456103c..4d82820 100644
+--- a/test/skin_config_test.ps1
++++ b/test/skin_config_test.ps1
+@@ -29,3 +29,16 @@ if ($merged -match 'font_point: 30|margin_x: 42|type: vertical|name: previous|hi
+ if ($LASTEXITCODE) { throw 'Repeated skin merge failed' }
+ if ([IO.File]::ReadAllText((Join-Path $root 'second/weasel.custom.yaml')) -ne $merged) { throw 'Skin merge is not idempotent' }
+ Write-Host 'PASS: skin merge preserves unrelated values, removes conflicting nested leaves, and is idempotent.'
++
++& $helper skins $root (Join-Path $repo 'rime/skins') (Join-Path $root 'all')
++if ($LASTEXITCODE) { throw 'Bulk skin merge failed' }
++$all = [IO.File]::ReadAllText((Join-Path $root 'all/weasel.custom.yaml'))
++foreach ($value in @('style/color_scheme: old','font_point: 30','margin_x: 42','terminal.exe','rewrite_ui/enabled: true',
++                     'preset_color_schemes/azure_pill:', 'preset_color_schemes/azure_pill_navy:',
++                     'preset_color_schemes/azure_pill_black:', 'preset_color_schemes/azure_pill_green:')) {
++  if (!$all.Contains($value)) { throw "Bulk install missing or changed: $value" }
++}
++& $helper skins (Join-Path $root 'all') (Join-Path $repo 'rime/skins') (Join-Path $root 'all-second')
++if ($LASTEXITCODE) { throw 'Repeated bulk skin merge failed' }
++if ([IO.File]::ReadAllText((Join-Path $root 'all-second/weasel.custom.yaml')) -ne $all) { throw 'Bulk install is not idempotent' }
++Write-Host 'PASS: independent IDs, bulk installation preserves current style, and is idempotent.'
+diff --git a/tools/build-skin-deployer.cmd b/tools/build-skin-deployer.cmd
+new file mode 100644
+index 0000000..00acf4e
+--- /dev/null
++++ b/tools/build-skin-deployer.cmd
+@@ -0,0 +1,9 @@
++@echo off
++setlocal
++cd /d "%~dp0.."
++call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat
++if errorlevel 1 exit /b 1
++msbuild weasel.sln /t:WeaselDeployer /nr:false /m:4 /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /v:minimal
++if errorlevel 1 exit /b 1
++msbuild weasel.sln /t:WeaselDeployer /nr:false /m:4 /p:Configuration=Release /p:Platform=Win32 /p:WindowsTargetPlatformVersion=10.0 /v:minimal
++exit /b %errorlevel%
+diff --git a/tools/generate-skin-previews.ps1 b/tools/generate-skin-previews.ps1
+new file mode 100644
+index 0000000..4ee0bed
+--- /dev/null
++++ b/tools/generate-skin-previews.ps1
+@@ -0,0 +1,50 @@
++﻿$ErrorActionPreference = 'Stop'
++Add-Type -AssemblyName System.Drawing
++$skins = Join-Path (Split-Path $PSScriptRoot -Parent) 'rime/skins'
++$output = Join-Path $skins 'preview'
++New-Item -ItemType Directory -Path $output -Force | Out-Null
++function Rounded-Path([float]$x, [float]$y, [float]$w, [float]$h, [float]$radius) {
++  $path = New-Object Drawing.Drawing2D.GraphicsPath
++  $d = $radius * 2
++  $path.AddArc($x, $y, $d, $d, 180, 90)
++  $path.AddArc($x+$w-$d, $y, $d, $d, 270, 90)
++  $path.AddArc($x+$w-$d, $y+$h-$d, $d, $d, 0, 90)
++  $path.AddArc($x, $y+$h-$d, $d, $d, 90, 90)
++  $path.CloseFigure()
++  return ,$path
++}
++foreach ($file in Get-ChildItem -LiteralPath $skins -Filter 'azure_pill*.yaml') {
++  $yaml = [IO.File]::ReadAllText($file.FullName)
++  $id = [regex]::Match($yaml, 'style/color_scheme: (\w+)').Groups[1].Value
++  $name = [regex]::Match($yaml, 'name: "([^"]+)"').Groups[1].Value
++  $rgba = [regex]::Match($yaml, 'hilited_candidate_back_color: 0x([0-9A-Fa-f]{8})').Groups[1].Value
++  $accent = [Drawing.Color]::FromArgb(255, [Convert]::ToInt32($rgba.Substring(0,2),16), [Convert]::ToInt32($rgba.Substring(2,2),16), [Convert]::ToInt32($rgba.Substring(4,2),16))
++  $bitmap = New-Object Drawing.Bitmap(480, 260)
++  $g = [Drawing.Graphics]::FromImage($bitmap)
++  $owned = @($g, $bitmap)
++  try {
++    $g.SmoothingMode = 'AntiAlias'
++    $g.TextRenderingHint = 'AntiAliasGridFit'
++    $g.Clear([Drawing.Color]::FromArgb(240,240,240))
++    $font = New-Object Drawing.Font('Microsoft YaHei UI', 16, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
++    $small = New-Object Drawing.Font('Microsoft YaHei UI', 13, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
++    $brush = New-Object Drawing.SolidBrush($accent)
++    $border = New-Object Drawing.Pen([Drawing.Color]::FromArgb(206,206,206))
++    $shadow = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(25,0,0,0))
++    $outer = Rounded-Path 18 86 444 82 16
++    $shadowPath = Rounded-Path 18 91 444 82 16
++    $selected = Rounded-Path 30 103 100 48 13
++    $owned += @($font,$small,$brush,$border,$shadow,$outer,$shadowPath,$selected)
++    $g.DrawString($name, $font, [Drawing.Brushes]::Black, 22, 25)
++    $g.DrawString('输入：pi fu', $small, [Drawing.Brushes]::DimGray, 22, 60)
++    $g.FillPath($shadow,$shadowPath)
++    $g.FillPath([Drawing.Brushes]::White,$outer)
++    $g.DrawPath($border,$outer)
++    $g.FillPath($brush,$selected)
++    $g.DrawString('1. 皮肤', $font, [Drawing.Brushes]::White, 42, 117)
++    $g.DrawString('2. 预览', $font, [Drawing.Brushes]::Black, 154, 117)
++    $g.DrawString('3. 配色', $font, [Drawing.Brushes]::Black, 275, 117)
++    $g.DrawString('候选配色示意 · 实际大小随 DPI 和配置变化', $small, [Drawing.Brushes]::DimGray, 22, 206)
++    $bitmap.Save((Join-Path $output "color_scheme_$id.png"), [Drawing.Imaging.ImageFormat]::Png)
++  } finally { foreach ($item in $owned) { $item.Dispose() } }
++}
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index c6d2bc8..231d04c 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -226,7 +226,8 @@ void clearNestedSkinLeaf(YAML::Node root, const std::string& path) {
+     }
+   }
+ }
+-void skin(const fs::path& user, const fs::path& theme, const fs::path& stage) {
++void skin(const fs::path& user, const fs::path& theme, const fs::path& stage,
++          bool registerOnly = false) {
+   auto ui = load(user / L"weasel.custom.yaml", true);
+   auto target = patch(ui);
+   auto skinDoc = load(theme);
+@@ -234,8 +235,13 @@ void skin(const fs::path& user, const fs::path& theme, const fs::path& stage) {
+   require(values.size() > 0, "Skin is empty");
+   for (auto item : values) {
+     auto key = item.first.Scalar();
+-    require(key.rfind("style/", 0) == 0 || key == "preset_color_schemes/azure_pill",
++    const bool palette = key == "preset_color_schemes/azure_pill" ||
++                         key == "preset_color_schemes/azure_pill_navy" ||
++                         key == "preset_color_schemes/azure_pill_black" ||
++                         key == "preset_color_schemes/azure_pill_green";
++    require(key.rfind("style/", 0) == 0 || palette,
+             "Unsupported skin setting: " + key);
++    if (registerOnly && !palette) continue;
+     clearNestedSkinLeaf(target, key);
+     target[key] = YAML::Clone(item.second);
+   }
+@@ -249,15 +255,51 @@ int wmain(int argc, wchar_t** argv) {
+       require(argc == 4, "prepare requires USER STAGE"); prepare(argv[2], argv[3]);
+     } else if (std::wstring(argv[1]) == L"skin") {
+       require(argc == 5, "skin requires USER THEME STAGE"); skin(argv[2], argv[3], argv[4]);
++    } else if (std::wstring(argv[1]) == L"skins") {
++      require(argc == 5, "skins requires USER DIRECTORY STAGE");
++      auto current = fs::path(argv[2]);
++      const auto stage = fs::path(argv[4]);
++      int count = 0;
++      for (const auto& entry : fs::directory_iterator(argv[3])) {
++        if (!entry.is_regular_file() || entry.path().extension() != L".yaml" ||
++            entry.path().stem().wstring().rfind(L"azure_pill", 0) != 0) continue;
++        skin(current, entry.path(), stage, true);
++        current = stage;
++        ++count;
++      }
++      require(count > 0, "No bundled skins found");
++    } else if (std::wstring(argv[1]) == L"skins-verify") {
++      require(argc == 4, "skins-verify requires USER DIRECTORY");
++      auto ui = load(fs::path(argv[2]) / L"build" / L"weasel.yaml");
++      int count = 0;
++      for (const auto& entry : fs::directory_iterator(argv[3])) {
++        if (!entry.is_regular_file() || entry.path().extension() != L".yaml" ||
++            entry.path().stem().wstring().rfind(L"azure_pill", 0) != 0) continue;
++        auto values = patch(load(entry.path()));
++        const auto id = values["style/color_scheme"].as<std::string>();
++        const auto expected = values["preset_color_schemes/" + id];
++        const auto actual = ui["preset_color_schemes"][id];
++        require(actual.IsMap(), "Installed skin missing: " + id);
++        for (auto item : expected) {
++          const auto key = item.first.Scalar();
++          require(YAML::Dump(actual[key]) == YAML::Dump(item.second),
++                  "Installed skin mismatch: " + id + "/" + key);
++        }
++        ++count;
++      }
++      require(count > 0, "No bundled skins found");
+     } else if (std::wstring(argv[1]) == L"skin-verify") {
+       require(argc == 3 || argc == 4, "skin-verify requires USER [THEME]");
+       auto ui = load(fs::path(argv[2]) / L"build" / L"weasel.yaml");
+-      require(scalar(ui["style"]["color_scheme"], "azure_pill"), "Skin selection missing");
++      const auto id = argc == 4
++          ? load(argv[3])["patch"]["style/color_scheme"].as<std::string>()
++          : std::string("azure_pill");
++      require(scalar(ui["style"]["color_scheme"], id), "Skin selection missing");
+       require(scalar(ui["style"]["layout"]["type"], "horizontal"), "Horizontal skin layout missing");
+       require(ui["style"]["layout"]["corner_radius"].as<int>(0) == 16, "Skin corner radius missing");
+-      auto palette = ui["preset_color_schemes"]["azure_pill"];
++      auto palette = ui["preset_color_schemes"][id];
+       const auto expected = argc == 4
+-          ? load(argv[3])["patch"]["preset_color_schemes/azure_pill"]
++          ? load(argv[3])["patch"]["preset_color_schemes/" + id]
+           : YAML::Node();
+       require(palette["hilited_candidate_back_color"].as<unsigned int>(0) ==
+               (argc == 4 ? expected["hilited_candidate_back_color"].as<unsigned int>() : 0x286cf4ff),
+-- 
+2.53.0.windows.2
+

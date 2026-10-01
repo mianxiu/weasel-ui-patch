@@ -1,0 +1,113 @@
+From cbeb64efff04d1b1f2120341bda485157f2699ae Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 18:58:09 +0800
+Subject: [PATCH] fix(skins): preserve legacy selected accent during bulk
+ registration
+
+---
+ package-rewrite.ps1       |  9 +++++----
+ test/skin_config_test.ps1 | 12 ++++++++++++
+ tools/rewrite-config.cpp  | 30 ++++++++++++++++++++++++++++++
+ 3 files changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index 576f422..70d6c51 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -1,7 +1,8 @@
++param([ValidatePattern('^Weasel-Rewrite-UI-[A-Za-z0-9-]+$')][string]$PackageName = 'Weasel-Rewrite-UI-Floating-Preview')
+ $ErrorActionPreference = 'Stop'
+ Set-Location $PSScriptRoot
+-$finalDestination = Join-Path $PSScriptRoot 'dist/Weasel-Rewrite-UI-Floating-Preview'
+-$destination = Join-Path $PSScriptRoot ('dist/Weasel-Rewrite-UI-Floating-Preview-stage-' + [Guid]::NewGuid().ToString('N'))
++$finalDestination = Join-Path $PSScriptRoot ('dist/' + $PackageName)
++$destination = Join-Path $PSScriptRoot ('dist/' + $PackageName + '-stage-' + [Guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Force $destination, "$destination/Win32", "$destination/licenses" | Out-Null
+ $rootFiles = @('WeaselServer.exe', 'WeaselDeployer.exe', 'WeaselSetup.exe',
+                'weasel.dll', 'weaselx64.dll', 'rime.dll', 'WinSparkle.dll')
+@@ -66,7 +67,7 @@ $hashes = Get-ChildItem $destination -Recurse -File | Where-Object { $_.Name -ne
+     "$hash  $relative"
+   }
+ $hashes | Set-Content "$destination/SHA256SUMS.txt" -Encoding utf8
+-Compress-Archive -Path "$destination/*" -DestinationPath 'dist/Weasel-Rewrite-UI-Floating-Preview.zip' -Force
++Compress-Archive -Path "$destination/*" -DestinationPath ('dist/' + $PackageName + '.zip') -Force
+ # Retain the previous unpacked package as a recoverable backup.
+ if (Test-Path -LiteralPath $finalDestination) {
+   $resolved = (Resolve-Path -LiteralPath $finalDestination).Path
+@@ -75,4 +76,4 @@ if (Test-Path -LiteralPath $finalDestination) {
+   Move-Item -LiteralPath $resolved -Destination ($finalDestination + '-previous-' + [Guid]::NewGuid().ToString('N'))
+ }
+ Move-Item -LiteralPath $destination -Destination $finalDestination
+-Get-Item 'dist/Weasel-Rewrite-UI-Floating-Preview.zip' | Select-Object FullName, Length
++Get-Item ('dist/' + $PackageName + '.zip') | Select-Object FullName, Length
+diff --git a/test/skin_config_test.ps1 b/test/skin_config_test.ps1
+index 4d82820..bfce4b6 100644
+--- a/test/skin_config_test.ps1
++++ b/test/skin_config_test.ps1
+@@ -42,3 +42,15 @@ foreach ($value in @('style/color_scheme: old','font_point: 30','margin_x: 42','
+ if ($LASTEXITCODE) { throw 'Repeated bulk skin merge failed' }
+ if ([IO.File]::ReadAllText((Join-Path $root 'all-second/weasel.custom.yaml')) -ne $all) { throw 'Bulk install is not idempotent' }
+ Write-Host 'PASS: independent IDs, bulk installation preserves current style, and is idempotent.'
++
++$legacy = Join-Path $root 'legacy'
++New-Item -ItemType Directory -Path $legacy | Out-Null
++$navy = [IO.File]::ReadAllText((Join-Path $repo 'rime/skins/azure_pill_navy.yaml')).Replace('azure_pill_navy','azure_pill')
++[IO.File]::WriteAllText((Join-Path $legacy 'weasel.custom.yaml'), $navy, [Text.UTF8Encoding]::new($false))
++& $helper skins $legacy (Join-Path $repo 'rime/skins') (Join-Path $root 'migrated')
++if ($LASTEXITCODE) { throw 'Legacy accent migration failed' }
++$migrated = [IO.File]::ReadAllText((Join-Path $root 'migrated/weasel.custom.yaml'))
++foreach ($value in @('style/color_scheme: azure_pill_navy','style/color_scheme_dark: azure_pill_navy')) {
++  if (!$migrated.Contains($value)) { throw "Legacy accent changed: $value" }
++}
++Write-Host 'PASS: bulk installation keeps the accent selected by older installers.'
+diff --git a/tools/rewrite-config.cpp b/tools/rewrite-config.cpp
+index 231d04c..9ab0715 100644
+--- a/tools/rewrite-config.cpp
++++ b/tools/rewrite-config.cpp
+@@ -259,6 +259,23 @@ int wmain(int argc, wchar_t** argv) {
+       require(argc == 5, "skins requires USER DIRECTORY STAGE");
+       auto current = fs::path(argv[2]);
+       const auto stage = fs::path(argv[4]);
++      // Older accent installers reused azure_pill. Keep its visible accent
++      // when registering the blue palette under that original ID.
++      auto original = patch(load(current / L"weasel.custom.yaml", true));
++      auto oldPalette = original["preset_color_schemes/azure_pill"];
++      if (!oldPalette) oldPalette = original["preset_color_schemes"]["azure_pill"];
++      std::string migratedId;
++      if (oldPalette.IsMap() && oldPalette["hilited_candidate_back_color"]) {
++        for (const auto& entry : fs::directory_iterator(argv[3])) {
++          if (!entry.is_regular_file() || entry.path().extension() != L".yaml" ||
++              entry.path().stem().wstring().rfind(L"azure_pill_", 0) != 0) continue;
++          auto values = patch(load(entry.path()));
++          auto id = values["style/color_scheme"].as<std::string>();
++          if (oldPalette["hilited_candidate_back_color"].as<unsigned int>() ==
++              values["preset_color_schemes/" + id]["hilited_candidate_back_color"].as<unsigned int>())
++            migratedId = id;
++        }
++      }
+       int count = 0;
+       for (const auto& entry : fs::directory_iterator(argv[3])) {
+         if (!entry.is_regular_file() || entry.path().extension() != L".yaml" ||
+@@ -268,6 +285,19 @@ int wmain(int argc, wchar_t** argv) {
+         ++count;
+       }
+       require(count > 0, "No bundled skins found");
++      if (!migratedId.empty()) {
++        auto merged = load(stage / L"weasel.custom.yaml");
++        auto target = patch(merged);
++        for (const auto key : {"color_scheme", "color_scheme_dark"}) {
++          const auto path = std::string("style/") + key;
++          auto selected = original[path];
++          if (!selected) selected = original["style"][key];
++          if (!scalar(selected, "azure_pill")) continue;
++          clearNestedSkinLeaf(target, path);
++          target[path] = migratedId;
++        }
++        save(merged, stage / L"weasel.custom.yaml");
++      }
+     } else if (std::wstring(argv[1]) == L"skins-verify") {
+       require(argc == 4, "skins-verify requires USER DIRECTORY");
+       auto ui = load(fs::path(argv[2]) / L"build" / L"weasel.yaml");
+-- 
+2.53.0.windows.2
+

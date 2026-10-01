@@ -19,6 +19,7 @@ param(
   [string]$Asset = (Join-Path (Split-Path $PSScriptRoot -Parent) 'weasel\dist\Weasel-Rewrite-UI.zip'),
   [string]$Owner = 'mianxiu',
   [string]$Repo = 'weasel-ui-patch',
+  [string]$TargetCommitish = 'main',
   [switch]$Prerelease,
   [switch]$Draft,
   [switch]$WhatIf
@@ -44,7 +45,7 @@ Write-Host ("说明      : {0}  ({1} 字符)" -f (Split-Path $NotesFile -Leaf), 
 Write-Host ("草稿/预发布: draft={0} prerelease={1}" -f [bool]$Draft, [bool]$Prerelease)
 
 # 顺便报一下包的身份，避免发错东西
-$sums = Join-Path $assetItem.DirectoryName 'Weasel-Rewrite-UI\SHA256SUMS.txt'
+$sums = Join-Path (Join-Path $assetItem.DirectoryName $assetItem.BaseName) 'SHA256SUMS.txt'
 if (Test-Path $sums) {
   $serverHash = (Get-Content $sums | Where-Object { $_ -match 'WeaselServer\.exe$' } | Select-Object -First 1)
   if ($serverHash) { Write-Host ("包内 WeaselServer.exe: " + ($serverHash -split '\s+')[0].Substring(0,16) + '…') }
@@ -59,11 +60,14 @@ if ($WhatIf) {
 # ------------------------------------------------------------------ 取令牌
 $token = $env:GITHUB_TOKEN
 if (!$token) {
-  $secure = Read-Host -Prompt 'GitHub 令牌（输入不回显）' -AsSecureString
-  $token = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+  $credentialText = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    foreach ($line in $credentialText) {
+      if ($line -match '^password=(.+)$') { $token = $Matches[1]; break }
+    }
+  }
 }
-if (!$token) { throw "没有拿到令牌" }
+if (!$token) { throw '请先配置本机 GitHub 登录，或设置 GITHUB_TOKEN；不要将令牌发送到对话中。' }
 
 $headers = @{
   Authorization          = "Bearer $token"
@@ -88,9 +92,10 @@ Write-Host ""
 Write-Host "创建 release ..."
 $payload = @{
   tag_name   = $Tag
+  target_commitish = $TargetCommitish
   name       = $ReleaseName
   body       = $notes
-  draft      = [bool]$Draft
+  draft      = $true
   prerelease = [bool]$Prerelease
 } | ConvertTo-Json -Depth 4
 
@@ -106,9 +111,7 @@ try {
     -Uri $uploadUri -InFile $assetItem.FullName | Out-Null
 }
 catch {
-  # 422 already_exists 说明附件本来就在，按成功处理
-  if ($_.Exception.Response.StatusCode.value__ -ne 422) { throw }
-  Write-Host "  （附件已存在，跳过）"
+  throw "附件上传失败，Release 保持草稿：$($release.html_url)。$($_.Exception.Message)"
 }
 
 # 不要相信 POST 的响应体（实测可能返回空对象），重新拉一次列表来核对
@@ -121,8 +124,19 @@ if (!$mine) {
 if ($mine.size -ne $assetItem.Length) {
   throw "附件大小不符：远端 $($mine.size) 字节 / 本地 $($assetItem.Length) 字节"
 }
+if ($mine.state -ne 'uploaded') { throw '附件尚未完成上传，Release 保持草稿。' }
+if ($mine.digest) {
+  $localDigest = 'sha256:' + (Get-FileHash -LiteralPath $Asset -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($mine.digest -ne $localDigest) { throw '远端附件 SHA256 不符，Release 保持草稿。' }
+}
 Write-Host ("  已上传并核对: {0}  ({1:N1} MB, state={2})" -f $mine.name, ($mine.size / 1MB), $mine.state)
 Write-Host ("  下载地址: " + $mine.browser_download_url)
+if (!$Draft) {
+  $publish = @{draft=$false; make_latest= if ($Prerelease) { 'false' } else { 'true' }} | ConvertTo-Json
+  $release = Invoke-RestMethod -Method Patch -Headers $headers -ContentType 'application/json' `
+    -Uri "https://api.github.com/repos/$Owner/$Repo/releases/$($release.id)" -Body $publish
+  if ($release.draft) { throw 'Release 发布后仍是草稿，请检查 GitHub 状态。' }
+}
 
 Write-Host ""
 Write-Host "完成。"

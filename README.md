@@ -16,9 +16,9 @@
 
 ## 当前预览版
 
-构建标识为 `rewrite-ui-half-tab-spacing-20261001`。当前本地分发目录是 `weasel/dist/Weasel-Rewrite-UI-Floating-Preview`，压缩包为同名 ZIP。候选框内显示 Tab 声调拼音行，共用主候选圆角；不再使用独立编辑窗口或上标。第 1–4 个音节隐藏编号显示，数字定位仍从 1 开始；字号约为候选的 80%（至少 10pt）。
+构建标识为 `rewrite-ui-all-in-one-20261001`。当前本地分发目录是 `weasel/dist/Weasel-Rewrite-UI`，压缩包为同名 ZIP。候选框内显示 Tab 声调拼音行，共用主候选圆角；不再使用独立编辑窗口或上标。第 1–4 个音节隐藏编号显示，数字定位仍从 1 开始；字号约为候选的 80%（至少 10pt）。
 
-Azure Pill 提供蓝、深蓝、深黑、深绿四种配色，普通及悬停候选使用黑字，悬停背景为浅灰色 `#EEEEEE`；前 4 个 Tab 音节按隐藏编号宽度的一半增加间距。该版本为本地预览，更新文档和打包不会自动发布 Release。
+Azure Pill 提供蓝、深蓝、深黑、深绿四种配色，普通及悬停候选使用黑字，悬停背景为浅灰色 `#EEEEEE`；前 4 个 Tab 音节按隐藏编号宽度的一半增加间距。下载 GitHub Release 的 `Weasel-Rewrite-UI.zip`，完整解压后只需普通双击 `Apply-Patch.cmd`，一次安装全部程序补丁、Lua、配置、四种皮肤及预览图，并部署校验。已有皮肤选择和布局保留。
 
 ## Tab 音节编辑
 
@@ -49,9 +49,9 @@ pwsh -NoProfile -File .\setup.ps1
 # 2. 编译并打包（构建还需要不被 git 跟踪的 weasel.props 与 deps\）
 cd ..\weasel
 .\build-rewrite.cmd
-pwsh -NoProfile -File .\package-rewrite.ps1
-# 3. 一键安装：程序、YAML、Lua、启用、部署与验证
-.\dist\Weasel-Rewrite-UI-Floating-Preview\Apply-Patch.cmd
+pwsh -NoProfile -File .\package-rewrite.ps1 -PackageName Weasel-Rewrite-UI
+# 3. 一键安装：全部程序补丁、YAML、Lua、四种皮肤、预览、部署与验证
+.\dist\Weasel-Rewrite-UI\Apply-Patch.cmd
 
 # 4. 完全退出并重开测试应用；仍未刷新时再注销或重启 Windows
 ```
@@ -96,7 +96,7 @@ pwsh -NoProfile -File .\resync.ps1
 # 1) 在工作副本里出包
 cd ..\weasel
 .\build-rewrite.cmd
-pwsh -NoProfile -File .\package-rewrite.ps1      # 生成 dist\Weasel-Rewrite-UI-Floating-Preview.zip
+pwsh -NoProfile -File .\package-rewrite.ps1 -PackageName Weasel-Rewrite-UI      # 生成 dist\Weasel-Rewrite-UI-Floating-Preview.zip
 
 # 2) 准备令牌（推荐 fine-grained PAT，只勾本仓库的 Contents: Read and write）
 #    不要把它写进任何文件或贴到对话里
