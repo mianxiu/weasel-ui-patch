@@ -1,0 +1,134 @@
+From abc53d4ac56af3b223780cca53ddbf05bc069c9d Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 22:55:00 +0800
+Subject: [PATCH] Size Tab editing rectangles to the pronunciation line height
+
+---
+ INSTALL-PATCH.md                  |  1 +
+ REWRITE-UI.md                     |  1 +
+ WeaselUI/DirectWriteResources.cpp | 10 +++++++++-
+ WeaselUI/RewriteLayout.h          |  5 ++++-
+ WeaselUI/WeaselPanel.cpp          | 11 +++++++++--
+ rewrite-build.txt                 |  2 +-
+ test/rewrite_pipeline_test.cpp    |  6 +++---
+ 7 files changed, 28 insertions(+), 8 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index e744cbc..2428fd8 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+ > **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+ > **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+ > **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index e016e4d..128f0f8 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+ > **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+ > **2026-10-01 Tab 编辑框紧凑外观：** 输入序号与编辑字符保持两个独立浅灰框，统一使用更小字号；背景高度不超过音节小写 s 的实际可见高度，约 1px 内边距，按实际字形居中。
+ > **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+diff --git a/WeaselUI/DirectWriteResources.cpp b/WeaselUI/DirectWriteResources.cpp
+index edd6fe1..b515ef0 100644
+--- a/WeaselUI/DirectWriteResources.cpp
++++ b/WeaselUI/DirectWriteResources.cpp
+@@ -156,8 +156,16 @@ HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
+   const float ratio = (std::max)(.55f, (std::min)(1.f, lower.first / digit.first));
+   init_font(font_face, rewritePoint * ratio, pRewriteLabelTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
+   rewriteLabelBaselineOffset = lower.second - glyphMetrics(pRewriteLabelTextFormat, L"0").second;
+-  // Double the compact capsule height while keeping both fields uniform.
++  // Size the filled rectangle to the complete pronunciation text line.
++  // Its center stays unchanged; this changes the capsule's physical height.
+   rewriteBadgeHeight = 2 * (std::max)(1, (int)floor(lower.first));
++  ComPtr<IDWriteTextLayout> badgeLine;
++  if (SUCCEEDED(pDWFactory->CreateTextLayout(L"s", 1, pRewriteTextFormat.Get(),
++                                              1000, 1000, &badgeLine))) {
++    DWRITE_TEXT_METRICS metrics{};
++    if (SUCCEEDED(badgeLine->GetMetrics(&metrics)))
++      rewriteBadgeHeight = (std::max)(1, (int)ceil(metrics.height));
++  }
+   const float padding = (std::min)(2 * dpiScaleLayout, rewriteBadgeHeight * .15f);
+   init_font(font_face, rewritePoint * .5f, pRewriteBadgeTextFormat, DWRITE_WORD_WRAPPING_NO_WRAP);
+   const float badgeInk = glyphMetrics(pRewriteBadgeTextFormat, L"0123456789abcdefghijklmnopqrstuvwxyz/").first;
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 26bd3b2..ecbdbed 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -41,8 +41,11 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+         layout.GetTextSizeDW(state.replacement, state.replacement.size(), dwr->pRewriteBadgeTextFormat, dwr, &editing);
+       const int pad = (std::max)(1, (int)ceil(dwr->dpiScaleLayout));
+       const int dw = state.index.empty() ? 0 : digits.cx + pad * 2;
+-      const int ew = state.replacement.empty() ? 0 : editing.cx + pad * 2;
++      int ew = state.replacement.empty() ? 0 : editing.cx + pad * 2;
+       const int between = dw && ew ? pad * 2 : 0;
++      // Keep long edit codes within the candidate body; paint the newest tail.
++      if (!vertical && !unwrapped && limit > 0 && ew)
++        ew = (std::min)(ew, (std::max)(1, limit - dw - between));
+       const int w = vertical ? (std::max)(dw, ew) : dw + between + ew;
+       const int h = vertical ? dwr->rewriteBadgeHeight * ((dw && ew) ? 2 : 1) + between : row.cy;
+       const int span = vertical ? h : w;
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 7fb97df..e3f1296 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -956,10 +956,16 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+           D2D1::RectF((float)clip.left, (float)clip.top, (float)clip.right, (float)clip.bottom),
+           D2D1_ANTIALIAS_MODE_ALIASED);
+       // Ordinary candidate-style numbering and pronunciation share a baseline.
+-      if (!cell.unit.text.empty())
++      if (!cell.unit.text.empty()) {
++        if (cell.unit.badge) pDWR->pRenderTarget->PushAxisAlignedClip(
++            D2D1::RectF((float)cell.text.left, (float)cell.text.top,
++                       (float)cell.text.right, (float)cell.text.bottom),
++            D2D1_ANTIALIAS_MODE_ALIASED);
+         _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), color,
+                  cell.unit.badge ? pDWR->pRewriteBadgeTextFormat.Get() : pDWR->pRewriteTextFormat.Get(),
+                  cell.unit.badge);
++        if (cell.unit.badge) pDWR->pRenderTarget->PopAxisAlignedClip();
++      }
+       if (!cell.unit.label.empty())
+         _TextOut(cell.label, cell.unit.label, cell.unit.label.size(),
+                  cell.unit.badge ? 0xff555555 :
+@@ -1743,7 +1749,8 @@ void WeaselPanel::_TextOut(const CRect& rc,
+   DWRITE_OVERHANG_METRICS omt;
+   HR(pDWR->GetLayoutOverhangMetrics(&omt));
+   if (centerInk) {
+-    offsetx += (omt.left - omt.right) / 2;
++    offsetx += omt.left + omt.right > 0 ? -omt.right - dpiScaleLayout :
++                                        (omt.left - omt.right) / 2;
+     offsety += (omt.top - omt.bottom) / 2;
+   } else if (m_style.layout_type != UIStyle::LAYOUT_VERTICAL_TEXT && omt.left > 0)
+     offsetx += omt.left;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 727f505..39051dd 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-double-badges-20261001
++Build-ID: rewrite-ui-tab-full-height-badges-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 61e2602..4140e45 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -323,9 +323,9 @@ int main() {
+         };
+         assert(abs(inkHeight(dwr->pRewriteTextFormat.Get(),L"s") -
+                    inkHeight(dwr->pRewriteLabelTextFormat.Get(),L"0")) <= dwr->dpiScaleLayout);
+-        const float lowerHeight = inkHeight(dwr->pRewriteTextFormat.Get(), L"s");
+-        assert(dwr->rewriteBadgeHeight <= 2 * lowerHeight);
+-        assert(dwr->rewriteBadgeHeight > 2 * lowerHeight - 2.01f);
++        CSize pronunciationLine(0, 0);
++        wrappedLayout.GetTextSizeDW(L"s", 1, dwr->pRewriteTextFormat, dwr, &pronunciationLine);
++        assert(abs(dwr->rewriteBadgeHeight - pronunciationLine.cy) <= (int)ceil(dwr->dpiScaleLayout));
+         assert(inkHeight(dwr->pRewriteBadgeTextFormat.Get(), L"j") < dwr->rewriteBadgeHeight);
+         auto compactState = wrapped.rewrite;
+         compactState.replacement = L"keyjufmedsxi";
+-- 
+2.53.0.windows.2
+
