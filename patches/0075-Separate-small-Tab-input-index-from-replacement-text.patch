@@ -1,0 +1,179 @@
+From c7da3b951c605e78635d97599e31b46118dceda5 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 22:09:20 +0800
+Subject: [PATCH] Separate small Tab input index from replacement text
+
+---
+ INSTALL-PATCH.md               |  1 +
+ REWRITE-UI.md                  |  1 +
+ WeaselUI/RewriteLayout.h       | 32 ++++++++++++++++++++------------
+ WeaselUI/WeaselPanel.cpp       | 27 +++++++++++++++++++--------
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp |  6 ++++--
+ 6 files changed, 46 insertions(+), 23 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index eea3937..5ffd60a 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+ > **2026-10-01 Tab 输入序号外观：** 末尾正在输入的序号使用浅灰色圆角背景和深灰文字，字号与前面的 Tab 音节一致，外侧填充沿用 Tab 音节的左右及上下留白。
+ > **2026-10-01 Tab 序号连续输入：** 相邻序号键间隔小于 350 毫秒才拼接编号；超时或插入其他按键会清空待拼接前缀，保留最后选择。每次数字按键重新计时，松键不打断连续输入。超时在下次按键时判定，不重绘或移动已选音节。
+ > **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index d4cfacf..df74a5b 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 序号与编辑字符分开：** 末尾输入序号单独使用浅灰色小圆角框，字体与 Tab 前置分组编号一致；后续编辑字符独立显示，保留音节字号和浅灰背景。
+ > **2026-10-01 Tab 输入序号外观：** 末尾正在输入的序号使用浅灰色圆角背景和深灰文字，字号与前面的 Tab 音节一致，外侧填充沿用 Tab 音节的左右及上下留白。
+ > **2026-10-01 Tab 序号连续输入：** 相邻序号键间隔小于 350 毫秒才拼接编号；超时或插入其他按键会清空待拼接前缀，保留最后选择。每次数字按键重新计时，松键不打断连续输入。超时在下次按键时判定，不重绘或移动已选音节。
+ > **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index fd8451b..6b51213 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -33,7 +33,11 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     const auto& unit = units[unitIndex];
+     CSize text(0, 0), label(0, 0);
+     std::wstring number;
+-    if (!unit.label.empty() && !hiddenNumber(unit.label)) {
++    if (unit.badge) {
++      number = state.index;
++      if (!number.empty())
++        layout.GetTextSizeDW(number, number.size(), dwr->pRewriteLabelTextFormat, dwr, &label);
++    } else if (!unit.label.empty() && !hiddenNumber(unit.label)) {
+       wchar_t formatted[128];
+       swprintf_s(formatted, style.label_text_format.c_str(), unit.label.c_str());
+       number = formatted;
+@@ -41,17 +45,21 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     }
+     const int labelOffset = vertical ? 0 : (std::max)(0, (int)ceil(dwr->rewriteLabelBaselineOffset));
+     const int lw = number.empty() ? 0 : label.cx + px * 2;
++    const auto& textValue = unit.badge ? state.replacement : unit.text;
++    const int prefixGap = unit.badge ? gap : margin;
+     // A replacement may contain many pronunciations in one original slot.
+     // Wrap that text too, leaving room for its visible group prefix.
+     const int savedWidth = layout._style.max_width;
+     if (!vertical && !unwrapped && limit > 0)
+-      layout._style.max_width = (std::max)(1, limit - (lw ? lw + margin : 0));
+-    layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pRewriteTextFormat,
+-                        dwr, &text);
++      layout._style.max_width = (std::max)(1, limit - (lw ? lw + prefixGap : 0));
++    if (!textValue.empty())
++      layout.GetTextSizeDW(textValue, textValue.size(), dwr->pRewriteTextFormat,
++                          dwr, &text);
+     layout._style.max_width = savedWidth;
+     const int lh = number.empty() ? 0 : label.cy + py * 2 + labelOffset;
+-    const int w = vertical ? (std::max<LONG>)(text.cx, lw) : text.cx + (lw ? margin + lw : 0);
+-    const int h = vertical ? text.cy + (lh ? margin + lh : 0) : (std::max<LONG>)(text.cy, lh);
++    const int separation = textValue.empty() ? 0 : prefixGap;
++    const int w = vertical ? (std::max<LONG>)(text.cx, lw) : text.cx + (lw ? separation + lw : 0);
++    const int h = vertical ? text.cy + (lh ? separation + lh : 0) : (std::max<LONG>)(text.cy, lh);
+     const int span = vertical ? h : w;
+     if (!unwrapped && limit > 0 && advance > 0 && advance + span > limit) {
+       cross += line + gap; advance = 0; line = 0;
+@@ -65,8 +73,8 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+       lb.SetRect(bx, by, bx + lw, by + lh);
+       lr.SetRect(bx + px, by + py + labelOffset, bx + px + label.cx, by + py + labelOffset + label.cy);
+     }
+-    if (lw) tr.OffsetRect(vertical ? 0 : lw + margin, vertical ? lh + margin : py);
+-    auto shown = unit; shown.label = number;
++    if (lw) tr.OffsetRect(vertical ? 0 : lw + separation, vertical ? lh + separation : py);
++    auto shown = unit; shown.label = number; shown.text = textValue;
+     result.cells.push_back({shown, CRect(x, y, x + w, y + h), tr, lb, lr});
+     result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
+     result.size.cy = (std::max<LONG>)(result.size.cy, y + h);
+@@ -111,10 +119,10 @@ inline RewriteLayout MeasureStableRewrite(Layout& layout, const RewriteState& st
+   for (auto& cell : result.cells) {
+     int dx = vertical ? 0 : -shift, dy = vertical ? -shift : 0;
+     if (cell.unit.badge) {
+-      dx = editor.left - cell.text.left;
+-      dy = editor.top - cell.text.top;
+-      if (vertical) dy -= (std::max)(0, cell.text.Height() - editor.Height());
+-      else dx -= (std::max)(0, cell.text.Width() - editor.Width());
++      dx = editor.left - cell.back.left;
++      dy = editor.top - cell.back.top;
++      if (vertical) dy -= (std::max)(0, cell.back.Height() - editor.Height());
++      else dx -= (std::max)(0, cell.back.Width() - editor.Width());
+     }
+     cell.back.OffsetRect(dx, dy); cell.text.OffsetRect(dx, dy);
+     cell.labelBack.OffsetRect(dx, dy); cell.label.OffsetRect(dx, dy);
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 3233e05..48841c9 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -901,11 +901,20 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+     if (stable && background) cell.labelBack.IntersectRect(cell.labelBack, clip);
+     if (background) {
+       if (cell.unit.badge) {
+-        auto back = cell.back; back.OffsetRect(rc.left, rc.top);
+-        back.InflateRect(DPI_SCALE(4), DPI_SCALE(m_style.hilite_padding_y));
+-        if (stable) back.IntersectRect(back, clip);
+-        _HighlightText(dc, back, 0xffe8e8e8, 0, DPI_SCALE(6),
+-                       BackType::TEXT, IsToRoundStruct());
++        if (!cell.unit.label.empty()) {
++          auto back = cell.labelBack;
++          back.InflateRect(0, DPI_SCALE(2));
++          if (stable) back.IntersectRect(back, clip);
++          _HighlightText(dc, back, 0xffe8e8e8, 0, DPI_SCALE(4),
++                         BackType::TEXT, IsToRoundStruct());
++        }
++        if (!cell.unit.text.empty()) {
++          auto back = cell.text;
++          back.InflateRect(DPI_SCALE(4), DPI_SCALE(m_style.hilite_padding_y));
++          if (stable) back.IntersectRect(back, clip);
++          _HighlightText(dc, back, 0xffe8e8e8, 0, DPI_SCALE(6),
++                         BackType::TEXT, IsToRoundStruct());
++        }
+       } else if (cell.unit.active) {
+         auto back = cell.back; back.OffsetRect(rc.left, rc.top);
+         // Pad the painted fill, without changing text layout or window height.
+@@ -949,11 +958,13 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+           D2D1::RectF((float)clip.left, (float)clip.top, (float)clip.right, (float)clip.bottom),
+           D2D1_ANTIALIAS_MODE_ALIASED);
+       // Ordinary candidate-style numbering and pronunciation share a baseline.
+-      _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), color,
+-               pDWR->pRewriteTextFormat.Get());
++      if (!cell.unit.text.empty())
++        _TextOut(cell.text, cell.unit.text, cell.unit.text.size(), color,
++                 pDWR->pRewriteTextFormat.Get());
+       if (!cell.unit.label.empty())
+         _TextOut(cell.label, cell.unit.label, cell.unit.label.size(),
+-                 cell.unit.active ? 0xffd0d0d0 : m_style.label_text_color,
++                 cell.unit.badge ? 0xff555555 :
++                     (cell.unit.active ? 0xffd0d0d0 : m_style.label_text_color),
+                  pDWR->pRewriteLabelTextFormat.Get());
+       if (stable) pDWR->pRenderTarget->PopAxisAlignedClip();
+     }
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 4b50398..01c4d54 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-index-badge-20261001
++Build-ID: rewrite-ui-tab-separate-index-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 2a3f84f..c2811c4 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -325,8 +325,10 @@ int main() {
+                    inkHeight(dwr->pRewriteLabelTextFormat.Get(),L"0")) <= dwr->dpiScaleLayout);
+       }
+       for (const auto& cell : measured.cells) if (!cell.unit.label.empty()) {
+-        if (mode == 2) assert(cell.labelBack.bottom < cell.text.top);
+-        else assert(cell.labelBack.right < cell.text.left);
++        if (!cell.unit.text.empty()) {
++          if (mode == 2) assert(cell.labelBack.bottom < cell.text.top);
++          else assert(cell.labelBack.right < cell.text.left);
++        }
+         assert(cell.label.left > cell.labelBack.left);
+         if (mode != 2) assert(cell.label.top >= cell.text.top);
+         assert(cell.labelBack.right <= cell.back.right);
+-- 
+2.53.0.windows.2
+
