@@ -1,7 +1,7 @@
 From 1464ed4fdc3e1223abdd4cfe902dc4abf5170556 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:36:26 +0800
-Subject: [PATCH 08/57] docs(rewrite-ui): record acceptance results, config
+Subject: [PATCH 08/58] docs(rewrite-ui): record acceptance results, config
  reload semantics and known leftovers
 
 ---

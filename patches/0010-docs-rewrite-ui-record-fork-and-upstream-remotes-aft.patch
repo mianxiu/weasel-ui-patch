@@ -1,7 +1,7 @@
 From 40268412b84c010dd4af5edb30e17347f0586e05 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Mon, 28 Sep 2026 20:42:04 +0800
-Subject: [PATCH 10/57] docs(rewrite-ui): record fork and upstream remotes
+Subject: [PATCH 10/58] docs(rewrite-ui): record fork and upstream remotes
  after pushing the branch
 
 ---

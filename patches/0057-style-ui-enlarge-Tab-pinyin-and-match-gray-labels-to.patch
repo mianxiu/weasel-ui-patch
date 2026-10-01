@@ -1,7 +1,7 @@
 From b9907d35252f36320f2bff2a1e69855b37222f0e Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 10:50:32 +0800
-Subject: [PATCH 57/57] style(ui): enlarge Tab pinyin and match gray labels to
+Subject: [PATCH 57/58] style(ui): enlarge Tab pinyin and match gray labels to
  lowercase height
 
 ---
