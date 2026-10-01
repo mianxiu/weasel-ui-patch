@@ -1,0 +1,148 @@
+From 6a1856b3d799fe3fc0026be97c6225fb8a047731 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 20:45:09 +0800
+Subject: [PATCH] Expire Tab index prefixes between nonconsecutive selector
+ keys
+
+---
+ INSTALL-PATCH.md                 |  1 +
+ REWRITE-UI.md                    |  1 +
+ rewrite-build.txt                |  2 +-
+ rime/lua/indexed_rewrite_pro.lua | 18 +++++++++++++++++-
+ test/installer_rime_test.cpp     | 20 +++++++++++++++++++-
+ 5 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 8646af6..6b5bb58 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 序号连续输入：** 相邻序号键间隔小于 350 毫秒才拼接编号；超时或插入其他按键会清空待拼接前缀，保留最后选择。每次数字按键重新计时，松键不打断连续输入。超时在下次按键时判定，不重绘或移动已选音节。
+ > **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+ > **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 皮肤列表与预览：** 普通双击包内 `Apply-Patch.cmd`，自动更新全部程序补丁，并一次安装蓝色、深蓝、深黑、深绿四种皮肤及预览图，保留当前配色和布局。部署完成后重新打开「界面风格设定」即可选择；四种配色使用独立 ID，不再互相覆盖。单独切换脚本同时安装对应预览图。预览图为候选配色示意，实际大小随 DPI 和配置变化。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 5a3f6c7..3623847 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-01 Tab 序号连续输入：** 相邻序号键间隔小于 350 毫秒才拼接编号；超时或插入其他按键会清空待拼接前缀，保留最后选择。每次数字按键重新计时，松键不打断连续输入。超时在下次按键时判定，不重绘或移动已选音节。
+ > **2026-10-01 Tab 换行与分组编号：** 横排 Tab 行以当前主候选区域的实际宽度作为换行边界，保留右侧高亮填充及皮肤留白，不再由长拼音行撑宽整个候选框。一个原音节替换为长拼音串时，文本本身也可换行。前四项编号保持隐藏；之后每组四项仅显示开头 11、21、31、41、111…，组内其余编号隐藏。选择键仍仅使用 1–4，5/6 无操作，7–0 输入声调。
+ > **2026-10-01 Tab 声调与选择：** Tab 音节的外侧上下填充使用主候选的 hilite_padding_y，连接侧仍保留高亮融合留白。音节序号采用 1–4、11–14、21–24…（仅用 1–4），5、6 不触发操作，7、8、9、0 保留给万象声调输入。数字仅选择实际存在的音节；只有组合后的序号存在才继续组合，否则切换至新按键对应的单项，越界单项不改变选择。切换音节保留已完成编辑，Esc 恢复进入 Tab 前的原输入。候选窗尺寸与位置一次更新，避免上方 Tab 弹出时先增高再上移的中间状态。
+ > **2026-10-01 窄台阶连续曲线：** 上一版窄连接仍由两个压扁的圆角组成，中间横向切线看起来像尖折。现在宽度不超过连接圆角直径的台阶改用一条 S 形贝塞尔曲线，与上下竖边相切；保留原始背景范围、文字位置、窗口高度和无交集时的独立填充。
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 56ad2bb..b7eff16 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-wrap-groups-20261001
++Build-ID: rewrite-ui-tab-index-timeout-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/lua/indexed_rewrite_pro.lua b/rime/lua/indexed_rewrite_pro.lua
+index 3028999..4e6002c 100644
+--- a/rime/lua/indexed_rewrite_pro.lua
++++ b/rime/lua/indexed_rewrite_pro.lua
+@@ -38,6 +38,7 @@ local PROP_HINTS = "_indexed_rewrite_hints"
+ local PROP_REPLACEMENT = "_indexed_rewrite_replacement"
+ local PROP_CANCEL_ORIGINAL = "_indexed_rewrite_cancel_original"
+ local PROP_INDEX_PREFIX = "_indexed_rewrite_index_prefix"
++local INDEX_TIMEOUT_SECONDS = 0.35
+ 
+ local function set_prop(ctx, key, value)
+     ctx:set_property(key, value or "")
+@@ -302,10 +303,12 @@ end
+ ------------------------------------------------------------
+ 
+ function M.init(env)
++    env.last_index_key_time = nil
+     clear_props(env.engine.context)
+ end
+ 
+ function M.fini(env)
++    env.last_index_key_time = nil
+     clear_props(env.engine.context)
+ end
+ 
+@@ -331,11 +334,24 @@ function M.func(key, env)
+         stage = ""
+     end
+ 
++    -- Only consecutive selector key-downs can extend a number. Windows Lua's
++    -- CRT clock measures elapsed wall time, including idle time between keys.
++    local now = os.clock()
++    local previous = env.last_index_key_time
++    if stage == "" or not is_digit(repr) or not previous or now < 0 or
++        now < previous or now - previous >= INDEX_TIMEOUT_SECONDS then
++        if get_prop(ctx, PROP_INDEX_PREFIX) ~= "" then
++            set_prop(ctx, PROP_INDEX_PREFIX, "")
++        end
++    end
++    env.last_index_key_time = nil
++
+     if stage ~= "" and (repr == "5" or repr == "6") then
+         return ACCEPTED
+     end
+ 
+     if stage ~= "" and is_digit(repr) then
++        env.last_index_key_time = now >= 0 and now or nil
+         local ranges = parse_ranges(get_prop(ctx, PROP_RANGES))
+         local prefix = get_prop(ctx, PROP_INDEX_PREFIX)
+         local label = prefix .. repr
+@@ -467,7 +483,7 @@ function M.func(key, env)
+             if #current > 1 then
+                 current = current:sub(1, #current - 1)
+                 set_prop(ctx, PROP_INDEX, current)
+-                set_prop(ctx, PROP_INDEX_PREFIX, current)
++                set_prop(ctx, PROP_INDEX_PREFIX, "")
+             else
+                 set_prop(ctx, PROP_INDEX, "")
+                 set_prop(ctx, PROP_INDEX_PREFIX, "")
+diff --git a/test/installer_rime_test.cpp b/test/installer_rime_test.cpp
+index 341a2fe..818b72f 100644
+--- a/test/installer_rime_test.cpp
++++ b/test/installer_rime_test.cpp
+@@ -4,6 +4,8 @@
+ #include <iostream>
+ #include <stdexcept>
+ #include <string>
++#include <chrono>
++#include <thread>
+ void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+ int wmain(int argc, wchar_t** argv) {
+   try {
+@@ -141,13 +143,29 @@ int wmain(int argc, wchar_t** argv) {
+     api->process_key(session, 0xff1b, 0);
+     api->clear_composition(session);
+     std::string longInput;
+-    for (int i = 0; i < 12; ++i) longInput += "jx";
++    for (int i = 0; i < 24; ++i) longInput += "jx";
+     for (char key : longInput) api->process_key(session, key, 0);
+     api->process_key(session, 0xff09, 0);
+     api->process_key(session, '1', 0); expectIndex("1");
+     api->process_key(session, '2', 0); expectIndex("12");
+     api->process_key(session, '1', 0); expectIndex("1");
+     api->process_key(session, '1', 0); expectIndex("11");
++    std::this_thread::sleep_for(std::chrono::milliseconds(450));
++    expectIndex("11"); // Idle timeout must never move the selected syllable.
++    api->process_key(session, '2', 0); expectIndex("2");
++    std::this_thread::sleep_for(std::chrono::milliseconds(200));
++    api->process_key(session, '1', 0); expectIndex("21");
++    std::this_thread::sleep_for(std::chrono::milliseconds(450));
++    api->process_key(session, '1', 0); expectIndex("1");
++    std::this_thread::sleep_for(std::chrono::milliseconds(200));
++    api->process_key(session, '1', 0); expectIndex("11");
++    std::this_thread::sleep_for(std::chrono::milliseconds(200));
++    api->process_key(session, '1', 0); expectIndex("111"); // Each gap, not total duration.
++    api->process_key(session, '5', 0); expectIndex("111");
++    api->process_key(session, '2', 0); expectIndex("2"); // Non-selector breaks continuity.
++    api->process_key(session, '6', 0); expectIndex("2");
++    api->process_key(session, '1', 0); expectIndex("1");
++    api->process_key(session, '1', 0); expectIndex("11");
+     api->process_key(session, 'j', 0); api->process_key(session, 'm', 0);
+     check(std::string(api->get_input(session)) == longInput.substr(0, 8) + "jm" + longInput.substr(10),
+           "Label 11 did not select fifth original syllable");
+-- 
+2.53.0.windows.2
+
