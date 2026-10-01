@@ -1,0 +1,228 @@
+From 4c598f4699ef2cced6ba7d90770a265b398594d2 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Thu, 1 Oct 2026 13:14:11 +0800
+Subject: [PATCH 61/61] style(ui): use gray hover and balance spacing for four
+ hidden Tab labels
+
+---
+ INSTALL-PATCH.md               |  8 +++++---
+ Install-Binaries.ps1           |  2 +-
+ README.md                      |  2 +-
+ REWRITE-UI.md                  |  6 ++++--
+ WeaselUI/RewriteLayout.h       | 22 +++++++++++++++++++---
+ WeaselUI/WeaselPanel.cpp       |  2 +-
+ rewrite-build.txt              |  2 +-
+ rime/skins/README.md           |  6 ++++--
+ test/rewrite_pipeline_test.cpp | 19 +++++++++++++++++--
+ 9 files changed, 53 insertions(+), 16 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 5758257..a21c6e2 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,10 +1,12 @@
++> **2026-10-01 悬停与间距：** 次要候选悬停背景为浅灰色 `#EEEEEE`，文字保持黑色；Tab 前 4 个音节隐藏编号，音节间距按隐藏编号占位补齐，首音节仍与主候选文字对齐，第 5 项起保留编号。
++
+ > **2026-10-01 当前编辑逻辑：** 默认支持连续多音节替换，不再限制替换编码长度，也不需要额外开关；Tab 行实时显示被编辑位置的全部词典拼音，其他原音节与编号保持，退格和 Esc 可恢复。
+ 
+ > **2026-10-01 连续多音节替换：** 输入序号后可连续替换为多个音节，例如第 3 项从 `bǐ` 改成 `bù shì hǎo`，Tab 行完整显示替换读音；这些音节归属原第 3 项，后续原音节及其编号保持。退格逐步缩短读音，清空后恢复原音节。
+ 
+ > **2026-10-01 Tab 实时拼音：** 在第一枚斜杠前保存原候选音节边界，避免 Tab 改变候选后分段错误。索引替换时按当前首候选的词典读音实时更新被编辑音节，未编辑音节保持原读音；退格清空替换恢复原读音。缺少可对应读音时保留已有读音，缺失音节单独回退编码，不再整行退回编码。
+ 
+-> **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–3 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
++> **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–4 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
+ 
+ > **2026-10-01 Tab 填充留白修正：** 选中音节背景在现有文字布局外增加左右 4px、上下 2px 填充留白，按 DPI 缩放；首音节仍与主候选左边缘对齐，但不再把底部背景拉伸到外框内侧。保持文字位置、窗口高度、圆角连接与稳定定位。
+ 
+@@ -14,7 +16,7 @@
+ 
+ > **2026-10-01 打字抖动修复：** Tab 行重排时，从原始光标定位必须与 TSF 位置通知使用相同的阴影偏移；普通打字继续保留原候选框的已调整位置。测试覆盖连续交替更新内容和同位置光标通知，两个阶段不得上下跳动。
+ 
+-> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
++> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `5. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+ 
+@@ -36,7 +38,7 @@
+ 
+ 运行 `Apply-Patch.cmd`。本包恢复普通行内输入，不再向输入框写入音节编号或额外高亮。
+ Tab 编辑时，原候选框增加一行万象词典声调全拼，候选保持在同一个圆角外框内；退出 Tab 后恢复原高度。
+-音节编号复用皮肤的普通前置格式；第 1–3 项隐藏编号显示，后续如 `4. shū`，数字定位仍从 1 开始。编号为灰色，与拼音同一基线，不使用上标或独立徽章。
++音节编号复用皮肤的普通前置格式；第 1–4 项隐藏编号显示，后续如 `5. shū`，数字定位仍从 1 开始。编号为灰色，与拼音同一基线，不使用上标或独立徽章。
+ 编码字号约为候选字号的 80%（至少 10pt）；选中音节使用主题强调色背景，未选中编码使用主题文字颜色。
+ 输入序号及替换字母显示在整串拼音最后。被编辑音节随当前首候选的词典读音实时更新，其他音节保留进入 Tab 时的读音。
+ 候选、编号和注释字号保持旧皮肤的 12pt，外框 padding 和阴影继续使用当前皮肤。
+diff --git a/Install-Binaries.ps1 b/Install-Binaries.ps1
+index be330ee..08ab389 100644
+--- a/Install-Binaries.ps1
++++ b/Install-Binaries.ps1
+@@ -144,7 +144,7 @@ try {
+   $arguments = @{hans='/s'; hant='/t'; hongkong='/hk'; macau='/mc'; singapore='/sg'}
+   if (!$arguments.ContainsKey($profileName)) { throw "Unsupported existing profile: $profileName" }
+   Write-Host "Target: $Target"
+-  Write-Host "Build: rewrite-ui-continuous-tab-20261001; profile: $profileName"
++  Write-Host "Build: rewrite-ui-gray-hover-four-labels-20261001; profile: $profileName"
+   Write-Host 'Program installer: revision 6 (shutdown process race fixed)'
+   Write-Host 'Package hashes and target files verified. User dictionaries/configuration will not be changed.'
+   if ($CheckOnly) { $succeeded = $true; Write-Host 'CHECK ONLY: no files, processes, or registry entries changed.'; exit 0 }
+diff --git a/README.md b/README.md
+index 73367bf..d3bc4b4 100644
+--- a/README.md
++++ b/README.md
+@@ -19,7 +19,7 @@
+ 
+ 为未上屏编码提供按音节编辑。应用内仍显示原始输入；按 Tab 时，主候选框增加一行万象词典声调拼音，退出后恢复原高度。候选框在光标下方时编辑行在候选下方，反之在上方，共用圆角外框和阴影。
+ 
+-Tab 拼音约为候选字号的 80%（至少 10pt）；普通前置编号为灰色，与拼音同一基线，第 1–3 项隐藏编号显示，但数字定位仍从 1 开始。序号和替换输入显示在整串拼音末尾。选中音节使用皮肤强调色，普通及悬停候选使用黑字。
++Tab 拼音约为候选字号的 80%（至少 10pt）；普通前置编号为灰色，与拼音同一基线，第 1–4 项隐藏编号显示，但数字定位仍从 1 开始。序号和替换输入显示在整串拼音末尾。选中音节使用皮肤强调色，普通及悬停候选使用黑字。
+ 
+ | 操作 | 作用 |
+ |---|---|
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 66a4e83..71f164f 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,10 +1,12 @@
++> **2026-10-01 悬停与间距：** 次要候选悬停背景为浅灰色 `#EEEEEE`，文字保持黑色；Tab 前 4 个音节隐藏编号，音节间距按隐藏编号占位补齐，首音节仍与主候选文字对齐，第 5 项起保留编号。
++
+ > **2026-10-01 当前编辑逻辑：** 默认支持连续多音节替换，不再限制替换编码长度，也不需要额外开关；Tab 行实时显示被编辑位置的全部词典拼音，其他原音节与编号保持，退格和 Esc 可恢复。
+ 
+ > **2026-10-01 连续多音节替换：** 输入序号后可连续替换为多个音节，例如第 3 项从 `bǐ` 改成 `bù shì hǎo`，Tab 行完整显示替换读音；这些音节归属原第 3 项，后续原音节及其编号保持。退格逐步缩短读音，清空后恢复原音节。
+ 
+ > **2026-10-01 Tab 实时拼音：** 在第一枚斜杠前保存原候选音节边界，避免 Tab 改变候选后分段错误。索引替换时按当前首候选的词典读音实时更新被编辑音节，未编辑音节保持原读音；退格清空替换恢复原读音。缺少可对应读音时保留已有读音，缺失音节单独回退编码，不再整行退回编码。
+ 
+-> **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–3 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
++> **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–4 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
+ 
+ > **2026-10-01 Tab 填充留白修正：** 选中音节背景在现有文字布局外增加左右 4px、上下 2px 填充留白，按 DPI 缩放；首音节仍与主候选左边缘对齐，但不再把底部背景拉伸到外框内侧。保持文字位置、窗口高度、圆角连接与稳定定位。
+ 
+@@ -14,7 +16,7 @@
+ 
+ > **2026-10-01 打字抖动修复：** Tab 行重排时，从原始光标定位必须与 TSF 位置通知使用相同的阴影偏移；普通打字继续保留原候选框的已调整位置。测试覆盖连续交替更新内容和同位置光标通知，两个阶段不得上下跳动。
+ 
+-> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
++> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `5. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+ 
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index 9d222c5..21fc03f 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -22,12 +22,17 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+   const int gap = margin * 2;
+   const int limit = vertical ? style.max_height : style.max_width;
+   int advance = 0, cross = 0, line = 0;
+-  for (const auto& unit : state.Units()) {
++  const auto units = state.Units();
++  const auto hiddenNumber = [](const std::wstring& label) {
++    return label == L"1" || label == L"2" || label == L"3" || label == L"4";
++  };
++  for (size_t unitIndex = 0; unitIndex < units.size(); ++unitIndex) {
++    const auto& unit = units[unitIndex];
+     CSize text(0, 0), label(0, 0);
+     layout.GetTextSizeDW(unit.text, unit.text.size(), dwr->pRewriteTextFormat,
+                         dwr, &text);
+     std::wstring number;
+-    if (!unit.label.empty() && unit.label != L"1" && unit.label != L"2" && unit.label != L"3") {
++    if (!unit.label.empty() && !hiddenNumber(unit.label)) {
+       wchar_t formatted[128];
+       swprintf_s(formatted, style.label_text_format.c_str(), unit.label.c_str());
+       number = formatted;
+@@ -56,7 +61,18 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     result.cells.push_back({shown, CRect(x, y, x + w, y + h), tr, lb, lr});
+     result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
+     result.size.cy = (std::max<LONG>)(result.size.cy, y + h);
+-    advance += span + gap; line = (std::max)(line, vertical ? w : h);
++    int hiddenMargin = 0;
++    if (unitIndex + 1 < units.size() && hiddenNumber(units[unitIndex + 1].label)) {
++      // Reserve the next hidden prefix in the inter-syllable margin, keeping
++      // the first pronunciation aligned with the candidate text.
++      wchar_t formatted[128];
++      swprintf_s(formatted, style.label_text_format.c_str(), units[unitIndex + 1].label.c_str());
++      CSize reserved(0, 0);
++      layout.GetTextSizeDW(formatted, wcslen(formatted), dwr->pRewriteLabelTextFormat, dwr, &reserved);
++      hiddenMargin = vertical ? reserved.cy + margin : reserved.cx + px * 2 + margin;
++    }
++    advance += span + gap + hiddenMargin;
++    line = (std::max)(line, vertical ? w : h);
+   }
+   return result;
+ }
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 8014d4b..447f625 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -1030,7 +1030,7 @@ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
+       rect.InflateRect(DPI_SCALE(m_style.hilite_padding_x),
+                        DPI_SCALE(m_style.hilite_padding_y));
+       _HighlightText(dc, rect,
+-                     HALF_ALPHA_COLOR(m_style.hilited_candidate_back_color),
++                     static_cast<int>(0xffeeeeee),  // Neutral light-gray hover.
+                      HALF_ALPHA_COLOR(m_style.hilited_candidate_shadow_color),
+                      DPI_SCALE(m_style.round_corner), bkType, rd,
+                      HALF_ALPHA_COLOR(m_style.hilited_candidate_border_color));
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index a4d114c..06fb9ce 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-continuous-tab-20261001
++Build-ID: rewrite-ui-gray-hover-four-labels-20261001
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/skins/README.md b/rime/skins/README.md
+index f4d12c3..a88d8c9 100644
+--- a/rime/skins/README.md
++++ b/rime/skins/README.md
+@@ -1,4 +1,6 @@
+-> **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–3 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
++> **2026-10-01 悬停与间距：** 次要候选悬停背景为浅灰色 `#EEEEEE`，文字保持黑色；Tab 前 4 个音节隐藏编号，音节间距按隐藏编号占位补齐，首音节仍与主候选文字对齐，第 5 项起保留编号。
++
++> **2026-10-01 Tab 可读性调整：** Tab 拼音约为主字号的 80%（至少 10pt），编号按实际字体的小写 s 字形高度缩放并使用灰色；第 1–4 个音节隐藏编号显示，数字定位操作不变。Tab 文字与主候选填充边缘留出 4px 视觉间隔，朝连接侧增加填充留白，保留相交背景圆角融合及稳定定位。
+ 
+ > **2026-10-01 Tab 填充留白修正：** 选中音节背景在现有文字布局外增加左右 4px、上下 2px 填充留白，按 DPI 缩放；首音节仍与主候选左边缘对齐，但不再把底部背景拉伸到外框内侧。保持文字位置、窗口高度、圆角连接与稳定定位。
+ 
+@@ -6,7 +8,7 @@
+ 
+ > **2026-10-01 Tab 紧凑与填充连接：** Tab 行去掉额外上下 1px 内边距，行间距收紧到最多 2px；选中音节与主候选高亮使用同一种强调色，有面积交集时合并为一次圆角填充，连接处做内凹圆角，无交集时独立绘制。保留上下排列规则和打字稳定定位。
+ 
+-> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `1. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
++> **2026-10-01 当前 Tab 实现：** Tab 编码恢复到主候选框内的编码行，进入时原候选框增高，退出后恢复；主候选在行内编码下方时 Tab 行在候选下方，主候选在行内编码上方时 Tab 行在候选上方；共用原皮肤圆角、外框和阴影。万象声调拼音使用普通前置编号（如 `5. shū`），取消上标和独立编号徽章；序号与拼音同一基线，编辑输入显示在所有音节后面。保留行内原始输入、紧凑皮肤与窗口跟随优化。下方独立悬浮、组合轮廓的说明是旧版记录，以此条为准。
+ 
+ > **2026-10-01 整体圆角轮廓：** 主候选与 Tab 标签使用同一条组合外轮廓描边，连接处为圆弧，内部没有分隔边；两块分区绘制同一形状与阴影，避免接缝重复加深。文字对齐、紧凑 padding 和跨线程跟随保持。
+ 
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 78b1e45..b64b464 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -189,8 +189,23 @@ int main() {
+       assert(!layout->IsInlinePreedit());
+       auto measured = weasel::MeasureRewrite(*layout, indexed.rewrite, dwr);
+       assert(measured.cells.size() == 5);
+-      for (int i = 0; i < 3; ++i) assert(measured.cells[i].unit.label.empty());
+-      assert(!measured.cells[3].unit.label.empty());
++      for (int i = 0; i < 4; ++i) assert(measured.cells[i].unit.label.empty());
++      assert(measured.cells[3].unit.label.empty());
++      auto five = indexed.rewrite;
++      five.original = five.input = L"jxjirzbjce"; five.ranges += L",8-10";
++      five.pinyin = L"jiǎng|jī|rén|běi|cè";
++      const auto fiveLayout = weasel::MeasureRewrite(*layout, five, dwr, true);
++      assert(fiveLayout.cells[0].text.TopLeft() == CPoint(0, 0));
++      assert(!fiveLayout.cells[4].unit.label.empty());
++      for (int i = 1; i < 5; ++i) {
++        const int visualGap = mode == 2 ?
++            fiveLayout.cells[i].text.top - fiveLayout.cells[i-1].text.bottom :
++            fiveLayout.cells[i].text.left - fiveLayout.cells[i-1].text.right;
++        const int lastGap = mode == 2 ?
++            fiveLayout.cells[4].text.top - fiveLayout.cells[3].text.bottom :
++            fiveLayout.cells[4].text.left - fiveLayout.cells[3].text.right;
++        assert(abs(visualGap - lastGap) <= (int)ceil(dwr->dpiScaleLayout));
++      }
+       assert(dwr->pRewriteLabelTextFormat->GetFontSize() <= dwr->pRewriteTextFormat->GetFontSize());
+       assert(dwr->pRewriteTextFormat->GetFontSize() >= 10 * dwr->dpiScaleFontPoint);
+       assert(dwr->pRewriteTextFormat->GetFontSize() < dwr->pPreeditTextFormat->GetFontSize());
+-- 
+2.53.0.windows.2
+

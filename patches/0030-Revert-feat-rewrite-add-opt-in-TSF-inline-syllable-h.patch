@@ -1,7 +1,7 @@
 From 1b8e641fcbf887852da062d7466fd0cebddab76c Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 19:50:29 +0800
-Subject: [PATCH 30/60] Revert "feat(rewrite): add opt-in TSF inline syllable
+Subject: [PATCH 30/61] Revert "feat(rewrite): add opt-in TSF inline syllable
  highlight preview"
 
 This reverts commit 896af8cd88a0d2064fe262f7719237f72cc04089.

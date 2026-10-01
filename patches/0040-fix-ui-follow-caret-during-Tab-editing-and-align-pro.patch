@@ -1,7 +1,7 @@
 From 866ab774ad5d35a21ed7bd5190a02847e68adef7 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 23:22:37 +0800
-Subject: [PATCH 40/60] fix(ui): follow caret during Tab editing and align
+Subject: [PATCH 40/61] fix(ui): follow caret during Tab editing and align
  pronunciation with candidate text
 
 ---

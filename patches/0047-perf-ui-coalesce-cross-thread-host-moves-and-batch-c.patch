@@ -1,7 +1,7 @@
 From cd9155ec2f8b144a5baad4b2e3bedf4f59aea94d Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 01:28:36 +0800
-Subject: [PATCH 47/60] perf(ui): coalesce cross-thread host moves and batch
+Subject: [PATCH 47/61] perf(ui): coalesce cross-thread host moves and batch
  cached surfaces
 
 ---

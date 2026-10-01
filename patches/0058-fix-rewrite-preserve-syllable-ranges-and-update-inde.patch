@@ -1,7 +1,7 @@
 From c71d97f26390101377460b17500bba22dfb86f99 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 12:00:35 +0800
-Subject: [PATCH 58/60] fix(rewrite): preserve syllable ranges and update
+Subject: [PATCH 58/61] fix(rewrite): preserve syllable ranges and update
  indexed pinyin live
 
 ---

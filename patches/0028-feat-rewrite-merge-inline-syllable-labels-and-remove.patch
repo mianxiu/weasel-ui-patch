@@ -1,7 +1,7 @@
 From d1a7f61b85aafb30b638b0e9c352557c50a1e4e9 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Wed, 30 Sep 2026 18:59:55 +0800
-Subject: [PATCH 28/60] feat(rewrite): merge inline syllable labels and remove
+Subject: [PATCH 28/61] feat(rewrite): merge inline syllable labels and remove
  duplicate panel row
 
 ---

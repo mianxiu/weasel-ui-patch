@@ -1,7 +1,7 @@
 From 3a976bda0bb1673e2fb825f31f32d7c79ec7b7a8 Mon Sep 17 00:00:00 2001
 From: mianxiu <mianxiu8481@gmail.com>
 Date: Thu, 1 Oct 2026 12:41:35 +0800
-Subject: [PATCH 60/60] fix(rewrite): remove single-syllable limits and
+Subject: [PATCH 60/61] fix(rewrite): remove single-syllable limits and
  document continuous Tab editing
 
 ---
