@@ -1,0 +1,421 @@
+From 9e00330c15153798cb45bdbeb6e4922fe7828e55 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 17:46:21 +0800
+Subject: [PATCH] Show plain panel preedit and add read-only cross-PC IME
+ diagnostics
+
+---
+ .gitignore                        | 123 +++++++++++++++---------------
+ Collect-IME-Diagnostics.cmd       |   7 ++
+ Collect-IME-Diagnostics.ps1       | 114 +++++++++++++++++++++++++++
+ Fix-IME-First-Key.ps1             |   3 +-
+ INSTALL-PATCH.md                  |  12 +++
+ REWRITE-UI.md                     |   1 +
+ RimeWithWeasel/RimeWithWeasel.cpp |   6 +-
+ WeaselUI/StandardLayout.cpp       |   7 ++
+ WeaselUI/WeaselPanel.cpp          |   4 +-
+ package-rewrite.ps1               |   2 +
+ rewrite-build.txt                 |   2 +-
+ 11 files changed, 214 insertions(+), 67 deletions(-)
+ create mode 100644 Collect-IME-Diagnostics.cmd
+ create mode 100644 Collect-IME-Diagnostics.ps1
+
+diff --git a/.gitignore b/.gitignore
+index 11ccd6b..40a4b4a 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,61 +1,62 @@
+-.cache
+-/test/rime-fixture/user.yaml
+-/test/activation-fixture/
+-/dist/
+-.clangd
+-.xmake
+-build
+-msbuild
+-compile_commands.json
+-/output/Win32/*.exe
+-/output/Win32/rime.dll
+-/output/Win32/*.pdb
+-/lib*/rime.lib
+-/lib*/*.dll
+-/lib*/*.pdb
+-/output/*.exp
+-/output/Win32/*.exp
+-/output/*.ilk
+-/output/*.iobj
+-/output/*.ipdb
+-/output/*.pdb
+-/output/*.lib
+-/output/Win32/*.lib
+-/output/*.exe
+-/output/rime.dll
+-/output/weasel*.dll
+-/output/*.ime
+-/output/*.txt
+-/output/*.bat
+-/output/data/essay.txt
+-/output/data/opencc/
+-/output/data/*.yaml
+-/output/archives
+-/include/glog
+-/include/rime*.h
+-/ipch
+-env.bat
+-weasel.props
+-*.log
+-*.user
+-*.suo
+-*.sdf
+-*.opensdf
+-*.aps
+-*~
+-.*.swp
+-*.swp
+-.vs
+-Thumbs.db
+-/.idea
+-/cmake-build-debug
+-*.VC.db
+-release-notes.html
+-*.7z
+-RELEASE_CHANGELOG.md
+-deps/
+-arm64x_wrapper/*.o
+-arm64x_wrapper/*.dll
+-arm64x_wrapper/*.ime
+-arm64x_wrapper/*.lib
+-arm64x_wrapper/*.exp
++.cache
++/test/rime-fixture/user.yaml
++/test/activation-fixture/
++/dist/
++.clangd
++.xmake
++build
++msbuild
++compile_commands.json
++/output/Win32/*.exe
++/output/Win32/rime.dll
++/output/Win32/*.pdb
++/lib*/rime.lib
++/lib*/*.dll
++/lib*/*.pdb
++/output/*.exp
++/output/Win32/*.exp
++/output/*.ilk
++/output/*.iobj
++/output/*.ipdb
++/output/*.pdb
++/output/*.lib
++/output/Win32/*.lib
++/output/*.exe
++/output/rime.dll
++/output/weasel*.dll
++/output/*.ime
++/output/*.txt
++/output/*.bat
++/output/data/essay.txt
++/output/data/opencc/
++/output/data/*.yaml
++/output/archives
++/include/glog
++/include/rime*.h
++/ipch
++env.bat
++weasel.props
++*.log
++*.user
++*.suo
++*.sdf
++*.opensdf
++*.aps
++*~
++.*.swp
++*.swp
++.vs
++Thumbs.db
++/.idea
++/cmake-build-debug
++*.VC.db
++release-notes.html
++*.7z
++RELEASE_CHANGELOG.md
++deps/
++/diagnostics/
++arm64x_wrapper/*.o
++arm64x_wrapper/*.dll
++arm64x_wrapper/*.ime
++arm64x_wrapper/*.lib
++arm64x_wrapper/*.exp
+diff --git a/Collect-IME-Diagnostics.cmd b/Collect-IME-Diagnostics.cmd
+new file mode 100644
+index 0000000..a114a2b
+--- /dev/null
++++ b/Collect-IME-Diagnostics.cmd
+@@ -0,0 +1,7 @@
++@echo off
++setlocal
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Collect-IME-Diagnostics.ps1" %*
++set "diagnostic_result=%errorlevel%"
++echo.
++pause
++exit /b %diagnostic_result%
+diff --git a/Collect-IME-Diagnostics.ps1 b/Collect-IME-Diagnostics.ps1
+new file mode 100644
+index 0000000..fd5998a
+--- /dev/null
++++ b/Collect-IME-Diagnostics.ps1
+@@ -0,0 +1,114 @@
++param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'diagnostics'))
++$ErrorActionPreference = 'Stop'
++$notes = New-Object 'System.Collections.Generic.List[string]'
++function Read-RegistryValues([string]$Path, [string[]]$Names) {
++  $result = [ordered]@{}
++  foreach ($name in $Names) {
++    try {
++      $item = Get-ItemProperty -LiteralPath $Path -Name $name -ErrorAction Stop
++      $result[$name] = $item.$name
++    } catch { $result[$name] = $null }
++  }
++  return $result
++}
++function Get-PEBuildStamp([byte[]]$Bytes) {
++  if ($Bytes.Length -lt 64) { return $null }
++  $offset = [BitConverter]::ToInt32($Bytes, 60)
++  if ($offset -lt 0 -or $offset + 12 -gt $Bytes.Length) { return $null }
++  return [BitConverter]::ToUInt32($Bytes, $offset + 8)
++}
++function Read-FileIdentity([string]$Path, [bool]$Hash = $true) {
++  if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
++  $file = Get-Item -LiteralPath $Path
++  return [ordered]@{
++    name = $file.Name; version = $file.VersionInfo.FileVersion
++    productVersion = $file.VersionInfo.ProductVersion; size = $file.Length
++    buildStamp = Get-PEBuildStamp ([IO.File]::ReadAllBytes($Path))
++    sha256 = $(if ($Hash) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash } else { $null })
++  }
++}
++# Read only the PE header of an already loaded Weasel DLL. This distinguishes
++# the old DLL retained by a running app from the newly replaced file on disk.
++Add-Type -TypeDefinition @'
++using System;
++using System.Runtime.InteropServices;
++public static class WeaselDiagnosticMemory {
++ [DllImport("kernel32.dll",SetLastError=true)] public static extern IntPtr OpenProcess(uint access,bool inherit,int pid);
++ [DllImport("kernel32.dll",SetLastError=true)] public static extern bool ReadProcessMemory(IntPtr process,IntPtr address,byte[] data,int size,out IntPtr read);
++ [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
++}
++'@
++$os = Read-RegistryValues 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' @(
++  'ProductName','DisplayVersion','CurrentBuildNumber','UBR','BuildLabEx','EditionID','InstallationType')
++$os['family'] = $(if ([int]$os.CurrentBuildNumber -ge 22000) {'Windows 11'} else {'Windows 10'})
++$touch = Read-RegistryValues 'HKCU:\Software\Microsoft\InputMethod\Settings\Common' @(
++  'TouchKeyboardHasEverShown','TouchKeyboardLastUsedTime','TouchKeyboardLastUsedTimeStamp')
++$components = [ordered]@{}
++$components.TextInputHost = Read-FileIdentity (Join-Path $env:WINDIR 'SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe')
++$commonFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonProgramFiles)
++$components.TabTip = Read-FileIdentity (Join-Path $commonFiles 'microsoft shared\ink\TabTip.exe')
++$components.ctfmon = Read-FileIdentity (Join-Path $env:WINDIR 'System32\ctfmon.exe')
++$components.WeaselSystem64 = Read-FileIdentity (Join-Path $env:WINDIR 'System32\weasel.dll')
++$components.WeaselSystem32 = Read-FileIdentity (Join-Path $env:WINDIR 'SysWOW64\weasel.dll')
++Write-Host 'Reading Windows updates and running input-method modules...'
++$updates = @()
++try { $updates = @(Get-HotFix | Sort-Object HotFixID | ForEach-Object {
++  [ordered]@{id=$_.HotFixID;installedOn=$(if ($_.InstalledOn) {$_.InstalledOn.ToString('yyyy-MM-dd')} else {$null})}
++}) } catch { $notes.Add('Windows update enumeration unavailable.') }
++$languages = @()
++try { $languages = @(Get-WinUserLanguageList | ForEach-Object {
++  [ordered]@{language=$_.LanguageTag;inputMethods=@($_.InputMethodTips)}
++}) } catch { $notes.Add('Windows language list unavailable.') }
++$apps = @()
++foreach ($process in (Get-Process QQ,chrome,msedge,Code,WeaselServer,TextInputHost,ctfmon -ErrorAction SilentlyContinue)) {
++  $entry = [ordered]@{name=$process.ProcessName;pid=$process.Id;started=$null;version=$null;loadedWeasel=@()}
++  try { $entry.started = $process.StartTime.ToString('o') } catch { }
++  try { $entry.version = (Get-Item -LiteralPath $process.Path).VersionInfo.FileVersion } catch { }
++  try {
++    foreach ($module in $process.Modules) {
++      if ($module.ModuleName -notmatch '^weasel.*\.dll$') { continue }
++      $disk = Read-FileIdentity $module.FileName
++      $stamp = $null
++      $handle = [WeaselDiagnosticMemory]::OpenProcess(0x410,$false,$process.Id)
++      if ($handle -ne [IntPtr]::Zero) {
++        try {
++          $bytes = New-Object byte[] 4096
++          $read = [IntPtr]::Zero
++          if ([WeaselDiagnosticMemory]::ReadProcessMemory($handle,$module.BaseAddress,$bytes,4096,[ref]$read)) {
++            $stamp = Get-PEBuildStamp $bytes
++          }
++        } finally { [void][WeaselDiagnosticMemory]::CloseHandle($handle) }
++      }
++      $entry.loadedWeasel += [ordered]@{name=$module.ModuleName;memoryBuildStamp=$stamp;
++        diskBuildStamp=$disk.buildStamp;diskSha256=$disk.sha256;
++        memoryMatchesDisk=$(if ($null -ne $stamp) {$stamp -eq $disk.buildStamp} else {$null})}
++    }
++  } catch { $notes.Add('Module enumeration unavailable for '+$process.ProcessName+' PID '+$process.Id) }
++  $apps += $entry
++}
++$ui = @()
++$userDirectory = Join-Path $env:APPDATA 'Rime'
++foreach ($name in @('weasel.custom.yaml','build\weasel.yaml')) {
++  $path = Join-Path $userDirectory $name
++  if (Test-Path -LiteralPath $path) {
++    # Export selected presentation settings only, never dictionaries or text.
++    $ui += [ordered]@{file=$name;settings=@([IO.File]::ReadAllLines($path) | Where-Object {
++      $_ -match '^\s+(?:style/)?(?:inline_preedit|preedit_type|color_scheme|color_scheme_dark):'
++    })}
++  }
++}
++$workaroundBackup = $null
++$backupFile = Join-Path $env:LOCALAPPDATA 'WeaselRewriteUI\OptionalIMEFix\touch-keyboard-state.json'
++if (Test-Path -LiteralPath $backupFile) {
++  try { $workaroundBackup = ([IO.File]::ReadAllText($backupFile) | ConvertFrom-Json).original }
++  catch { $notes.Add('Optional workaround backup unreadable.') }
++}
++$report = [ordered]@{schema=1;collectedAt=[DateTimeOffset]::Now.ToString('o');
++  os=$os;touchKeyboard=$touch;components=$components;hotfixes=$updates;languages=$languages;
++  applications=$apps;weaselSettings=$ui;workaroundOriginalState=$workaroundBackup;notes=@($notes)}
++New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
++$file = Join-Path $OutputDirectory ('IME-Diagnostics-'+[DateTime]::Now.ToString('yyyyMMdd-HHmmss')+'.json')
++[IO.File]::WriteAllText($file,($report | ConvertTo-Json -Depth 10),(New-Object Text.UTF8Encoding($false)))
++Write-Host ('SUCCESS: '+$file)
++Write-Host 'Read-only report; no registry/configuration changes or process restarts.'
++Write-Host 'Run the same script on the other PC and compare the two JSON reports.'
+diff --git a/Fix-IME-First-Key.ps1 b/Fix-IME-First-Key.ps1
+index 6c1ea73..dee1423 100644
+--- a/Fix-IME-First-Key.ps1
++++ b/Fix-IME-First-Key.ps1
+@@ -55,7 +55,8 @@ function Invoke-IMEWorkaround([string]$Operation) {
+       Write-Host ('Active backup: ' + (Test-Path -LiteralPath $script:BackupFile))
+     }
+     'TouchKeyboard' {
+-      $exe = Join-Path $env:CommonProgramFiles 'microsoft shared\ink\TabTip.exe'
++      $commonFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonProgramFiles)
++      $exe = Join-Path $commonFiles 'microsoft shared\ink\TabTip.exe'
+       if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Windows touch keyboard was not found.' }
+       Start-Process -FilePath $exe -WindowStyle Normal
+       Write-Host 'Touch keyboard requested. Close it manually, then retry typing.'
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index bc43c75..a449f8c 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,15 @@
++## 对比两台电脑的复制后首字母异常
++
++两台机器各运行同一份 `Collect-IME-Diagnostics.cmd`，生成同目录 `diagnostics/IME-Diagnostics-日期时间.json`。脚本只读系统与输入状态，不重启进程、不修改注册表，不读取剪贴板或聊天内容。导出已安装更新列表（Get-HotFix 可枚举的部分）、Windows 构建与修订号、TextInputHost/TabTip/ctfmon 及 Weasel 文件版本和哈希、当前语言及输入法列表、触摸键盘相关状态、运行中的 QQ/Chrome/Edge/VS Code 版本与加载 DLL 的内存构建标识。模块读取被系统拒绝时记录缺失项，不把缺失当成版本相同。
++
++1. 先保存两台机器的现状报告，正常机器先不要运行可选修复。
++2. 两台尽量使用相同小狼毫补丁包、方案和应用版本；完全退出受影响应用（包括后台）再重开，在输入框输入一次后采集，确认加载的 DLL 与磁盘一致。
++3. 使用同一复现步骤：记事本复制同一段文字，切到同一应用的空输入框，输入 `nv`；记录是否必须复制、是否切窗、首字母是否直接上屏、删除后是否恢复。可用微软拼音做相同步骤的对照。
++4. 将两份 JSON 和复现结果一起对比，重点看 Windows 完整构建号、更新差异、输入组件版本、注册表状态和 DLL 版本。报告差异是线索，不能单凭某个不同 KB 就判定原因。
++
++只复制 `Collect-IME-Diagnostics.cmd` 和同目录的 `Collect-IME-Diagnostics.ps1` 即可在另一台运行，不必安装本补丁。采集前后的 `inline_preedit`、触摸键盘修复状态及应用版本要记录清楚，每次只改变一个条件。
++
++> **2026-10-02 普通编码纯文字：** 非行内模式的普通编码去掉高亮背景，统一使用普通文字色；关闭软光标符号。Tab 编辑高亮及分组编号填充保留。新增 Collect-IME-Diagnostics.cmd，只读导出 Windows 构建/更新、输入组件版本、触摸键盘状态和运行应用实际加载的 Weasel DLL 构建标识，供两台系统对比。
+ ## 可选：Windows 首字母直出 / 无候选绕过办法
+ 
+ 如果出现切窗或复制后首字母直出、后续带下划线却无候选，可单独双击 `Fix-IME-First-Key.cmd`，按提示选择：
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 752de87..a8aca77 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 普通编码纯文字：** 非行内模式的普通编码去掉高亮背景，统一使用普通文字色；关闭软光标符号。Tab 编辑高亮及分组编号填充保留。新增 Collect-IME-Diagnostics.cmd，只读导出 Windows 构建/更新、输入组件版本、触摸键盘状态和运行应用实际加载的 Weasel DLL 构建标识，供两台系统对比。
+ > **2026-10-02 可选系统输入绕过入口：** 包内新增 Fix-IME-First-Key.cmd，可选择打开触摸键盘、备份后重置 TouchKeyboardHasEverShown、恢复原值或查看状态。由用户单独运行，不由补丁安装器自动执行。Windows PowerShell 5.1 隔离测试覆盖原值不存在、重复执行、外部修改及写入失败。
+ > **2026-10-02 Tab 前置编号填充：** 可见分组编号使用独立浅灰圆角背景，去掉末尾点；字号与末尾输入序号框统一，填充框在音节行内垂直居中，数字按实际字形居中。前四项及组内编号继续隐藏，选择规则保持。
+ > **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 2327ca7..03e8ff9 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -467,8 +467,8 @@ void RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
+   // inline preedit
+   bool inline_preedit = session_status.style.inline_preedit;
+   rime_api->set_option(session_id, "inline_preedit", Bool(inline_preedit));
+-  // show soft cursor on weasel panel but not inline
+-  rime_api->set_option(session_id, "soft_cursor", Bool(!inline_preedit));
++  // Keep panel code plain: do not append the soft-cursor marker.
++  rime_api->set_option(session_id, "soft_cursor", False);
+ }
+ 
+ void RimeWithWeaselHandler::_GetCandidateInfo(CandidateInfo& cinfo,
+@@ -1558,5 +1558,5 @@ void RimeWithWeaselHandler::_UpdateInlinePreeditStatus(WeaselSessionId ipc_id) {
+   bool inline_preedit = session_status.style.inline_preedit;
+   rime_api->set_option(session_id, "inline_preedit", Bool(inline_preedit));
+   // show soft cursor on weasel panel but not inline
+-  rime_api->set_option(session_id, "soft_cursor", Bool(!inline_preedit));
++  rime_api->set_option(session_id, "soft_cursor", False);
+ }
+diff --git a/WeaselUI/StandardLayout.cpp b/WeaselUI/StandardLayout.cpp
+index ec8ce09..f0057e9 100644
+--- a/WeaselUI/StandardLayout.cpp
++++ b/WeaselUI/StandardLayout.cpp
+@@ -88,6 +88,13 @@ CSize StandardLayout::GetPreeditSize(CDCHandle dc,
+                                      PDWR pDWR) {
+   if (&text == &_context.preedit && _context.rewrite.active())
+     return MeasureRewrite(*this, _context.rewrite, pDWR).size;
++  if (&text == &_context.preedit) {
++    _range = TextRange();
++    CSize plain(0, 0);
++    if (!text.str.empty())
++      GetTextSizeDW(text.str, text.str.length(), pTextFormat, pDWR, &plain);
++    return plain;
++  }
+   const std::wstring& preedit = text.str;
+   const std::vector<weasel::TextAttribute>& attrs = text.attributes;
+   CSize size(0, 0);
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 2718a56..e5ed500 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -740,7 +740,7 @@ bool WeaselPanel::_DrawPreedit(const Text& text,
+   if (!t.empty()) {
+     weasel::TextRange range = m_layout->GetPreeditRange();
+ 
+-    if (range.start < range.end) {
++    if (&text != &m_ctx.preedit && range.start < range.end) {
+       std::wstring before_str = t.substr(0, range.start);
+       std::wstring hilited_str = t.substr(range.start, range.end);
+       std::wstring after_str = t.substr(range.end);
+@@ -831,6 +831,8 @@ bool WeaselPanel::_DrawPreeditBack(const Text& text,
+                                    const CRect& rc) {
+   if (&text == &m_ctx.preedit && m_ctx.rewrite.active())
+     return _DrawRewrite(dc, rc, true);
++  if (&text == &m_ctx.preedit)
++    return false;  // Ordinary panel code is plain text, without a filled range.
+   bool drawn = false;
+   std::wstring const& t = text.str;
+   IDWriteTextFormat1* txtFormat = pDWR->pPreeditTextFormat.Get();
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index a2c72de..79bf56c 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -16,6 +16,7 @@ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt
+ Copy-Item output/RewriteConfig.exe $destination -Force
+ Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1 $destination -Force
+ Copy-Item Fix-IME-First-Key.cmd,Fix-IME-First-Key.ps1 $destination -Force
++Copy-Item Collect-IME-Diagnostics.cmd,Collect-IME-Diagnostics.ps1 $destination -Force
+ New-Item -ItemType Directory -Force "$destination/skins" | Out-Null
+ Copy-Item rime/skins/azure_pill*.yaml,rime/skins/README.md "$destination/skins" -Force
+ Copy-Item rime/skins/preview "$destination/skins/preview" -Recurse -Force
+@@ -39,6 +40,7 @@ try {
+     'Install-Binaries.ps1', 'INSTALL-PATCH.md', 'build-rewrite-config.cmd', 'tools/rewrite-config.cpp',
+     'Apply-Skin-All.cmd', 'tools/generate-skin-previews.ps1',
+     'Fix-IME-First-Key.cmd', 'Fix-IME-First-Key.ps1', 'test/optional_ime_fix_test.ps1',
++    'Collect-IME-Diagnostics.cmd', 'Collect-IME-Diagnostics.ps1',
+     'test/installer_config_test.ps1', 'test/installer_transaction_test.ps1',
+     'test/installer_diagnostics_test.ps1',
+     'test/installer_rime_test.cpp', 'test/installer_rime_test.ps1',
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index cb3ce59..8e6e5fc 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-optional-ime-workaround-20261002
++Build-ID: rewrite-ui-plain-preedit-diagnostics-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+-- 
+2.53.0.windows.2
+
