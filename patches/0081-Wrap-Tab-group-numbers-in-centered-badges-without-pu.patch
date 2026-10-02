@@ -1,0 +1,142 @@
+From e4279ba903f76690d963adc12316e13642ebae74 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 16:31:14 +0800
+Subject: [PATCH] Wrap Tab group numbers in centered badges without punctuation
+
+---
+ INSTALL-PATCH.md               |  1 +
+ REWRITE-UI.md                  |  1 +
+ WeaselUI/RewriteLayout.h       | 16 ++++++----------
+ WeaselUI/WeaselPanel.cpp       | 11 +++++++----
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp |  6 +++++-
+ 6 files changed, 21 insertions(+), 16 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index ab790cb..c7d193a 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 Tab 前置编号填充：** 可见分组编号使用独立浅灰圆角背景，去掉末尾点；字号与末尾输入序号框统一，填充框在音节行内垂直居中，数字按实际字形居中。前四项及组内编号继续隐藏，选择规则保持。
+ > **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+ > **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+ > **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 15f3dde..aed4e87 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 Tab 前置编号填充：** 可见分组编号使用独立浅灰圆角背景，去掉末尾点；字号与末尾输入序号框统一，填充框在音节行内垂直居中，数字按实际字形居中。前四项及组内编号继续隐藏，选择规则保持。
+ > **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+ > **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+ > **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+diff --git a/WeaselUI/RewriteLayout.h b/WeaselUI/RewriteLayout.h
+index ecbdbed..88b8bd5 100644
+--- a/WeaselUI/RewriteLayout.h
++++ b/WeaselUI/RewriteLayout.h
+@@ -17,7 +17,6 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+   const auto& style = layout._style;
+   const bool vertical = style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT;
+   const int px = (std::max)(1, (int)(3 * dwr->dpiScaleLayout));
+-  const int py = 0;  // Font metrics already include the complete line height.
+   const int margin = (std::max)(2, (int)(4 * dwr->dpiScaleLayout));
+   const int gap = margin * 2;
+   const int rightPadding = (int)ceil(4 * dwr->dpiScaleLayout);
+@@ -72,12 +71,9 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     CSize text(0, 0), label(0, 0);
+     std::wstring number;
+     if (!unit.label.empty() && !hiddenNumber(unit.label)) {
+-      wchar_t formatted[128];
+-      swprintf_s(formatted, style.label_text_format.c_str(), unit.label.c_str());
+-      number = formatted;
+-      layout.GetTextSizeDW(number, number.size(), dwr->pRewriteLabelTextFormat, dwr, &label);
++      number = unit.label;
++      layout.GetTextSizeDW(number, number.size(), dwr->pRewriteBadgeTextFormat, dwr, &label);
+     }
+-    const int labelOffset = vertical ? 0 : (std::max)(0, (int)ceil(dwr->rewriteLabelBaselineOffset));
+     const int lw = number.empty() ? 0 : label.cx + px * 2;
+     const auto& textValue = unit.text;
+     const int prefixGap = margin;
+@@ -90,7 +86,7 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+       layout.GetTextSizeDW(textValue, textValue.size(), dwr->pRewriteTextFormat,
+                           dwr, &text);
+     layout._style.max_width = savedWidth;
+-    const int lh = number.empty() ? 0 : label.cy + py * 2 + labelOffset;
++    const int lh = number.empty() ? 0 : dwr->rewriteBadgeHeight;
+     const int separation = textValue.empty() ? 0 : prefixGap;
+     const int w = vertical ? (std::max<LONG>)(text.cx, lw) : text.cx + (lw ? separation + lw : 0);
+     const int h = vertical ? text.cy + (lh ? separation + lh : 0) : (std::max<LONG>)(text.cy, lh);
+@@ -103,11 +99,11 @@ inline RewriteLayout MeasureRewrite(Layout& layout, const RewriteState& state,
+     lb.SetRectEmpty(); lr.SetRectEmpty();
+     if (lw) {
+       const int bx = x;
+-      const int by = y;
++      const int by = vertical ? y : y + (h - lh) / 2;
+       lb.SetRect(bx, by, bx + lw, by + lh);
+-      lr.SetRect(bx + px, by + py + labelOffset, bx + px + label.cx, by + py + labelOffset + label.cy);
++      lr = lb;
+     }
+-    if (lw) tr.OffsetRect(vertical ? 0 : lw + separation, vertical ? lh + separation : py);
++    if (lw) tr.OffsetRect(vertical ? 0 : lw + separation, vertical ? lh + separation : 0);
+     auto shown = unit; shown.label = number; shown.text = textValue;
+     result.cells.push_back({shown, CRect(x, y, x + w, y + h), tr, lb, lr});
+     result.size.cx = (std::max<LONG>)(result.size.cx, x + w);
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index e3f1296..2718a56 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -949,6 +949,12 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+                          DPI_SCALE(6), BackType::TEXT, IsToRoundStruct());
+         }
+       }
++      if (!cell.unit.badge && !cell.unit.label.empty()) {
++        auto back = cell.labelBack;
++        if (stable) back.IntersectRect(back, clip);
++        _HighlightText(dc, back, 0xffe8e8e8, 0, DPI_SCALE(4),
++                       BackType::TEXT, IsToRoundStruct());
++      }
+     } else {
+       int color = cell.unit.badge ? 0xff555555 :
+           (cell.unit.active ? m_style.hilited_candidate_text_color : m_style.text_color);
+@@ -968,10 +974,7 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+       }
+       if (!cell.unit.label.empty())
+         _TextOut(cell.label, cell.unit.label, cell.unit.label.size(),
+-                 cell.unit.badge ? 0xff555555 :
+-                     (cell.unit.active ? 0xffd0d0d0 : m_style.label_text_color),
+-                 cell.unit.badge ? pDWR->pRewriteBadgeTextFormat.Get() : pDWR->pRewriteLabelTextFormat.Get(),
+-                 cell.unit.badge);
++                 0xff555555, pDWR->pRewriteBadgeTextFormat.Get(), true);
+       if (stable) pDWR->pRenderTarget->PopAxisAlignedClip();
+     }
+   }
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index c483e6e..e89d2fd 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-browser-candidate-retry-20261002
++Build-ID: rewrite-ui-tab-prefix-badges-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 4140e45..cd3d55b 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -343,7 +343,11 @@ int main() {
+           if (mode == 2) assert(cell.labelBack.bottom < cell.text.top);
+           else assert(cell.labelBack.right < cell.text.left);
+         }
+-        assert(cell.label.left > cell.labelBack.left);
++        assert(cell.label == cell.labelBack);
++        assert(cell.unit.label.find(L'.') == std::wstring::npos);
++        assert(cell.labelBack.Height() == dwr->rewriteBadgeHeight);
++        if (mode != 2)
++          assert(abs(cell.labelBack.CenterPoint().y - cell.back.CenterPoint().y) <= 1);
+         if (mode != 2) assert(cell.label.top >= cell.text.top);
+         assert(cell.labelBack.right <= cell.back.right);
+       }
+-- 
+2.53.0.windows.2
+
