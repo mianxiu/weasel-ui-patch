@@ -1,0 +1,54 @@
+From 1250fedfb4ad4b8d8abb83b4fecbfb5d9917a300 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 23:02:17 +0800
+Subject: [PATCH] Use a thin solid Azure blue underline for inline composition
+
+---
+ REWRITE-UI.md                      | 1 +
+ WeaselTSF/DisplayAttributeInfo.cpp | 6 +++---
+ rewrite-build.txt                  | 2 +-
+ 3 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 82445f3..183e27e 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 行内蓝色细实线：** TSF 行内编码显示属性改为 TF_LS_SOLID、非粗线，颜色固定为 #286CF4；文本和背景色仍由输入框决定。应用需重开以加载新 DLL，最终下划线形态由宿主绘制。
+ > **2026-10-02 编码上下空隙收紧：** 非行内编码／Tab 行上方的外部留白、到主候选的行距各减半；仅调整编码行布局，中文候选尺寸、上下高亮 padding、底部边距、字号和圆角参数保持原值。
+ > **2026-10-02 仅缩小编码留白：** 恢复中文主候选的高亮 padding 5、外边距 8、行距 6 和原有圆角比例；仅普通编码单行槽与 Tab 音节高亮使用半量上下 padding。连接圆角和普通编码／Tab 切换框高稳定继续保留。
+ > **2026-10-02 上下留白减半：** 四款 Azure Pill 皮肤的上下高亮 padding 从 5 改为 2（整数像素向下取整），外部 margin_y 从 8 改为 4，行距从 6 改为 3；Tab 额外连接留白从 4 改为 2。普通编码与 Tab 行高仍保持一致，连接圆角保留。
+diff --git a/WeaselTSF/DisplayAttributeInfo.cpp b/WeaselTSF/DisplayAttributeInfo.cpp
+index 85c276a..f2239f3 100644
+--- a/WeaselTSF/DisplayAttributeInfo.cpp
++++ b/WeaselTSF/DisplayAttributeInfo.cpp
+@@ -6,13 +6,13 @@
+ const WCHAR _daiInputName[] = L"DisplayAttributeInput";
+ const WCHAR _daiDescription[] = L"Weasel Display Attribute Input";
+ 
+-// change style only, leave color to app
++// Keep application text/background colors; use a thin Azure Pill blue underline.
+ const TF_DISPLAYATTRIBUTE _daiDisplayAttribute = {
+     {TF_CT_NONE, 0},  // text color
+     {TF_CT_NONE, 0},  // background color (TF_CT_NONE => app default)
+-    TF_LS_DOT,        // underline style
++    TF_LS_SOLID,      // underline style
+     FALSE,            // underline boldness
+-    {TF_CT_NONE, 0},  // underline color
++    {TF_CT_COLORREF, RGB(0x28, 0x6c, 0xf4)},  // underline color
+     TF_ATTR_INPUT     // attribute info
+ };
+ 
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 9a599e9..c89eb8c 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tight-code-row-20261002
++Build-ID: rewrite-ui-blue-solid-inline-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+-- 
+2.53.0.windows.2
+
