@@ -6,11 +6,15 @@
 
 ## 本次更新 · 2026-10-03
 
+- inline_preedit 开启与关闭时，Tab 字号、行高和 padding 统一。
+- 恢复 Tab 位于主候选下方时的圆角连接。
+- 收紧 Tab 下方留白，使其与顶部一致，并修复刷新时的框高变化。
+
 - 行内下划线支持 YAML 配置线型、颜色和粗细；默认保持细蓝色实线。
 - 颜色可固定为 `"#RRGGBB"`，或用 `theme` 跟随皮肤。
 - 重写仓库及安装包 README，集中说明安装、Tab 编辑和配置方法。
 
-包含全部 91 个补丁。构建标识：`rewrite-ui-yaml-inline-underline-20261002`。
+包含全部 94 个补丁。构建标识：`rewrite-ui-balanced-tab-bottom-20261003`。
 
 ## 下划线配置
 
