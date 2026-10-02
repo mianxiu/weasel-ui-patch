@@ -1,0 +1,155 @@
+From 97f826e9142213e380c1fceffacfa6aa08753288 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Sat, 3 Oct 2026 02:42:15 +0800
+Subject: [PATCH] Match lower Tab outer padding to the candidate top inset
+
+---
+ INSTALL-PATCH.md               |  2 +-
+ REWRITE-UI.md                  |  2 ++
+ WeaselUI/StandardLayout.cpp    | 16 ++++++++++++++++
+ WeaselUI/StandardLayout.h      |  2 +-
+ WeaselUI/WeaselPanel.cpp       |  3 +++
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp | 19 ++++++++++++++++---
+ 7 files changed, 40 insertions(+), 6 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index dea745f..e6d49ee 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -35,7 +35,7 @@ patch:
+ 
+ 把这三项合并到现有 `patch:` 下，不要覆盖整份配置。修改后重新部署并重启小狼毫服务。部分应用可能忽略线型或颜色。
+ 
+-完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-tab-joined-both-sides-20261003`。
++完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-balanced-tab-bottom-20261003`。
+ 
+ ## 输入异常排查
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 5c23534..b500b81 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -368,3 +368,5 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 2026-10-03：inline_preedit 开启和关闭时，Tab 共用字号、预留行高、上下 padding 和候选间距；普通非行内编码的布局保持原样。
+ 
+ 2026-10-03：补齐 Tab 在主候选下方时的圆角连接。仅连接紧邻候选且横向重叠的音节高亮，不改变字号、padding、文字位置和窗口高度。
++
++2026-10-03：Tab 行位于主候选下方时，底部外框留白与顶部主候选高亮的外框留白对齐；收紧框高，保持文字位置、字号和连接圆角。移动到屏幕底部切回上方排列时恢复原框高，不重新测量文本。
+diff --git a/WeaselUI/StandardLayout.cpp b/WeaselUI/StandardLayout.cpp
+index 8695007..0383fbe 100644
+--- a/WeaselUI/StandardLayout.cpp
++++ b/WeaselUI/StandardLayout.cpp
+@@ -437,6 +437,22 @@ bool StandardLayout::ArrangeRewriteRow(bool below) {
+   }
+   _highlightRect.OffsetRect(0, candidateDelta);
+   if (!_statusIconRect.IsRectEmpty()) _statusIconRect.OffsetRect(0, textDelta);
++  // Below-row layout should have the same outer inset as the main highlight.
++  // Trim the body instead of moving text or increasing the connecting neck.
++  if (_style.layout_type == UIStyle::LAYOUT_HORIZONTAL) {
++    if (below) {
++      const int topInset = (std::max)(0, (int)_candidateRects[0].top -
++          _style.hilite_padding_y - (int)_contentRect.top);
++      const int bottomInset = (int)_contentRect.bottom - (int)_preeditRect.bottom -
++          _style.hilite_padding_y / 2;
++      const int available = (std::max)(0, (int)_contentRect.Height() - _style.min_height);
++      _rewriteBottomTrim = (std::min)(available, (std::max)(0, bottomInset - topInset));
++    }
++    const int trim = below ? -_rewriteBottomTrim : _rewriteBottomTrim;
++    _contentSize.cy += trim;
++    _contentRect.bottom += trim;
++    _bgRect.bottom += trim;
++  }
+   // The shared body keeps its full corner radii; all highlights stay inset.
+   _rewriteBelow = below;
+   return true;
+diff --git a/WeaselUI/StandardLayout.h b/WeaselUI/StandardLayout.h
+index 8ef3b64..7526217 100644
+--- a/WeaselUI/StandardLayout.h
++++ b/WeaselUI/StandardLayout.h
+@@ -70,7 +70,7 @@ class StandardLayout : public Layout {
+   void UpdateStatusIconLayout(int* width, int* height);
+ 
+   bool _rewriteBelow = false;
+-  int _rewriteCandidateShift = 0, _rewriteTextShift = 0;
++  int _rewriteCandidateShift = 0, _rewriteTextShift = 0, _rewriteBottomTrim = 0;
+   CSize _beforesz, _hilitedsz, _aftersz;
+   weasel::TextRange _range;
+   CSize _contentSize;
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index f4d8d7f..2dffcf9 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -1702,6 +1702,9 @@ void WeaselPanel::_RepositionWindow(const bool& adj, bool repaintRow) {
+   if (y < rcWorkArea.top)
+     y = rcWorkArea.top;  // over workarea top
+   const bool rowChanged = m_layout->ArrangeRewriteRow(!m_sticky);
++  const int arrangedHeight = m_layout->GetContentSize().cy;
++  if (m_sticky) y += height - arrangedHeight;
++  height = arrangedHeight;
+   if (m_ctx.rewrite.active()) m_istorepos = false;
+   // memorize adjusted position (to avoid window bouncing on height change)
+   m_inputPos.bottom = y;
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 4fb5964..02558c5 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-joined-both-sides-20261003
++Build-ID: rewrite-ui-balanced-tab-bottom-20261003
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index ed1d96d..f5dcbea 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -369,12 +369,22 @@ int main() {
+               weasel::ExtendAdjacentRewriteHighlight(fill, candidate, !below, true);
+               Gdiplus::GraphicsPath path;
+               assert(weasel::BuildJoinedRewriteHighlight(path, candidate, fill, 13, 6, 4));
+-              assert(joinedLayout.GetContentSize() == originalSize);
++              if (below) {
++                const int topInset = joinedLayout.GetCandidateRect(0).top -
++                    joinedLayout._style.hilite_padding_y - joinedLayout.GetContentRect().top;
++                const int bottomInset = joinedLayout.GetContentRect().bottom -
++                    joinedLayout.GetPreeditRect().bottom - joinedLayout._style.hilite_padding_y / 2;
++                assert(topInset == bottomInset);
++                assert(joinedLayout.GetContentSize().cy < originalSize.cy);
++              } else assert(joinedLayout.GetContentSize() == originalSize);
+               auto separate = fill; separate.OffsetRect(candidate.Width() * 2, 0);
+               const auto saved = separate;
+               weasel::ExtendAdjacentRewriteHighlight(separate, candidate, !below, true);
+               assert(separate == saved);
+-            }
++            }
++            joinedLayout.ArrangeRewriteRow(false);
++            assert(joinedLayout.GetContentSize() == originalSize);
++            Gdiplus::GdiplusShutdown(token);
+           }
+ 
+         }
+@@ -777,9 +787,11 @@ int main() {
+     const auto aboveSize = panel.SurfaceRect().Size();
+     panel.MoveTo(CRect(200, 200, 200, 224));
+     assert(panel.RewriteSurfaceRect().top > panel.CandidateTextRect().bottom);
+-    assert(panel.SurfaceRect().Size() == aboveSize);
++    assert(panel.SurfaceRect().Width() == aboveSize.cx);
++    assert(panel.SurfaceRect().Height() <= aboveSize.cy);
+     assert(panel.RewriteLayoutGeneration() == sideGeneration);
+     panel.MoveTo(bottomCaret);
++    assert(panel.SurfaceRect().Size() == aboveSize);
+     assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
+     assert(panel.RewriteLayoutGeneration() == sideGeneration);
+     panel.ShowWindow(SW_SHOWNA);
+@@ -796,6 +808,7 @@ int main() {
+     panel.RedrawWindow(); assert(panel.RewriteHighlightsJoined());
+     assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
+     panel.MoveTo(bottomCaret);
++
+     assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
+     // Padding must not connect a distant selection or an earlier wrapped row.
+     auto separated = fixedEditing;
+-- 
+2.53.0.windows.2
+
