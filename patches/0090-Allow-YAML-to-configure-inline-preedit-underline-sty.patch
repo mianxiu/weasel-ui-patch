@@ -1,0 +1,562 @@
+From 979f9b569594206cb5d584cd7021f03e648e5023 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 23:20:29 +0800
+Subject: [PATCH] Allow YAML to configure inline preedit underline style and
+ color
+
+---
+ INSTALL-PATCH.md                          | 14 ++++
+ REWRITE-UI.md                             | 14 ++++
+ RimeWithWeasel/RimeWithWeasel.cpp         | 18 +++++
+ WeaselIPC/Configurator.cpp                | 52 +++++++-------
+ WeaselTSF/DisplayAttribute.cpp            |  8 ++-
+ WeaselTSF/DisplayAttributeInfo.cpp        |  8 ++-
+ WeaselTSF/DisplayAttributeInfo.h          |  4 +-
+ WeaselTSF/DisplayAttributeProvider.cpp    |  6 +-
+ WeaselTSF/EditSession.cpp                 |  1 +
+ WeaselTSF/WeaselTSF.h                     |  4 +-
+ include/InlineUnderline.h                 | 52 ++++++++++++++
+ include/WeaselIPCData.h                   | 15 ++++-
+ package-rewrite.ps1                       |  3 +-
+ rewrite-build.txt                         |  2 +-
+ rime/inline-underline.custom.example.yaml |  7 ++
+ test-inline-underline.cmd                 | 15 +++++
+ test/inline_underline_test.cpp            | 82 +++++++++++++++++++++++
+ 17 files changed, 271 insertions(+), 34 deletions(-)
+ create mode 100644 include/InlineUnderline.h
+ create mode 100644 rime/inline-underline.custom.example.yaml
+ create mode 100644 test-inline-underline.cmd
+ create mode 100644 test/inline_underline_test.cpp
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index a449f8c..3585ced 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -157,3 +157,17 @@ revision 5 起，管理员阶段另外保存 `program-install.log` 与 `program-
+ 安装端只需要 Windows 自带 PowerShell 5.1。`RewriteConfig.exe` 是静态链接的 x86 YAML 工具，可运行于 x86/x64 系统，无需 Python、网络或 PowerShell 模块。
+ 
+ 源码在 `rewrite-source.zip`，许可证在 `licenses/`。维护者运行 `build-rewrite.cmd` 构建，再用 PowerShell 7 执行 `package-rewrite.ps1` 生成此分发包。`SHA256SUMS.txt` 用于检测损坏，不是发行签名。程序未签名。
++
++## 行内编码下划线（2026-10-02）
++
++新版支持在 `weasel.custom.yaml` 现有 `patch:` 下加入：
++
++```yaml
++  style/inline_underline/style: solid
++  style/inline_underline/color: "#286CF4"
++  style/inline_underline/bold: false
++```
++
++线型可选 `none`、`solid`、`dot`、`dash`、`squiggle`。颜色用带引号的 `#RRGGBB`，或 `theme` 跟随当前皮肤选中候选的背景色；透明背景回退到蓝色。与传统皮肤数值颜色的字节顺序不同。非法线型或颜色分别回退为实线或默认蓝色。只影响 TSF 行内编码，不调整候选框。
++
++修改后重新部署并重启小狼毫服务；首次安装新版 DLL 后须重开输入应用。后续仅调整 YAML 不需重装。文本宿主最终决定显示效果，个别应用可能忽略 TSF 的线型或颜色。完整示例随包提供：`inline-underline.custom.example.yaml`。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 183e27e..744327c 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -350,3 +350,17 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 
+ 只调 `rewrite_ui/*` 开关时不需要重建，但仍然要**重新部署 + 重启服务**：
+ 服务端读的是编译产物 `%APPDATA%\Rime\build\weasel.yaml`。
++
++## 行内编码下划线（2026-10-02）
++
++新版支持在 `weasel.custom.yaml` 现有 `patch:` 下加入：
++
++```yaml
++  style/inline_underline/style: solid
++  style/inline_underline/color: "#286CF4"
++  style/inline_underline/bold: false
++```
++
++线型可选 `none`、`solid`、`dot`、`dash`、`squiggle`。颜色用带引号的 `#RRGGBB`，或 `theme` 跟随当前皮肤选中候选的背景色；透明背景回退到蓝色。与传统皮肤数值颜色的字节顺序不同。非法线型或颜色分别回退为实线或默认蓝色。只影响 TSF 行内编码，不调整候选框。
++
++修改后重新部署并重启小狼毫服务；首次安装新版 DLL 后须重开输入应用。后续仅调整 YAML 不需重装。文本宿主最终决定显示效果，个别应用可能忽略 TSF 的线型或颜色。完整示例随包提供：`inline-underline.custom.example.yaml`。
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 03e8ff9..6b66e11 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -950,6 +950,10 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
+       .append(std::to_wstring((int)session_status.style.inline_preedit))
+       .append(L"\n");
+ 
++  body.append(L"config.inline_underline_style=").append(session_status.style.inline_underline_style).append(L"\n");
++  body.append(L"config.inline_underline_color=").append(session_status.style.inline_underline_color).append(L"\n");
++  body.append(L"config.inline_underline_bold=").append(std::to_wstring((int)session_status.style.inline_underline_bold)).append(L"\n");
++
+   // style
+   if (!session_status.__synced) {
+     std::wstringstream ss;
+@@ -1239,6 +1243,20 @@ static void _UpdateUIStyle(RimeConfig* config, UI* ui, bool initialize) {
+                  style.candidate_abbreviate_length, 0, 0, _abs);
+   _RimeGetBool(config, "style/inline_preedit", initialize,
+                style.inline_preedit);
++  _RimeGetIntStr(config, "style/inline_underline/style", style.inline_underline_style,
++                "style/inline_underline/style");
++  _RimeGetIntStr(config, "style/inline_underline/color", style.inline_underline_color,
++                "style/inline_underline/color");
++  _RimeGetBool(config, "style/inline_underline/bold", initialize,
++               style.inline_underline_bold);
++  if (style.inline_underline_style != L"none" && style.inline_underline_style != L"solid" &&
++      style.inline_underline_style != L"dot" && style.inline_underline_style != L"dash" &&
++      style.inline_underline_style != L"squiggle") style.inline_underline_style = L"solid";
++  const auto& underlineColor = style.inline_underline_color;
++  if (underlineColor != L"theme" &&
++      (underlineColor.size() != 7 || underlineColor[0] != L'#' ||
++       underlineColor.find_first_not_of(L"0123456789abcdefABCDEF", 1) != std::wstring::npos))
++    style.inline_underline_color = L"#286CF4";
+   _RimeGetBool(config, "style/vertical_auto_reverse", initialize,
+                style.vertical_auto_reverse);
+   static constexpr Array<UIStyle::PreeditType, 3> _preeditArr = {
+diff --git a/WeaselIPC/Configurator.cpp b/WeaselIPC/Configurator.cpp
+index a16c4fa..e73ae34 100644
+--- a/WeaselIPC/Configurator.cpp
++++ b/WeaselIPC/Configurator.cpp
+@@ -1,23 +1,29 @@
+-#include "stdafx.h"
+-#include "Deserializer.h"
+-#include "Configurator.h"
+-
+-using namespace weasel;
+-
+-Deserializer::Ptr Configurator::Create(ResponseParser* pTarget) {
+-  return Deserializer::Ptr(new Configurator(pTarget));
+-}
+-
+-Configurator::Configurator(ResponseParser* pTarget) : Deserializer(pTarget) {}
+-
+-Configurator::~Configurator() {}
+-
+-void Configurator::Store(Deserializer::KeyType const& key,
+-                         std::wstring const& value) {
+-  if (!m_pTarget->p_context || key.size() < 2)
+-    return;
+-  bool bool_value = (!value.empty() && value != L"0");
+-  if (key[1] == L"inline_preedit") {
+-    m_pTarget->p_config->inline_preedit = bool_value;
+-  }
+-}
++#include "stdafx.h"
++#include "Deserializer.h"
++#include "Configurator.h"
++
++using namespace weasel;
++
++Deserializer::Ptr Configurator::Create(ResponseParser* pTarget) {
++  return Deserializer::Ptr(new Configurator(pTarget));
++}
++
++Configurator::Configurator(ResponseParser* pTarget) : Deserializer(pTarget) {}
++
++Configurator::~Configurator() {}
++
++void Configurator::Store(Deserializer::KeyType const& key,
++                         std::wstring const& value) {
++  if (!m_pTarget->p_config || key.size() < 2)
++    return;
++  bool bool_value = (!value.empty() && value != L"0");
++  if (key[1] == L"inline_preedit") {
++    m_pTarget->p_config->inline_preedit = bool_value;
++  } else if (key[1] == L"inline_underline_style") {
++    m_pTarget->p_config->inline_underline_style = value;
++  } else if (key[1] == L"inline_underline_color") {
++    m_pTarget->p_config->inline_underline_color = value;
++  } else if (key[1] == L"inline_underline_bold") {
++    m_pTarget->p_config->inline_underline_bold = bool_value;
++  }
++}
+diff --git a/WeaselTSF/DisplayAttribute.cpp b/WeaselTSF/DisplayAttribute.cpp
+index 488c362..0cac006 100644
+--- a/WeaselTSF/DisplayAttribute.cpp
++++ b/WeaselTSF/DisplayAttribute.cpp
+@@ -1,6 +1,8 @@
+ #include "stdafx.h"
+ 
+ #include "WeaselTSF.h"
++#include "CandidateList.h"
++#include <InlineUnderline.h>
+ 
+ void WeaselTSF::_ClearCompositionDisplayAttributes(TfEditCookie ec,
+                                                    _In_ ITfContext* pContext,
+@@ -32,6 +34,7 @@ BOOL WeaselTSF::_SetCompositionDisplayAttributes(TfEditCookie ec,
+     return FALSE;
+   }
+ 
++  if (!_InitDisplayAttributeGuidAtom()) return FALSE;
+   hr = E_FAIL;
+ 
+   if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE,
+@@ -52,6 +55,8 @@ BOOL WeaselTSF::_SetCompositionDisplayAttributes(TfEditCookie ec,
+ }
+ 
+ BOOL WeaselTSF::_InitDisplayAttributeGuidAtom() {
++  const GUID guid = weasel::MakeInlineUnderlineGuid(_inlineUnderlineConfig, _cand->style());
++  if (_gaDisplayAttributeInput && IsEqualGUID(guid, _inlineUnderlineGuid)) return TRUE;
+   ITfCategoryMgr* pCategoryMgr = nullptr;
+   HRESULT hr =
+       CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+@@ -61,12 +66,13 @@ BOOL WeaselTSF::_InitDisplayAttributeGuidAtom() {
+     return FALSE;
+   }
+ 
+-  hr = pCategoryMgr->RegisterGUID(c_guidDisplayAttributeInput,
++  hr = pCategoryMgr->RegisterGUID(guid,
+                                   &_gaDisplayAttributeInput);
+   if (FAILED(hr)) {
+     goto Exit;
+   }
+ 
++  _inlineUnderlineGuid = guid;
+ Exit:
+   pCategoryMgr->Release();
+ 
+diff --git a/WeaselTSF/DisplayAttributeInfo.cpp b/WeaselTSF/DisplayAttributeInfo.cpp
+index f2239f3..a3b6e5d 100644
+--- a/WeaselTSF/DisplayAttributeInfo.cpp
++++ b/WeaselTSF/DisplayAttributeInfo.cpp
+@@ -16,12 +16,14 @@ const TF_DISPLAYATTRIBUTE _daiDisplayAttribute = {
+     TF_ATTR_INPUT     // attribute info
+ };
+ 
+-CDisplayAttributeInfoInput::CDisplayAttributeInfoInput() {
++CDisplayAttributeInfoInput::CDisplayAttributeInfoInput(const GUID* guid, const TF_DISPLAYATTRIBUTE* attr) {
+   DllAddRef();
+   _refCount = 1;
+ 
+-  _pguid = &c_guidDisplayAttributeInput;
+-  _pDisplayAttribute = &_daiDisplayAttribute;
++  _guid = guid ? *guid : c_guidDisplayAttributeInput;
++  _displayAttribute = attr ? *attr : _daiDisplayAttribute;
++  _pguid = &_guid;
++  _pDisplayAttribute = &_displayAttribute;
+   _pDescription = _daiDescription;
+   _pValueName = _daiInputName;
+ }
+diff --git a/WeaselTSF/DisplayAttributeInfo.h b/WeaselTSF/DisplayAttributeInfo.h
+index 99e6eaf..e3a1efd 100644
+--- a/WeaselTSF/DisplayAttributeInfo.h
++++ b/WeaselTSF/DisplayAttributeInfo.h
+@@ -4,7 +4,7 @@
+ 
+ class CDisplayAttributeInfoInput : public ITfDisplayAttributeInfo {
+  public:
+-  CDisplayAttributeInfoInput();
++  CDisplayAttributeInfoInput(const GUID* guid = nullptr, const TF_DISPLAYATTRIBUTE* attr = nullptr);
+   ~CDisplayAttributeInfoInput();
+ 
+   // IUnknown
+@@ -20,6 +20,8 @@ class CDisplayAttributeInfoInput : public ITfDisplayAttributeInfo {
+   STDMETHODIMP Reset();
+ 
+  private:
++  GUID _guid;
++  TF_DISPLAYATTRIBUTE _displayAttribute;
+   const GUID* _pguid;
+   const TF_DISPLAYATTRIBUTE* _pDisplayAttribute;
+   const WCHAR* _pDescription;
+diff --git a/WeaselTSF/DisplayAttributeProvider.cpp b/WeaselTSF/DisplayAttributeProvider.cpp
+index e792542..ec12452 100644
+--- a/WeaselTSF/DisplayAttributeProvider.cpp
++++ b/WeaselTSF/DisplayAttributeProvider.cpp
+@@ -3,6 +3,7 @@
+ #include "WeaselTSF.h"
+ #include "EnumDisplayAttributeInfo.h"
+ #include "DisplayAttributeInfo.h"
++#include <InlineUnderline.h>
+ 
+ STDMETHODIMP WeaselTSF::EnumDisplayAttributeInfo(
+     __RPC__deref_out_opt IEnumTfDisplayAttributeInfo** ppEnum) {
+@@ -39,7 +40,10 @@ STDMETHODIMP WeaselTSF::GetDisplayAttributeInfo(
+       return E_OUTOFMEMORY;
+     }
+   } else {
+-    return E_INVALIDARG;
++    TF_DISPLAYATTRIBUTE attr{};
++    if (!weasel::DecodeInlineUnderlineGuid(guidInfo, attr)) return E_INVALIDARG;
++    *ppInfo = new (std::nothrow) CDisplayAttributeInfoInput(&guidInfo, &attr);
++    if (!*ppInfo) return E_OUTOFMEMORY;
+   }
+ 
+   return S_OK;
+diff --git a/WeaselTSF/EditSession.cpp b/WeaselTSF/EditSession.cpp
+index 1468e5b..afb9390 100644
+--- a/WeaselTSF/EditSession.cpp
++++ b/WeaselTSF/EditSession.cpp
+@@ -17,6 +17,7 @@ STDMETHODIMP WeaselTSF::DoEditSession(TfEditCookie ec) {
+ 
+   bool compositionEnded = false;
+   if (ok) {
++    _inlineUnderlineConfig = config;
+     compositionEnded = false;
+     if (!commit.empty()) {
+       // For auto-selecting, commit and preedit can both exist.
+diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
+index 70662c8..8e97809 100644
+--- a/WeaselTSF/WeaselTSF.h
++++ b/WeaselTSF/WeaselTSF.h
+@@ -256,7 +256,9 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   weasel::Status _status;
+ 
+   // guidatom for the display attibute.
+-  TfGuidAtom _gaDisplayAttributeInput;
++  TfGuidAtom _gaDisplayAttributeInput = 0;
++  GUID _inlineUnderlineGuid{};
++  weasel::Config _inlineUnderlineConfig;
+   BOOL _async_edit = false;
+   BOOL _committed = false;
+   BOOL _isToOpenClose = false;
+diff --git a/include/InlineUnderline.h b/include/InlineUnderline.h
+new file mode 100644
+index 0000000..8cd3271
+--- /dev/null
++++ b/include/InlineUnderline.h
+@@ -0,0 +1,52 @@
++#pragma once
++#include <msctf.h>
++#include "WeaselIPCData.h"
++namespace weasel {
++inline TF_DISPLAYATTRIBUTE InlineUnderlineAttribute(const Config& config, const UIStyle& style) {
++  TF_DISPLAYATTRIBUTE attr{{TF_CT_NONE, 0}, {TF_CT_NONE, 0}, TF_LS_SOLID,
++                            config.inline_underline_bold, {TF_CT_COLORREF, RGB(0x28,0x6c,0xf4)}, TF_ATTR_INPUT};
++  const auto& line = config.inline_underline_style;
++  if (line == L"none") attr.lsStyle = TF_LS_NONE;
++  else if (line == L"dot") attr.lsStyle = TF_LS_DOT;
++  else if (line == L"dash") attr.lsStyle = TF_LS_DASH;
++  else if (line == L"squiggle") attr.lsStyle = TF_LS_SQUIGGLE;
++  const auto& color = config.inline_underline_color;
++  if (color == L"theme") {
++    if (style.hilited_candidate_back_color & 0xff000000)
++      attr.crLine.cr = style.hilited_candidate_back_color & 0xffffff;
++  } else if (color.size() == 7 && color[0] == L'#') {
++    unsigned rgb = 0;
++    bool valid = true;
++    for (size_t i = 1; i < color.size(); ++i) {
++      const auto c = color[i];
++      int digit = c >= L'0' && c <= L'9' ? c-L'0' :
++                  c >= L'a' && c <= L'f' ? c-L'a'+10 :
++                  c >= L'A' && c <= L'F' ? c-L'A'+10 : -1;
++      if (digit < 0) { valid = false; break; }
++      rgb = (rgb << 4) | digit;
++    }
++    if (valid) attr.crLine.cr = RGB((rgb>>16)&255, (rgb>>8)&255, rgb&255);
++  }
++  return attr;
++}
++// Encode resolved attributes in their own GUID. A host caching an earlier
++// attribute cannot mistake a new color/style for the old definition.
++inline GUID MakeInlineUnderlineGuid(const Config& config, const UIStyle& style) {
++  const auto attr = InlineUnderlineAttribute(config, style);
++  GUID guid{0x2ac87e79,0x3260,0x4b32,{0x9d,0xeb,0,0,0,0,0,0xa7}};
++  guid.Data4[2] = static_cast<BYTE>(attr.lsStyle);
++  guid.Data4[3] = attr.fBoldLine ? 1 : 0;
++  guid.Data4[4] = GetRValue(attr.crLine.cr);
++  guid.Data4[5] = GetGValue(attr.crLine.cr);
++  guid.Data4[6] = GetBValue(attr.crLine.cr);
++  return guid;
++}
++inline bool DecodeInlineUnderlineGuid(REFGUID guid, TF_DISPLAYATTRIBUTE& attr) {
++  if (guid.Data1 != 0x2ac87e79 || guid.Data2 != 0x3260 || guid.Data3 != 0x4b32 ||
++      guid.Data4[0] != 0x9d || guid.Data4[1] != 0xeb || guid.Data4[7] != 0xa7 ||
++      guid.Data4[2] > TF_LS_SQUIGGLE || guid.Data4[3] > 1) return false;
++  attr = {{TF_CT_NONE,0}, {TF_CT_NONE,0}, static_cast<TF_DA_LINESTYLE>(guid.Data4[2]),
++           guid.Data4[3] != 0, {TF_CT_COLORREF,RGB(guid.Data4[4],guid.Data4[5],guid.Data4[6])}, TF_ATTR_INPUT};
++  return true;
++}
++}  // namespace weasel
+diff --git a/include/WeaselIPCData.h b/include/WeaselIPCData.h
+index 063a1b4..1239d49 100644
+--- a/include/WeaselIPCData.h
++++ b/include/WeaselIPCData.h
+@@ -191,9 +191,12 @@ struct Status {
+ 
+ // 用於向前端告知設置信息
+ struct Config {
+-  Config() : inline_preedit(false) {}
+-  void reset() { inline_preedit = false; }
++  Config() : inline_preedit(false), inline_underline_style(L"solid"),
++             inline_underline_color(L"#286CF4"), inline_underline_bold(false) {}
++  void reset() { *this = Config(); }
+   bool inline_preedit;
++  std::wstring inline_underline_style, inline_underline_color;
++  bool inline_underline_bold;
+ };
+ 
+ struct UIStyle {
+@@ -228,6 +231,9 @@ struct UIStyle {
+   int candidate_abbreviate_length;
+ 
+   bool inline_preedit;
++  // Transported as config.* lines to retain the existing style archive format.
++  std::wstring inline_underline_style, inline_underline_color;
++  bool inline_underline_bold;
+   bool display_tray_icon;
+   bool ascii_tip_follow_cursor;
+   bool paging_on_scroll;
+@@ -305,6 +311,8 @@ struct UIStyle {
+         comment_font_point(0),
+         candidate_abbreviate_length(0),
+         inline_preedit(false),
++        inline_underline_style(L"solid"), inline_underline_color(L"#286CF4"),
++        inline_underline_bold(false),
+         display_tray_icon(false),
+         ascii_tip_follow_cursor(false),
+         paging_on_scroll(false),
+@@ -380,6 +388,9 @@ struct UIStyle {
+         comment_font_point != st.comment_font_point ||
+         candidate_abbreviate_length != st.candidate_abbreviate_length ||
+         inline_preedit != st.inline_preedit || mark_text != st.mark_text ||
++        inline_underline_style != st.inline_underline_style ||
++        inline_underline_color != st.inline_underline_color ||
++        inline_underline_bold != st.inline_underline_bold ||
+         display_tray_icon != st.display_tray_icon ||
+         ascii_tip_follow_cursor != st.ascii_tip_follow_cursor ||
+         current_zhung_icon != st.current_zhung_icon ||
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index 79bf56c..f01c50b 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -11,7 +11,8 @@ foreach ($name in @('WeaselServer.exe', 'WeaselDeployer.exe', 'rime.dll', 'WinSp
+   Copy-Item "output/Win32/$name" "$destination/Win32/$name" -Force
+ }
+ Copy-Item INSTALL-PATCH.md "$destination/README.md" -Force
+-Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
++Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml" -Force
++Copy-Item rime/inline-underline.custom.example.yaml $destination -Force
+ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt $destination -Force
+ Copy-Item output/RewriteConfig.exe $destination -Force
+ Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1 $destination -Force
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index c89eb8c..31012d0 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-blue-solid-inline-20261002
++Build-ID: rewrite-ui-yaml-inline-underline-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/inline-underline.custom.example.yaml b/rime/inline-underline.custom.example.yaml
+new file mode 100644
+index 0000000..b7def5a
+--- /dev/null
++++ b/rime/inline-underline.custom.example.yaml
+@@ -0,0 +1,7 @@
++# 合并到现有 weasel.custom.yaml 的 patch: 下，不要覆盖整份配置。
++patch:
++  style/inline_underline/style: solid  # none / solid / dot / dash / squiggle
++  style/inline_underline/color: "#286CF4"  # #RRGGBB；改成 theme 跟随选中候选背景色
++  style/inline_underline/bold: false
++# 修改后重新部署并重启小狼毫服务。仅首次安装新版 DLL 后需要重开输入应用。
++# 颜色写法与传统 Rime 皮肤的数值颜色不同：这里固定使用带引号的 #RRGGBB。
+diff --git a/test-inline-underline.cmd b/test-inline-underline.cmd
+new file mode 100644
+index 0000000..6cf387b
+--- /dev/null
++++ b/test-inline-underline.cmd
+@@ -0,0 +1,15 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /DUNICODE /D_UNICODE /Iinclude /Ideps\boost_1_84_0 test\inline_underline_test.cpp /Fodeps\inline_underline_test-x64.obj /Fedeps\inline_underline_test-x64.exe /link msbuild\Release\x64\WeaselIPC.lib /LIBPATH:deps\boost_1_84_0\stage\lib ole32.lib uuid.lib user32.lib advapi32.lib
++if errorlevel 1 exit /b 1
++deps\inline_underline_test-x64.exe output\weaselx64.dll
++if errorlevel 1 exit /b 1
++call C:\BuildTools\VC\Auxiliary\Build\vcvars32.bat
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /DUNICODE /D_UNICODE /Iinclude /Ideps\boost_1_84_0 test\inline_underline_test.cpp /Fodeps\inline_underline_test-x86.obj /Fedeps\inline_underline_test-x86.exe /link msbuild\Release\Win32\WeaselIPC.lib /LIBPATH:deps\boost_1_84_0\stage\lib ole32.lib uuid.lib user32.lib advapi32.lib
++if errorlevel 1 exit /b 1
++deps\inline_underline_test-x86.exe output\weasel.dll
++exit /b %errorlevel%
+diff --git a/test/inline_underline_test.cpp b/test/inline_underline_test.cpp
+new file mode 100644
+index 0000000..f21ac67
+--- /dev/null
++++ b/test/inline_underline_test.cpp
+@@ -0,0 +1,82 @@
++#include <windows.h>
++#include <msctf.h>
++#include <InlineUnderline.h>
++#include <ResponseParser.h>
++#include <WeaselIPC.h>
++#include <cassert>
++#include <iostream>
++int wmain(int argc, wchar_t** argv) {
++  assert(argc == 2 || argc == 3);
++  assert(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
++  HMODULE dll = LoadLibraryW(argv[1]); assert(dll);
++  using GetClass = HRESULT (WINAPI*)(REFCLSID, REFIID, void**);
++  auto getClass = reinterpret_cast<GetClass>(GetProcAddress(dll, "DllGetClassObject")); assert(getClass);
++  GUID clsid{0xa3f4cded,0xb1e9,0x41ee,{0x9c,0xa6,0x7b,0x4d,0x0d,0xe6,0xcb,0x0a}};
++  IClassFactory* factory = nullptr;
++  assert(SUCCEEDED(getClass(clsid, IID_IClassFactory, (void**)&factory)));
++  ITfDisplayAttributeProvider* provider = nullptr;
++  assert(SUCCEEDED(factory->CreateInstance(nullptr, IID_ITfDisplayAttributeProvider, (void**)&provider)));
++  factory->Release();
++  weasel::Config config;
++  weasel::UIStyle style;
++  // Configuration is transported independently of the unchanged style archive.
++  weasel::ResponseParser parser(nullptr, nullptr, nullptr, &config);
++  parser.Feed(L"action=config");
++  parser.Feed(L"config.inline_underline_style=dash");
++  parser.Feed(L"config.inline_underline_color=#A13F07");
++  parser.Feed(L"config.inline_underline_bold=1");
++  assert(config.inline_underline_style == L"dash" && config.inline_underline_bold);
++  auto resolve = [&](const weasel::Config& cfg, const weasel::UIStyle& sty) {
++    GUID guid = weasel::MakeInlineUnderlineGuid(cfg, sty);
++    ITfDisplayAttributeInfo* info = nullptr;
++    assert(SUCCEEDED(provider->GetDisplayAttributeInfo(guid, &info)));
++    GUID returned{}; assert(SUCCEEDED(info->GetGUID(&returned)) && IsEqualGUID(guid, returned));
++    TF_DISPLAYATTRIBUTE attr{}; assert(SUCCEEDED(info->GetAttributeInfo(&attr)));
++    info->Release(); return attr;
++  };
++  auto custom = resolve(config, style);
++  assert(custom.lsStyle == TF_LS_DASH && custom.fBoldLine && custom.crLine.cr == RGB(0xa1,0x3f,7));
++  assert(custom.crText.type == TF_CT_NONE && custom.crBk.type == TF_CT_NONE);
++  const wchar_t* names[] = {L"none", L"solid", L"dot", L"dash", L"squiggle"};
++  const TF_DA_LINESTYLE expected[] = {TF_LS_NONE, TF_LS_SOLID, TF_LS_DOT, TF_LS_DASH, TF_LS_SQUIGGLE};
++  for (size_t i = 0; i < 5; ++i) {
++    config.inline_underline_style = names[i];
++    assert(resolve(config, style).lsStyle == expected[i]);
++  }
++  config.inline_underline_color = L"theme";
++  style.hilited_candidate_back_color = 0xff604020;
++  const GUID first = weasel::MakeInlineUnderlineGuid(config,style);
++  assert(resolve(config,style).crLine.cr == RGB(0x20,0x40,0x60));
++  style.hilited_candidate_back_color = 0xffc05030;
++  const GUID second = weasel::MakeInlineUnderlineGuid(config,style);
++  assert(!IsEqualGUID(first, second));
++  assert(resolve(config,style).crLine.cr == RGB(0x30,0x50,0xc0));
++  ITfDisplayAttributeInfo* previous = nullptr;
++  assert(SUCCEEDED(provider->GetDisplayAttributeInfo(first,&previous)));
++  TF_DISPLAYATTRIBUTE old{}; previous->GetAttributeInfo(&old); previous->Release();
++  assert(old.crLine.cr == RGB(0x20,0x40,0x60)); // cached old definitions remain immutable
++  config.inline_underline_color = L"invalid";
++  config.inline_underline_style = L"invalid";
++  assert(resolve(config,style).crLine.cr == RGB(0x28,0x6c,0xf4));
++  assert(resolve(config,style).lsStyle == TF_LS_SOLID);
++  GUID invalid = second; invalid.Data4[3] = 9;
++  ITfDisplayAttributeInfo* rejected = nullptr;
++  assert(provider->GetDisplayAttributeInfo(invalid,&rejected) == E_INVALIDARG && !rejected);
++  config.reset(); assert(!config.inline_underline_bold && config.inline_underline_style == L"solid");
++  if (argc == 3 && std::wstring(argv[2]) == L"--live") {
++    weasel::Client client;
++    assert(client.Connect());
++    client.StartSession();
++    weasel::Config actual;
++    weasel::UIStyle palette;
++    weasel::ResponseParser response(nullptr, nullptr, nullptr, &actual, &palette);
++    assert(client.GetResponseData(std::ref(response)));
++    assert(actual.inline_preedit && actual.inline_underline_style == L"solid");
++    assert(actual.inline_underline_color == L"#286CF4" && !actual.inline_underline_bold);
++    assert(resolve(actual, palette).crLine.cr == RGB(0x28, 0x6c, 0xf4));
++    client.EndSession(); client.Disconnect();
++    std::cout << "Live deployed YAML -> server -> IPC -> DLL attributes passed\n";
++  }
++  provider->Release(); FreeLibrary(dll); CoUninitialize();
++  std::cout << "YAML IPC fields, real DLL attributes, theme changes and cache isolation passed\n";
++}
+-- 
+2.53.0.windows.2
+
