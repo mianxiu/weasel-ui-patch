@@ -1,0 +1,175 @@
+From d51fe76d19ed156a29142aa460459400b5d468c0 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 18:55:52 +0800
+Subject: [PATCH] Reduce vertical padding and spacing for compact Tab
+ candidates
+
+---
+ REWRITE-UI.md                    | 1 +
+ WeaselUI/Layout.cpp              | 2 +-
+ WeaselUI/WeaselPanel.cpp         | 6 +++---
+ rewrite-build.txt                | 2 +-
+ rime/skins/azure_pill.yaml       | 6 +++---
+ rime/skins/azure_pill_black.yaml | 6 +++---
+ rime/skins/azure_pill_green.yaml | 6 +++---
+ rime/skins/azure_pill_navy.yaml  | 6 +++---
+ test/rewrite_pipeline_test.cpp   | 5 ++++-
+ 9 files changed, 22 insertions(+), 18 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 13fec0c..8cd4306 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 上下留白减半：** 四款 Azure Pill 皮肤的上下高亮 padding 从 5 改为 2（整数像素向下取整），外部 margin_y 从 8 改为 4，行距从 6 改为 3；Tab 额外连接留白从 4 改为 2。普通编码与 Tab 行高仍保持一致，连接圆角保留。
+ > **2026-10-02 非行内 Tab 连接高亮修复：** 单行槽增加上下留白后，选中音节背景延伸至主候选边缘，恢复相交区域的连接圆角；不移动文字或修改候选框高度。仅最后一行音节可与主候选首行相连，横向不相交的选择继续独立显示。
+ > **2026-10-02 非行内 Tab 稳定布局：** inline_preedit:false 时 Tab 音节行固定在主候选上方；普通编码与 Tab 使用相同的单行高度及上下留白，文字垂直居中。横排和竖排候选均覆盖；Tab 拼音实际换行仍按内容增高。
+ > **2026-10-02 普通编码纯文字：** 非行内模式的普通编码去掉高亮背景，统一使用普通文字色；关闭软光标符号。Tab 编辑高亮及分组编号填充保留。新增 Collect-IME-Diagnostics.cmd，只读导出 Windows 构建/更新、输入组件版本、触摸键盘状态和运行应用实际加载的 Weasel DLL 构建标识，供两台系统对比。
+diff --git a/WeaselUI/Layout.cpp b/WeaselUI/Layout.cpp
+index ced26c0..fee3140 100644
+--- a/WeaselUI/Layout.cpp
++++ b/WeaselUI/Layout.cpp
+@@ -23,7 +23,7 @@ Layout::Layout(const UIStyle& style,
+     _style.inline_preedit = false;
+   }
+   if (_context.rewrite.active() || !_configuredInlinePreedit) {
+-    _style.spacing = (std::max)(_style.spacing, _style.hilite_padding_y + 4);
++    _style.spacing = (std::max)(_style.spacing, _style.hilite_padding_y + 2);
+   }
+   if (pDWR) {
+     float scale = pDWR->dpiScaleLayout;
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 6c9681f..29a948a 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -919,11 +919,11 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+         auto back = cell.back; back.OffsetRect(rc.left, rc.top);
+         // Pad the painted fill, without changing text layout or window height.
+         back.InflateRect(DPI_SCALE(4), DPI_SCALE(m_style.hilite_padding_y));
+-        // Leave 4px between the text and the main highlight edge on either side.
++        // Keep a compact 2px reach toward the main highlight on either side.
+         if (m_candidateCount && rc.bottom <= m_layout->GetCandidateTextRect(0).top)
+-          back.bottom += DPI_SCALE(4);
++          back.bottom += DPI_SCALE(2);
+         else
+-          back.top -= DPI_SCALE(4);
++          back.top -= DPI_SCALE(2);
+         Gdiplus::GraphicsPath joined;
+         CRect candidate, bounds;
+         if (m_candidateCount && !stable) {
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 319e12d..3fc128e 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-stable-tab-joined-highlight-20261002
++Build-ID: rewrite-ui-compact-tab-padding-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/rime/skins/azure_pill.yaml b/rime/skins/azure_pill.yaml
+index 33be83a..19c9ecc 100644
+--- a/rime/skins/azure_pill.yaml
++++ b/rime/skins/azure_pill.yaml
+@@ -25,12 +25,12 @@ patch:
+   style/layout/max_height: 0
+   style/layout/border: 1
+   style/layout/margin_x: 10
+-  style/layout/margin_y: 8
+-  style/layout/spacing: 6
++  style/layout/margin_y: 4
++  style/layout/spacing: 3
+   style/layout/candidate_spacing: 18
+   style/layout/hilite_spacing: 4
+   style/layout/hilite_padding_x: 7
+-  style/layout/hilite_padding_y: 5
++  style/layout/hilite_padding_y: 2
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/rime/skins/azure_pill_black.yaml b/rime/skins/azure_pill_black.yaml
+index ac27002..3b575f0 100644
+--- a/rime/skins/azure_pill_black.yaml
++++ b/rime/skins/azure_pill_black.yaml
+@@ -25,12 +25,12 @@ patch:
+   style/layout/max_height: 0
+   style/layout/border: 1
+   style/layout/margin_x: 10
+-  style/layout/margin_y: 8
+-  style/layout/spacing: 6
++  style/layout/margin_y: 4
++  style/layout/spacing: 3
+   style/layout/candidate_spacing: 18
+   style/layout/hilite_spacing: 4
+   style/layout/hilite_padding_x: 7
+-  style/layout/hilite_padding_y: 5
++  style/layout/hilite_padding_y: 2
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/rime/skins/azure_pill_green.yaml b/rime/skins/azure_pill_green.yaml
+index e29b67e..0e0c844 100644
+--- a/rime/skins/azure_pill_green.yaml
++++ b/rime/skins/azure_pill_green.yaml
+@@ -25,12 +25,12 @@ patch:
+   style/layout/max_height: 0
+   style/layout/border: 1
+   style/layout/margin_x: 10
+-  style/layout/margin_y: 8
+-  style/layout/spacing: 6
++  style/layout/margin_y: 4
++  style/layout/spacing: 3
+   style/layout/candidate_spacing: 18
+   style/layout/hilite_spacing: 4
+   style/layout/hilite_padding_x: 7
+-  style/layout/hilite_padding_y: 5
++  style/layout/hilite_padding_y: 2
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/rime/skins/azure_pill_navy.yaml b/rime/skins/azure_pill_navy.yaml
+index 9608d83..0b6bfb4 100644
+--- a/rime/skins/azure_pill_navy.yaml
++++ b/rime/skins/azure_pill_navy.yaml
+@@ -25,12 +25,12 @@ patch:
+   style/layout/max_height: 0
+   style/layout/border: 1
+   style/layout/margin_x: 10
+-  style/layout/margin_y: 8
+-  style/layout/spacing: 6
++  style/layout/margin_y: 4
++  style/layout/spacing: 3
+   style/layout/candidate_spacing: 18
+   style/layout/hilite_spacing: 4
+   style/layout/hilite_padding_x: 7
+-  style/layout/hilite_padding_y: 5
++  style/layout/hilite_padding_y: 2
+   style/layout/corner_radius: 16
+   style/layout/hilited_corner_radius: 13
+   style/layout/shadow_radius: 12
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 91d8345..6f1be52 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -278,6 +278,7 @@ int main() {
+       if (mode != 2) {
+         auto fixedStyle = style;
+         fixedStyle.inline_preedit = false;
++        fixedStyle.margin_y = 4; fixedStyle.spacing = 3; fixedStyle.hilite_padding_y = 2;
+         fixedStyle.max_width = 1000;
+         auto tab = indexed;
+         for (int i = 0; i < 6; ++i) {
+@@ -711,7 +712,9 @@ int main() {
+     panel.ShowWindow(SW_SHOWNA);
+     assert(IsWindowVisible(panel.RewriteWindow()));
+     // Non-inline mode keeps the row above candidates on either side of the caret.
+-    style.inline_preedit = false; host.style() = style;
++    style.inline_preedit = false;
++    style.margin_y = 4; style.spacing = 3; style.hilite_padding_y = 2;
++    host.style() = style;
+     host.ctx() = normal; panel.Refresh(); panel.MoveTo(CRect(200,200,200,224));
+     const auto panelCodeHeight = panel.SurfaceRect().Height();
+     auto fixedEditing = armed; fixedEditing.cinfo = normal.cinfo;
+-- 
+2.53.0.windows.2
+
