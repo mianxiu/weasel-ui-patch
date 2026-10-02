@@ -1,0 +1,85 @@
+From 79065c169a5262c1026d43ee09a227347849b09f Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 18:47:41 +0800
+Subject: [PATCH] Restore joined Tab highlights across non-inline preedit
+ padding
+
+---
+ REWRITE-UI.md                  |  1 +
+ WeaselUI/WeaselPanel.cpp       | 11 +++++++++++
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp | 14 ++++++++++++++
+ 4 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 01fec03..13fec0c 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 非行内 Tab 连接高亮修复：** 单行槽增加上下留白后，选中音节背景延伸至主候选边缘，恢复相交区域的连接圆角；不移动文字或修改候选框高度。仅最后一行音节可与主候选首行相连，横向不相交的选择继续独立显示。
+ > **2026-10-02 非行内 Tab 稳定布局：** inline_preedit:false 时 Tab 音节行固定在主候选上方；普通编码与 Tab 使用相同的单行高度及上下留白，文字垂直居中。横排和竖排候选均覆盖；Tab 拼音实际换行仍按内容增高。
+ > **2026-10-02 普通编码纯文字：** 非行内模式的普通编码去掉高亮背景，统一使用普通文字色；关闭软光标符号。Tab 编辑高亮及分组编号填充保留。新增 Collect-IME-Diagnostics.cmd，只读导出 Windows 构建/更新、输入组件版本、触摸键盘状态和运行应用实际加载的 Weasel DLL 构建标识，供两台系统对比。
+ > **2026-10-02 可选系统输入绕过入口：** 包内新增 Fix-IME-First-Key.cmd，可选择打开触摸键盘、备份后重置 TouchKeyboardHasEverShown、恢复原值或查看状态。由用户单独运行，不由补丁安装器自动执行。Windows PowerShell 5.1 隔离测试覆盖原值不存在、重复执行、外部修改及写入失败。
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index e5ed500..6c9681f 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -930,6 +930,17 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+           candidate = m_layout->GetHighlightRect();
+           candidate.InflateRect(DPI_SCALE(m_style.hilite_padding_x),
+                                 DPI_SCALE(m_style.hilite_padding_y));
++          // Non-inline mode reserves a centered preedit slot for stable height.
++          // Carry only the last syllable row's fill through its bottom padding;
++          // the shared path still requires horizontal overlap with the candidate.
++          if (!m_style.inline_preedit &&
++              m_style.layout_type == UIStyle::LAYOUT_HORIZONTAL &&
++              rc.bottom <= m_layout->GetCandidateTextRect(0).top &&
++              cell.back.bottom == layout.size.cy &&
++              back.left < candidate.right && back.right > candidate.left &&
++              m_layout->GetHighlightRect().top == m_layout->GetCandidateRect(0).top) {
++            back.bottom = (std::max)((int)back.bottom, (int)candidate.top + 1);
++          }
+           const bool firstPair = m_ctx.cinfo.highlighted == 0 && !layout.cells.empty() &&
+               cell.back.TopLeft() == layout.cells.front().back.TopLeft() && !cell.unit.badge &&
+               layout.size.cy == cell.back.Height() &&
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 5704f40..319e12d 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-stable-panel-tab-20261002
++Build-ID: rewrite-ui-stable-tab-joined-highlight-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 5368837..91d8345 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -717,9 +717,23 @@ int main() {
+     auto fixedEditing = armed; fixedEditing.cinfo = normal.cinfo;
+     host.ctx() = fixedEditing; panel.Refresh(); panel.MoveTo(CRect(200,200,200,224));
+     assert(panel.SurfaceRect().Height() == panelCodeHeight);
++    panel.RedrawWindow(); assert(panel.RewriteHighlightsJoined());
+     assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
+     panel.MoveTo(bottomCaret);
+     assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
++    // Padding must not connect a distant selection or an earlier wrapped row.
++    auto separated = fixedEditing;
++    for (auto& text : separated.cinfo.candies) text.str = L"测";
++    separated.rewrite.stage = L"index"; separated.rewrite.index = L"4";
++    host.ctx() = separated; panel.Refresh(); panel.RedrawWindow();
++    assert(!panel.RewriteHighlightsJoined());
++    auto wrappedFirst = fixedEditing;
++    for (auto& text : wrappedFirst.cinfo.candies) text.str = L"测";
++    wrappedFirst.rewrite.pinyin = L"cè|shì|cháng|cháng|cháng|cháng|cháng|cháng";
++    wrappedFirst.rewrite.original = wrappedFirst.rewrite.input = L"ceuiiiiiiiiiiiii";
++    wrappedFirst.rewrite.ranges = L"0-2,2-4,4-6,6-8,8-10,10-12,12-14,14-16";
++    host.ctx() = wrappedFirst; panel.Refresh(); panel.RedrawWindow();
++    assert(!panel.RewriteHighlightsJoined());
+     auto empty = editing; empty.cinfo.clear(); empty.preedit.clear();
+     host.ctx() = empty; panel.Refresh();
+     assert(IsWindowVisible(panel.RewriteWindow()));
+-- 
+2.53.0.windows.2
+
