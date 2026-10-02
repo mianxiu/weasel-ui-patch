@@ -1,0 +1,291 @@
+From 670b70385a0bc6a625f96245e6f1ce6fa318e3e2 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 16:47:36 +0800
+Subject: [PATCH] Add optional Windows first-key workaround menu with backup
+ and restore
+
+---
+ Fix-IME-First-Key.cmd          |   7 ++
+ Fix-IME-First-Key.ps1          | 134 +++++++++++++++++++++++++++++++++
+ INSTALL-PATCH.md               |  15 ++++
+ REWRITE-UI.md                  |   1 +
+ package-rewrite.ps1            |   2 +
+ rewrite-build.txt              |   2 +-
+ test/optional_ime_fix_test.ps1 |  48 ++++++++++++
+ 7 files changed, 208 insertions(+), 1 deletion(-)
+ create mode 100644 Fix-IME-First-Key.cmd
+ create mode 100644 Fix-IME-First-Key.ps1
+ create mode 100644 test/optional_ime_fix_test.ps1
+
+diff --git a/Fix-IME-First-Key.cmd b/Fix-IME-First-Key.cmd
+new file mode 100644
+index 0000000..1d60f85
+--- /dev/null
++++ b/Fix-IME-First-Key.cmd
+@@ -0,0 +1,7 @@
++@echo off
++setlocal
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Fix-IME-First-Key.ps1" %*
++set "fix_result=%errorlevel%"
++echo.
++pause
++exit /b %fix_result%
+diff --git a/Fix-IME-First-Key.ps1 b/Fix-IME-First-Key.ps1
+new file mode 100644
+index 0000000..6c1ea73
+--- /dev/null
++++ b/Fix-IME-First-Key.ps1
+@@ -0,0 +1,134 @@
++﻿param(
++  [ValidateSet('Menu','TouchKeyboard','Reset','Restore','Status')]
++  [string]$Action = 'Menu',
++  [string]$BackupDirectory = (Join-Path $env:LOCALAPPDATA 'WeaselRewriteUI\OptionalIMEFix')
++)
++$ErrorActionPreference = 'Stop'
++$script:RegistryPath = 'Software\Microsoft\InputMethod\Settings\Common'
++$script:ValueName = 'TouchKeyboardHasEverShown'
++$script:BackupFile = Join-Path $BackupDirectory 'touch-keyboard-state.json'
++$script:UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
++
++function Get-IMERegistryState {
++  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($script:RegistryPath)
++  try {
++    if (!$key -or $key.GetValueNames() -notcontains $script:ValueName) {
++      return [pscustomobject]@{ existed = $false; kind = ''; value = $null }
++    }
++    $kind = $key.GetValueKind($script:ValueName).ToString()
++    if ($kind -ne 'DWord') { throw 'Unexpected registry type; no changes made.' }
++    return [pscustomobject]@{ existed = $true; kind = $kind; value = $key.GetValue($script:ValueName) }
++  } finally { if ($key) { $key.Dispose() } }
++}
++
++function Set-IMERegistryState($state) {
++  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($script:RegistryPath)
++  try {
++    if ($state.existed) {
++      $key.SetValue($script:ValueName, [int]$state.value, [Microsoft.Win32.RegistryValueKind]::DWord)
++    } else { $key.DeleteValue($script:ValueName, $false) }
++  } finally { $key.Dispose() }
++}
++
++function Test-IMEStateEqual($left, $right) {
++  return ($left.existed -eq $right.existed -and
++    (!$left.existed -or ($left.kind -eq $right.kind -and $left.value -eq $right.value)))
++}
++
++function Read-IMEBackup {
++  $saved = [IO.File]::ReadAllText($script:BackupFile) | ConvertFrom-Json
++  if ($saved.schema -ne 1 -or $saved.sid -ne $script:UserSid -or
++      $saved.path -ne $script:RegistryPath -or $saved.name -ne $script:ValueName -or
++      $saved.original.existed -isnot [bool] -or
++      ($saved.original.existed -and ($saved.original.kind -ne 'DWord' -or
++                                    $saved.original.value -isnot [int]))) {
++    throw 'Invalid backup or backup belongs to another user; no changes made.'
++  }
++  return $saved
++}
++
++function Invoke-IMEWorkaround([string]$Operation) {
++  $reset = [pscustomobject]@{ existed = $true; kind = 'DWord'; value = 0 }
++  switch ($Operation) {
++    'Status' {
++      Get-IMERegistryState | Format-List
++      Write-Host ('Active backup: ' + (Test-Path -LiteralPath $script:BackupFile))
++    }
++    'TouchKeyboard' {
++      $exe = Join-Path $env:CommonProgramFiles 'microsoft shared\ink\TabTip.exe'
++      if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Windows touch keyboard was not found.' }
++      Start-Process -FilePath $exe -WindowStyle Normal
++      Write-Host 'Touch keyboard requested. Close it manually, then retry typing.'
++      Write-Host 'If no keyboard appears, open it using the touch keyboard icon on the taskbar.'
++      Write-Host 'This does not reset the registry or add a startup task.'
++    }
++    'Reset' {
++      $current = Get-IMERegistryState
++      if (Test-Path -LiteralPath $script:BackupFile) {
++        $saved = Read-IMEBackup
++        if (!(Test-IMEStateEqual $current $reset) -and
++            !(Test-IMEStateEqual $current $saved.original)) {
++          throw 'Registry changed after the backup. Existing backup preserved; no changes made.'
++        }
++      } else {
++        New-Item -ItemType Directory -Path $BackupDirectory -Force | Out-Null
++        $saved = [ordered]@{ schema = 1; sid = $script:UserSid;
++          path = $script:RegistryPath; name = $script:ValueName; original = $current }
++        $temporary = $script:BackupFile + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
++        [IO.File]::WriteAllText($temporary, ($saved | ConvertTo-Json -Depth 5),
++                              (New-Object Text.UTF8Encoding($false)))
++        Move-Item -LiteralPath $temporary -Destination $script:BackupFile
++      }
++      Set-IMERegistryState $reset
++      if (!(Test-IMEStateEqual (Get-IMERegistryState) $reset)) { throw 'Reset verification failed; backup preserved.' }
++      Write-Host 'SUCCESS: TouchKeyboardHasEverShown = 0 (current user only).'
++      Write-Host ('Backup: ' + $script:BackupFile)
++      Write-Host 'Fully exit and reopen the affected apps, then test copying and switching windows.'
++      Write-Host 'This is a community workaround; it may need repeating after using the touch keyboard or updating Windows.'
++    }
++    'Restore' {
++      if (!(Test-Path -LiteralPath $script:BackupFile)) { throw 'No active backup found; no changes made.' }
++      $saved = Read-IMEBackup
++      $current = Get-IMERegistryState
++      if (!(Test-IMEStateEqual $current $reset) -and
++          !(Test-IMEStateEqual $current $saved.original)) {
++        throw 'Registry changed independently. Restore stopped to preserve that change.'
++      }
++      Set-IMERegistryState $saved.original
++      if (!(Test-IMEStateEqual (Get-IMERegistryState) $saved.original)) { throw 'Restore verification failed; backup preserved.' }
++      $restoredFile = $script:BackupFile + '.restored-' + [guid]::NewGuid().ToString('N')
++      Move-Item -LiteralPath $script:BackupFile -Destination $restoredFile
++      Write-Host 'SUCCESS: original registry value restored (or removed if originally absent).'
++    }
++    default { throw 'Unknown operation.' }
++  }
++}
++
++if ($MyInvocation.InvocationName -ne '.') {
++  try {
++    if ($Action -ne 'Menu') { Invoke-IMEWorkaround $Action }
++    else {
++      Write-Host '可选修复：Windows 首字母直出 / 无候选（社区临时绕过办法）'
++      Write-Host '1. 打开触摸键盘（出现后手动关闭，再测试输入）'
++      Write-Host '2. 备份原值，再将触摸键盘注册表状态重置为 0'
++      Write-Host '3. 恢复重置前的注册表状态'
++      Write-Host '4. 查看当前状态（只读）'
++      Write-Host '0. 退出'
++      Write-Host '请使用当前 Windows 账户普通运行；不添加自启动，不修改系统文件。'
++      $choice = Read-Host '请选择 0-4'
++      switch ($choice) {
++        '1' { Invoke-IMEWorkaround 'TouchKeyboard' }
++        '2' { Invoke-IMEWorkaround 'Reset' }
++        '3' { Invoke-IMEWorkaround 'Restore' }
++        '4' { Invoke-IMEWorkaround 'Status' }
++        '0' { }
++        default { throw 'Invalid choice; no changes made.' }
++      }
++    }
++    exit 0
++  } catch {
++    Write-Host ('FAILED: ' + $_.Exception.Message) -ForegroundColor Red
++    Write-Host 'If access is denied, close this window; no automatic elevation is attempted.'
++    exit 1
++  }
++}
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index c7d193a..bc43c75 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,18 @@
++## 可选：Windows 首字母直出 / 无候选绕过办法
++
++如果出现切窗或复制后首字母直出、后续带下划线却无候选，可单独双击 `Fix-IME-First-Key.cmd`，按提示选择：
++
++- `1`：请求打开 Windows 触摸键盘；出现后手动关闭，再试输入。如果没出现，通过任务栏触摸键盘图标打开。
++- `2`：备份当前账户的 `TouchKeyboardHasEverShown` 原值，再重置为 DWORD `0`。随后完全退出并重开受影响的应用测试。
++- `3`：恢复原值；如果原先不存在，则移除本工具创建的值。独立修改过该值时会停止恢复，保留备份。
++- `4`：只读查看当前状态。`0` 退出。
++
++备份位置：`%LOCALAPPDATA%\WeaselRewriteUI\OptionalIMEFix\touch-keyboard-state.json`。重复重置不会覆盖原备份，恢复成功后备份归档。只操作当前用户的 `HKCU\Software\Microsoft\InputMethod\Settings\Common` 下这一项。
++
++这是 [上游 #1519 评论](https://github.com/rime/weasel/issues/1519#issuecomment-2692575979) 与 [注册表绕过建议](https://github.com/rime/weasel/issues/1519#issuecomment-2880862406) 提到的社区临时办法，不能保证解决所有同类症状。使用触摸键盘或更新 Windows 后可能需要再次执行。普通运行；权限不足时会报错并保留已有备份。工具不自动提权、不加入开机启动，也不删除系统文件或卸载更新。
++
++此入口由用户单独选择执行，`Apply-Patch.cmd` 不会自动运行它。也可通过 `Fix-IME-First-Key.cmd -Action Status`、`-Action Reset`、`-Action Restore` 或 `-Action TouchKeyboard` 直接选择操作。
++
+ > **2026-10-02 Tab 前置编号填充：** 可见分组编号使用独立浅灰圆角背景，去掉末尾点；字号与末尾输入序号框统一，填充框在音节行内垂直居中，数字按实际字形居中。前四项及组内编号继续隐藏，选择规则保持。
+ > **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+ > **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index aed4e87..752de87 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 可选系统输入绕过入口：** 包内新增 Fix-IME-First-Key.cmd，可选择打开触摸键盘、备份后重置 TouchKeyboardHasEverShown、恢复原值或查看状态。由用户单独运行，不由补丁安装器自动执行。Windows PowerShell 5.1 隔离测试覆盖原值不存在、重复执行、外部修改及写入失败。
+ > **2026-10-02 Tab 前置编号填充：** 可见分组编号使用独立浅灰圆角背景，去掉末尾点；字号与末尾输入序号框统一，填充框在音节行内垂直居中，数字按实际字形居中。前四项及组内编号继续隐藏，选择规则保持。
+ > **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+ > **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index 95e145c..a2c72de 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -15,6 +15,7 @@ Copy-Item rime/weasel.custom.yaml "$destination/rewrite-ui.custom.example.yaml"
+ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt $destination -Force
+ Copy-Item output/RewriteConfig.exe $destination -Force
+ Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1 $destination -Force
++Copy-Item Fix-IME-First-Key.cmd,Fix-IME-First-Key.ps1 $destination -Force
+ New-Item -ItemType Directory -Force "$destination/skins" | Out-Null
+ Copy-Item rime/skins/azure_pill*.yaml,rime/skins/README.md "$destination/skins" -Force
+ Copy-Item rime/skins/preview "$destination/skins/preview" -Recurse -Force
+@@ -37,6 +38,7 @@ try {
+   $files = $tracked + @(
+     'Install-Binaries.ps1', 'INSTALL-PATCH.md', 'build-rewrite-config.cmd', 'tools/rewrite-config.cpp',
+     'Apply-Skin-All.cmd', 'tools/generate-skin-previews.ps1',
++    'Fix-IME-First-Key.cmd', 'Fix-IME-First-Key.ps1', 'test/optional_ime_fix_test.ps1',
+     'test/installer_config_test.ps1', 'test/installer_transaction_test.ps1',
+     'test/installer_diagnostics_test.ps1',
+     'test/installer_rime_test.cpp', 'test/installer_rime_test.ps1',
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index e89d2fd..cb3ce59 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-tab-prefix-badges-20261002
++Build-ID: rewrite-ui-optional-ime-workaround-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/optional_ime_fix_test.ps1 b/test/optional_ime_fix_test.ps1
+new file mode 100644
+index 0000000..6f6ae22
+--- /dev/null
++++ b/test/optional_ime_fix_test.ps1
+@@ -0,0 +1,48 @@
++$ErrorActionPreference = 'Stop'
++$testDirectory = Join-Path $env:TEMP ('weasel-optional-ime-test-' + [guid]::NewGuid().ToString('N'))
++. (Join-Path (Split-Path $PSScriptRoot) 'Fix-IME-First-Key.ps1') -BackupDirectory $testDirectory
++# Replace only the registry adapter. Never touch the real Windows setting.
++function Get-IMERegistryState { return $script:MockState }
++function Set-IMERegistryState($state) {
++  if ($script:FailWrite) { throw 'Simulated registry access denied' }
++  $script:MockState = [pscustomobject]@{existed=$state.existed;kind=$state.kind;value=$state.value}
++}
++function Assert($condition, $message) { if (!$condition) { throw $message } }
++function Expect-Failure($operation) {
++  $failed = $false
++  try { & $operation } catch { $failed = $true }
++  Assert $failed 'Expected failure'
++}
++foreach ($original in @(
++  [pscustomobject]@{existed=$true;kind='DWord';value=1},
++  [pscustomobject]@{existed=$false;kind='';value=$null}
++)) {
++  $script:MockState = $original
++  Invoke-IMEWorkaround Reset
++  Assert ($script:MockState.value -eq 0) 'Reset failed'
++  $before = [IO.File]::ReadAllText($script:BackupFile)
++  Invoke-IMEWorkaround Reset
++  Assert ([IO.File]::ReadAllText($script:BackupFile) -ceq $before) 'Repeated reset replaced original backup'
++  $script:MockState = [pscustomobject]@{existed=$true;kind='DWord';value=2}
++  Expect-Failure { Invoke-IMEWorkaround Restore }
++  Assert ($script:MockState.value -eq 2) 'Restore overwrote external change'
++  Expect-Failure { Invoke-IMEWorkaround Reset }
++  Assert ([IO.File]::ReadAllText($script:BackupFile) -ceq $before) 'Failure changed backup'
++  $script:MockState = [pscustomobject]@{existed=$true;kind='DWord';value=0}
++  Invoke-IMEWorkaround Restore
++  Assert (Test-IMEStateEqual $script:MockState $original) 'Original state not restored'
++  Assert (!(Test-Path -LiteralPath $script:BackupFile)) 'Active backup not archived'
++}
++$script:MockState = [pscustomobject]@{existed=$true;kind='DWord';value=1}
++$script:FailWrite = $true
++Expect-Failure { Invoke-IMEWorkaround Reset }
++Assert ($script:MockState.value -eq 1) 'Failed write changed value'
++Assert (Test-Path -LiteralPath $script:BackupFile) 'Write failure lost backup'
++$script:FailWrite = $false
++Invoke-IMEWorkaround Reset
++$saved = Read-IMEBackup
++$saved.sid = 'S-1-invalid'
++[IO.File]::WriteAllText($script:BackupFile, ($saved | ConvertTo-Json -Depth 5))
++Expect-Failure { Invoke-IMEWorkaround Restore }
++Assert ($script:MockState.value -eq 0) 'Foreign backup changed registry'
++Write-Host 'Optional IME reset/restore, absent value, repeated reset, external change and failure tests passed.'
+-- 
+2.53.0.windows.2
+
