@@ -1,0 +1,163 @@
+From 2335b2b85e1ae75f6ae3614d2f7a30f0153bac7f Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 16:24:07 +0800
+Subject: [PATCH] Retry candidate UI after transient browser focus failure
+
+---
+ INSTALL-PATCH.md            |  1 +
+ REWRITE-UI.md               |  1 +
+ WeaselTSF/CandidateList.cpp |  7 +++++++
+ WeaselTSF/KeyEventSink.cpp  |  5 +++++
+ WeaselTSF/TextEditSink.cpp  |  5 +++++
+ rewrite-build.txt           |  2 +-
+ test/tsf_focus_test.cpp     | 25 +++++++++++++++++++++++--
+ 7 files changed, 43 insertions(+), 3 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 5aeb58c..ab790cb 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+ > **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+ > **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+ > **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index f3fd764..15f3dde 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 网页候选恢复防护：** 候选 UI 首次启动暂时失败时，后续输入响应重试启动；每次启动重新请求显示，避免继承上一轮隐藏状态。旧输入框文本编辑通知不再影响新输入，并在新上下文收到按键时重新绑定编辑通知。x64/x86 回归测试覆盖启动失败重试和旧通知隔离；首字母无下划线的网页复现场景尚未确认原因。
+ > **2026-10-02 切窗按键恢复：** 按键预检缓存按输入上下文、按键、事件参数及消息时间匹配，防止正式回调丢失后吞掉后续输入。收到按键时检查输入上下文变化，清理旧预编辑，并忽略旧窗口延迟回调，保护新窗口输入。x64/x86 焦点与延迟回调回归测试通过；应用内按住 u 切窗场景仍需实测。
+ > **2026-10-01 Tab 灰框实际高度：** 两个填充矩形采用完整 Tab 音节文字行的实际高度，放大背景本身；保持与原音节行的中心对齐，内部统一字号随背景尺寸调整。
+ > **2026-10-01 Tab 编辑框放大：** 序号框和编辑字符框的背景高度扩大为上一版的两倍，统一字号同步放大，保留少量内边距及字形居中。
+diff --git a/WeaselTSF/CandidateList.cpp b/WeaselTSF/CandidateList.cpp
+index 9150aec..dc5f243 100644
+--- a/WeaselTSF/CandidateList.cpp
++++ b/WeaselTSF/CandidateList.cpp
+@@ -199,6 +199,10 @@ STDMETHODIMP CCandidateList::FinalizeExactCompositionString() {
+ }
+ 
+ void CCandidateList::UpdateUI(const Context& ctx, const Status& status) {
++  // A browser can temporarily reject BeginUIElement during focus transfer.
++  // Retry while input is active, even if the TSF composition already exists.
++  if (status.composing)
++    StartUI();
+   if (_ui->style().inline_preedit) {
+     _ui->style().client_caps |= weasel::INLINE_PREEDIT_CAPABLE;
+   } else {
+@@ -305,6 +309,9 @@ void CCandidateList::StartUI() {
+                               bool* const next, bool* const scroll_next) {
+       _tsf->HandleUICallback(sel, hov, next, scroll_next);
+     });
++  // This is an in/out value. A hidden UI in the previous input must not
++  // become the default for a new host that leaves the value unchanged.
++  _pbShow = TRUE;
+   if (FAILED(pUIElementMgr->BeginUIElement(this, &_pbShow, &uiid)))
+     return;
+   _uiStarted = true;
+diff --git a/WeaselTSF/KeyEventSink.cpp b/WeaselTSF/KeyEventSink.cpp
+index 41c7377..7ccc95a 100644
+--- a/WeaselTSF/KeyEventSink.cpp
++++ b/WeaselTSF/KeyEventSink.cpp
+@@ -98,6 +98,11 @@ bool WeaselTSF::_PrepareKeyContext(ITfContext* context) {
+     _AbortComposition();
+   if (context)
+     _pEditSessionContext = context;
++  if (context != _pTextEditSinkContext) {
++    com_ptr<ITfDocumentMgr> document;
++    if (SUCCEEDED(context->GetDocumentMgr(&document)) && document)
++      _InitTextEditSink(document);
++  }
+   return true;
+ }
+ 
+diff --git a/WeaselTSF/TextEditSink.cpp b/WeaselTSF/TextEditSink.cpp
+index eaa3026..447ac13 100644
+--- a/WeaselTSF/TextEditSink.cpp
++++ b/WeaselTSF/TextEditSink.cpp
+@@ -20,6 +20,10 @@ static BOOL IsRangeCovered(TfEditCookie ec,
+ STDMETHODIMP WeaselTSF::OnEndEdit(ITfContext* pContext,
+                                   TfEditCookie ecReadOnly,
+                                   ITfEditRecord* pEditRecord) {
++  // Old browser controls can finish an edit after focus moved. Their caret
++  // cannot be compared with the new composition's range or cancel its input.
++  if (pContext != _pEditSessionContext)
++    return S_OK;
+   BOOL fSelectionChanged;
+   IEnumTfRanges* pEnumTextChanges;
+   ITfRange* pRange;
+@@ -41,6 +45,7 @@ STDMETHODIMP WeaselTSF::OnEndEdit(ITfContext* pContext,
+             _AbortComposition();
+           pRangeComposition->Release();
+         }
++        tfSelection.range->Release();
+       }
+     }
+   }
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index e12c4e6..c483e6e 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-focus-key-recovery-20261002
++Build-ID: rewrite-ui-browser-candidate-retry-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/tsf_focus_test.cpp b/test/tsf_focus_test.cpp
+index 57b4160..609b4be 100644
+--- a/test/tsf_focus_test.cpp
++++ b/test/tsf_focus_test.cpp
+@@ -23,7 +23,7 @@ struct Host : ITfThreadMgr, ITfUIElementMgr {
+   ITfDocumentMgr* focused = nullptr;
+   ULONG refs = 1;
+   int begins = 0, ends = 0;
+-  bool unavailable = false;
++  bool unavailable = false, rejectBegin = false;
+   STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+     *out = nullptr;
+     if (iid == IID_IUnknown || iid == IID_ITfThreadMgr)
+@@ -36,7 +36,9 @@ struct Host : ITfThreadMgr, ITfUIElementMgr {
+   STDMETHODIMP_(ULONG) AddRef() override { return ++refs; }
+   STDMETHODIMP_(ULONG) Release() override { return --refs; }
+   STDMETHODIMP BeginUIElement(ITfUIElement*, BOOL* show, DWORD* id) override {
+-    *show = FALSE; *id = ++begins; return S_OK;
++    assert(*show == TRUE); // Each new UI requests display afresh.
++    *show = FALSE; *id = ++begins;
++    return rejectBegin ? E_FAIL : S_OK;
+   }
+   STDMETHODIMP EndUIElement(DWORD) override { ++ends; return S_OK; }
+   STDMETHODIMP UpdateUIElement(DWORD) override { return S_OK; }
+@@ -369,9 +371,28 @@ struct TSFFocusTest {
+     context.Drain();
+     assert(heldU.range.text.empty());
+     assert(service->_IsCurrentComposition(&nextInput) && service->_status.composing);
++    // A stale browser edit notification must be ignored before querying its
++    // edit record or comparing its caret with the new composition's range.
++    service->OnEndEdit(&context, 0, nullptr);
++    assert(service->_IsCurrentComposition(&nextInput) && service->_status.composing);
+     service->_AbortComposition();
+     nextContext.Drain();
+     host.focused = nullptr; document.top = nullptr;
++    // First BeginUIElement rejected during browser focus transfer: the next
++    // response must retry without requiring Backspace or a new composition.
++    candidates->Destroy();
++    auto beginsBeforeRetry = host.begins;
++    host.rejectBegin = true;
++    candidates->StartUI();
++    assert(host.begins == beginsBeforeRetry + 1);
++    host.rejectBegin = false;
++    weasel::Context retryContext;
++    weasel::Status retryStatus;
++    retryStatus.composing = true;
++    candidates->UpdateUI(retryContext, retryStatus);
++    assert(host.begins == beginsBeforeRetry + 2);
++    candidates->UpdateUI(retryContext, retryStatus);
++    assert(host.begins == beginsBeforeRetry + 2);
+     service->_pEditSessionContext.Release();
+     candidates->Destroy();
+     candidates.Release(); // Break the existing service/candidate COM cycle.
+-- 
+2.53.0.windows.2
+
