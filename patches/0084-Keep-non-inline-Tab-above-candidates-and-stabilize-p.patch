@@ -1,0 +1,204 @@
+From ff05f6a5293259a0d1085206209ada9466b031cb Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Fri, 2 Oct 2026 18:06:40 +0800
+Subject: [PATCH] Keep non-inline Tab above candidates and stabilize preedit
+ row height
+
+---
+ REWRITE-UI.md                  |  1 +
+ WeaselUI/HorizontalLayout.cpp  | 13 ++++++++--
+ WeaselUI/Layout.cpp            |  5 +++-
+ WeaselUI/Layout.h              |  1 +
+ WeaselUI/StandardLayout.cpp    |  1 +
+ WeaselUI/VerticalLayout.cpp    | 13 ++++++++--
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp | 44 ++++++++++++++++++++++++++++++++++
+ 8 files changed, 74 insertions(+), 6 deletions(-)
+
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index a8aca77..01fec03 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -1,3 +1,4 @@
++> **2026-10-02 非行内 Tab 稳定布局：** inline_preedit:false 时 Tab 音节行固定在主候选上方；普通编码与 Tab 使用相同的单行高度及上下留白，文字垂直居中。横排和竖排候选均覆盖；Tab 拼音实际换行仍按内容增高。
+ > **2026-10-02 普通编码纯文字：** 非行内模式的普通编码去掉高亮背景，统一使用普通文字色；关闭软光标符号。Tab 编辑高亮及分组编号填充保留。新增 Collect-IME-Diagnostics.cmd，只读导出 Windows 构建/更新、输入组件版本、触摸键盘状态和运行应用实际加载的 Weasel DLL 构建标识，供两台系统对比。
+ > **2026-10-02 可选系统输入绕过入口：** 包内新增 Fix-IME-First-Key.cmd，可选择打开触摸键盘、备份后重置 TouchKeyboardHasEverShown、恢复原值或查看状态。由用户单独运行，不由补丁安装器自动执行。Windows PowerShell 5.1 隔离测试覆盖原值不存在、重复执行、外部修改及写入失败。
+ > **2026-10-02 Tab 前置编号填充：** 可见分组编号使用独立浅灰圆角背景，去掉末尾点；字号与末尾输入序号框统一，填充框在音节行内垂直居中，数字按实际字形居中。前四项及组内编号继续隐藏，选择规则保持。
+diff --git a/WeaselUI/HorizontalLayout.cpp b/WeaselUI/HorizontalLayout.cpp
+index e457e29..9fe2c5a 100644
+--- a/WeaselUI/HorizontalLayout.cpp
++++ b/WeaselUI/HorizontalLayout.cpp
+@@ -59,12 +59,21 @@ void HorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+   if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = pgw, szy = max(size.cy, pgh);
++    if (!_configuredInlinePreedit) {
++      // Reserve the same single-line slot for ordinary code and Tab syllables.
++      // Multi-line Tab text can still grow naturally within the candidate width.
++      CSize codeLine, tabLine;
++      GetTextSizeDW(L"s", 1, pDWR->pPreeditTextFormat, pDWR, &codeLine);
++      GetTextSizeDW(L"s", 1, pDWR->pRewriteTextFormat, pDWR, &tabLine);
++      const int lineHeight = max(codeLine.cy, max(tabLine.cy, pDWR->rewriteBadgeHeight));
++      szy = max(szy, lineHeight) + 2 * _style.hilite_padding_y;
++    }
+     // icon size higher then preedit text
+     int yoffset = (STATUS_ICON_SIZE >= szy && ShouldDisplayStatusIcon())
+                       ? (STATUS_ICON_SIZE - szy) / 2
+                       : 0;
+-    _preeditRect.SetRect(w, height + yoffset, w + size.cx,
+-                         height + yoffset + size.cy);
++    _preeditRect.SetRect(w, height + yoffset + (szy - size.cy) / 2, w + size.cx,
++                         height + yoffset + (szy - size.cy) / 2 + size.cy);
+     height += szy + 2 * yoffset + _style.spacing;
+     width = max(width, (_context.rewrite.active() ? offsetX + real_margin_x :
+                         real_margin_x * 2) + size.cx + szx);
+diff --git a/WeaselUI/Layout.cpp b/WeaselUI/Layout.cpp
+index be1fe52..ced26c0 100644
+--- a/WeaselUI/Layout.cpp
++++ b/WeaselUI/Layout.cpp
+@@ -6,7 +6,8 @@ Layout::Layout(const UIStyle& style,
+                const Context& context,
+                const Status& status,
+                PDWR pDWR)
+-    : _style(style),
++    : _configuredInlinePreedit(style.inline_preedit),
++      _style(style),
+       _context(context),
+       _status(status),
+       candidates(_context.cinfo.candies),
+@@ -20,6 +21,8 @@ Layout::Layout(const UIStyle& style,
+   // Only this layout snapshot is changed; TSF's inline composition is retained.
+   if (_context.rewrite.active()) {
+     _style.inline_preedit = false;
++  }
++  if (_context.rewrite.active() || !_configuredInlinePreedit) {
+     _style.spacing = (std::max)(_style.spacing, _style.hilite_padding_y + 4);
+   }
+   if (pDWR) {
+diff --git a/WeaselUI/Layout.h b/WeaselUI/Layout.h
+index 603d0e7..c5b0910 100644
+--- a/WeaselUI/Layout.h
++++ b/WeaselUI/Layout.h
+@@ -114,6 +114,7 @@ class Layout {
+   int real_margin_x;
+   int real_margin_y;
+   int rewrite_max_width = 0;  // Physical content width, excluding outer padding.
++  bool _configuredInlinePreedit;
+   UIStyle _style;
+ 
+  protected:
+diff --git a/WeaselUI/StandardLayout.cpp b/WeaselUI/StandardLayout.cpp
+index f0057e9..8695007 100644
+--- a/WeaselUI/StandardLayout.cpp
++++ b/WeaselUI/StandardLayout.cpp
+@@ -410,6 +410,7 @@ bool StandardLayout::ShouldDisplayStatusIcon() const {
+ // Move the measured row inside the existing body without resizing or reflowing.
+ // Ordinary composition is unaffected; the Tab row occupies the far side of the caret.
+ bool StandardLayout::ArrangeRewriteRow(bool below) {
++  if (!_configuredInlinePreedit) below = false;
+   if (!_context.rewrite.active() || candidates_count == 0 ||
+       _style.layout_type == UIStyle::LAYOUT_VERTICAL_TEXT || below == _rewriteBelow)
+     return false;
+diff --git a/WeaselUI/VerticalLayout.cpp b/WeaselUI/VerticalLayout.cpp
+index b260b74..0789c31 100644
+--- a/WeaselUI/VerticalLayout.cpp
++++ b/WeaselUI/VerticalLayout.cpp
+@@ -50,12 +50,21 @@ void weasel::VerticalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+   if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = pgw, szy = max(size.cy, pgh);
++    if (!_configuredInlinePreedit) {
++      // Reserve the same single-line slot for ordinary code and Tab syllables.
++      // Multi-line Tab text can still grow naturally within the candidate width.
++      CSize codeLine, tabLine;
++      GetTextSizeDW(L"s", 1, pDWR->pPreeditTextFormat, pDWR, &codeLine);
++      GetTextSizeDW(L"s", 1, pDWR->pRewriteTextFormat, pDWR, &tabLine);
++      const int lineHeight = max(codeLine.cy, max(tabLine.cy, pDWR->rewriteBadgeHeight));
++      szy = max(szy, lineHeight) + 2 * _style.hilite_padding_y;
++    }
+     // icon size higher then preedit text
+     int yoffset = (STATUS_ICON_SIZE >= szy && ShouldDisplayStatusIcon())
+                       ? (STATUS_ICON_SIZE - szy) / 2
+                       : 0;
+-    _preeditRect.SetRect(real_margin_x, height + yoffset,
+-                         real_margin_x + size.cx, height + yoffset + size.cy);
++    _preeditRect.SetRect(real_margin_x, height + yoffset + (szy - size.cy) / 2,
++                         real_margin_x + size.cx, height + yoffset + (szy - size.cy) / 2 + size.cy);
+     height += szy + 2 * yoffset + _style.spacing;
+     width = max(width, real_margin_x * 2 + size.cx + szx);
+     if (ShouldDisplayStatusIcon())
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 8e6e5fc..5704f40 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-plain-preedit-diagnostics-20261002
++Build-ID: rewrite-ui-stable-panel-tab-20261002
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index cd3d55b..5368837 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -275,6 +275,40 @@ int main() {
+       assert(dwr->pRewriteLabelTextFormat->GetFontSize() <= dwr->pRewriteTextFormat->GetFontSize());
+       assert(dwr->pRewriteTextFormat->GetFontSize() >= 10 * dwr->dpiScaleFontPoint);
+       assert(dwr->pRewriteTextFormat->GetFontSize() < dwr->pPreeditTextFormat->GetFontSize());
++      if (mode != 2) {
++        auto fixedStyle = style;
++        fixedStyle.inline_preedit = false;
++        fixedStyle.max_width = 1000;
++        auto tab = indexed;
++        for (int i = 0; i < 6; ++i) {
++          tab.cinfo.candies.push_back(weasel::Text{L"测试"});
++          tab.cinfo.comments.push_back(weasel::Text{L""});
++          tab.cinfo.labels.push_back(weasel::Text{std::to_wstring(i + 1)});
++        }
++        tab.rewrite.original = tab.rewrite.input = L"ceui";
++        tab.rewrite.ranges = L"0-2,2-4";
++        tab.rewrite.pinyin = L"cè|shì";
++        tab.rewrite.index = L"1";
++        tab.rewrite.replacement.clear();
++        auto ordinary = tab;
++        ordinary.rewrite.clear(); ordinary.preedit.str = L"ce ui";
++        auto fixedDwr = std::make_shared<weasel::DirectWriteResources>(fixedStyle, dpi);
++        std::unique_ptr<weasel::Layout> normalLayout, tabLayout;
++        if (mode == 0) {
++          normalLayout.reset(new weasel::VerticalLayout(fixedStyle, ordinary, status, fixedDwr));
++          tabLayout.reset(new weasel::VerticalLayout(fixedStyle, tab, status, fixedDwr));
++        } else {
++          normalLayout.reset(new weasel::HorizontalLayout(fixedStyle, ordinary, status, fixedDwr));
++          tabLayout.reset(new weasel::HorizontalLayout(fixedStyle, tab, status, fixedDwr));
++        }
++        normalLayout->DoLayout(dc, fixedDwr); tabLayout->DoLayout(dc, fixedDwr);
++        assert(normalLayout->GetContentSize().cy == tabLayout->GetContentSize().cy);
++        assert(normalLayout->GetCandidateRect(0).top == tabLayout->GetCandidateRect(0).top);
++        const auto before = tabLayout->GetPreeditRect();
++        assert(!tabLayout->ArrangeRewriteRow(true));
++        assert(tabLayout->GetPreeditRect() == before);
++        assert(before.bottom <= tabLayout->GetCandidateTextRect(0).top);
++      }
+       if (mode == 1) {
+         auto wrapStyle = style; wrapStyle.max_width = 1000;
+         auto wrapped = indexed;
+@@ -676,6 +710,16 @@ int main() {
+     assert(panel.RewriteLayoutGeneration() == sideGeneration);
+     panel.ShowWindow(SW_SHOWNA);
+     assert(IsWindowVisible(panel.RewriteWindow()));
++    // Non-inline mode keeps the row above candidates on either side of the caret.
++    style.inline_preedit = false; host.style() = style;
++    host.ctx() = normal; panel.Refresh(); panel.MoveTo(CRect(200,200,200,224));
++    const auto panelCodeHeight = panel.SurfaceRect().Height();
++    auto fixedEditing = armed; fixedEditing.cinfo = normal.cinfo;
++    host.ctx() = fixedEditing; panel.Refresh(); panel.MoveTo(CRect(200,200,200,224));
++    assert(panel.SurfaceRect().Height() == panelCodeHeight);
++    assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
++    panel.MoveTo(bottomCaret);
++    assert(panel.RewriteSurfaceRect().bottom < panel.CandidateTextRect().top);
+     auto empty = editing; empty.cinfo.clear(); empty.preedit.clear();
+     host.ctx() = empty; panel.Refresh();
+     assert(IsWindowVisible(panel.RewriteWindow()));
+-- 
+2.53.0.windows.2
+
