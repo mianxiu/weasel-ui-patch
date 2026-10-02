@@ -1,0 +1,167 @@
+From bfcad4f4374949654640e8ae619d3f84e69a5a79 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Sat, 3 Oct 2026 02:00:29 +0800
+Subject: [PATCH] Unify Tab typography and padding across inline preedit modes
+
+---
+ INSTALL-PATCH.md               |  2 +-
+ REWRITE-UI.md                  |  2 ++
+ WeaselUI/HorizontalLayout.cpp  |  7 ++++---
+ WeaselUI/VerticalLayout.cpp    |  7 ++++---
+ WeaselUI/WeaselPanel.cpp       |  5 ++---
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp | 33 +++++++++++++++++++++++++++++++++
+ 7 files changed, 47 insertions(+), 11 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 6d7b882..cea4283 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -35,7 +35,7 @@ patch:
+ 
+ 把这三项合并到现有 `patch:` 下，不要覆盖整份配置。修改后重新部署并重启小狼毫服务。部分应用可能忽略线型或颜色。
+ 
+-完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-yaml-inline-underline-20261002`。
++完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-unified-tab-spacing-20261003`。
+ 
+ ## 输入异常排查
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index 744327c..d1bee15 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -364,3 +364,5 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 线型可选 `none`、`solid`、`dot`、`dash`、`squiggle`。颜色用带引号的 `#RRGGBB`，或 `theme` 跟随当前皮肤选中候选的背景色；透明背景回退到蓝色。与传统皮肤数值颜色的字节顺序不同。非法线型或颜色分别回退为实线或默认蓝色。只影响 TSF 行内编码，不调整候选框。
+ 
+ 修改后重新部署并重启小狼毫服务；首次安装新版 DLL 后须重开输入应用。后续仅调整 YAML 不需重装。文本宿主最终决定显示效果，个别应用可能忽略 TSF 的线型或颜色。完整示例随包提供：`inline-underline.custom.example.yaml`。
++
++2026-10-03：inline_preedit 开启和关闭时，Tab 共用字号、预留行高、上下 padding 和候选间距；普通非行内编码的布局保持原样。
+diff --git a/WeaselUI/HorizontalLayout.cpp b/WeaselUI/HorizontalLayout.cpp
+index 1b46eb3..a03474d 100644
+--- a/WeaselUI/HorizontalLayout.cpp
++++ b/WeaselUI/HorizontalLayout.cpp
+@@ -57,10 +57,11 @@ void HorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+ 
+   /* Preedit */
+   if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+-    if (!_configuredInlinePreedit) height -= real_margin_y / 2;
++    const bool compactPreedit = !_configuredInlinePreedit || _context.rewrite.active();
++    if (compactPreedit) height -= real_margin_y / 2;
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = pgw, szy = max(size.cy, pgh);
+-    if (!_configuredInlinePreedit) {
++    if (compactPreedit) {
+       // Reserve the same single-line slot for ordinary code and Tab syllables.
+       // Multi-line Tab text can still grow naturally within the candidate width.
+       CSize codeLine, tabLine;
+@@ -75,7 +76,7 @@ void HorizontalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+                       : 0;
+     _preeditRect.SetRect(w, height + yoffset + (szy - size.cy) / 2, w + size.cx,
+                          height + yoffset + (szy - size.cy) / 2 + size.cy);
+-    const int preeditGap = _configuredInlinePreedit ? _style.spacing : _style.spacing / 2;
++    const int preeditGap = compactPreedit ? _style.spacing / 2 : _style.spacing;
+     height += szy + 2 * yoffset + preeditGap;
+     width = max(width, (_context.rewrite.active() ? offsetX + real_margin_x :
+                         real_margin_x * 2) + size.cx + szx);
+diff --git a/WeaselUI/VerticalLayout.cpp b/WeaselUI/VerticalLayout.cpp
+index 76028ed..264c4ad 100644
+--- a/WeaselUI/VerticalLayout.cpp
++++ b/WeaselUI/VerticalLayout.cpp
+@@ -48,10 +48,11 @@ void weasel::VerticalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+   CSize size;
+   /* Preedit */
+   if (!IsInlinePreedit() && _context.HasPanelPreedit()) {
+-    if (!_configuredInlinePreedit) height -= real_margin_y / 2;
++    const bool compactPreedit = !_configuredInlinePreedit || _context.rewrite.active();
++    if (compactPreedit) height -= real_margin_y / 2;
+     size = GetPreeditSize(dc, _context.preedit, pDWR->pPreeditTextFormat, pDWR);
+     int szx = pgw, szy = max(size.cy, pgh);
+-    if (!_configuredInlinePreedit) {
++    if (compactPreedit) {
+       // Reserve the same single-line slot for ordinary code and Tab syllables.
+       // Multi-line Tab text can still grow naturally within the candidate width.
+       CSize codeLine, tabLine;
+@@ -66,7 +67,7 @@ void weasel::VerticalLayout::DoLayout(CDCHandle dc, PDWR pDWR) {
+                       : 0;
+     _preeditRect.SetRect(real_margin_x, height + yoffset + (szy - size.cy) / 2,
+                          real_margin_x + size.cx, height + yoffset + (szy - size.cy) / 2 + size.cy);
+-    const int preeditGap = _configuredInlinePreedit ? _style.spacing : _style.spacing / 2;
++    const int preeditGap = compactPreedit ? _style.spacing / 2 : _style.spacing;
+     height += szy + 2 * yoffset + preeditGap;
+     width = max(width, real_margin_x * 2 + size.cx + szx);
+     if (ShouldDisplayStatusIcon())
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index 6d5e86f..d332011 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -930,11 +930,10 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+           candidate = m_layout->GetHighlightRect();
+           candidate.InflateRect(DPI_SCALE(m_style.hilite_padding_x),
+                                 DPI_SCALE(m_style.hilite_padding_y));
+-          // Non-inline mode reserves a centered preedit slot for stable height.
++          // Both inline modes reserve the same centered Tab slot.
+           // Carry only the last syllable row's fill through its bottom padding;
+           // the shared path still requires horizontal overlap with the candidate.
+-          if (!m_style.inline_preedit &&
+-              m_style.layout_type == UIStyle::LAYOUT_HORIZONTAL &&
++          if (m_style.layout_type == UIStyle::LAYOUT_HORIZONTAL &&
+               rc.bottom <= m_layout->GetCandidateTextRect(0).top &&
+               cell.back.bottom == layout.size.cy &&
+               back.left < candidate.right && back.right > candidate.left &&
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 31012d0..8897f10 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-yaml-inline-underline-20261002
++Build-ID: rewrite-ui-unified-tab-spacing-20261003
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index 8087028..bec5aef 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -312,6 +312,39 @@ int main() {
+         assert(normalLayout->GetPreeditRect().top < candidateLayout->GetCandidateTextRect(0).top);
+         assert(normalLayout->GetContentSize().cy == tabLayout->GetContentSize().cy);
+         assert(normalLayout->GetCandidateRect(0).top == tabLayout->GetCandidateRect(0).top);
++        // Inline composition affects placement, never Tab font or padding.
++        auto inlineStyle = fixedStyle; inlineStyle.inline_preedit = true;
++        auto inlineDwr = std::make_shared<weasel::DirectWriteResources>(inlineStyle, dpi);
++        assert(inlineDwr->pRewriteTextFormat->GetFontSize() ==
++               fixedDwr->pRewriteTextFormat->GetFontSize());
++        assert(inlineDwr->pRewriteBadgeTextFormat->GetFontSize() ==
++               fixedDwr->pRewriteBadgeTextFormat->GetFontSize());
++        for (bool multiline : {false, true}) {
++          auto compareTab = tab;
++          if (multiline) {
++            compareTab.rewrite.original.clear(); compareTab.rewrite.ranges.clear();
++            compareTab.rewrite.pinyin.clear();
++            for (int i = 0; i < 32; ++i) {
++              compareTab.rewrite.original += L"ce";
++              if (i) { compareTab.rewrite.ranges += L","; compareTab.rewrite.pinyin += L"|"; }
++              compareTab.rewrite.ranges += std::to_wstring(i*2) + L"-" + std::to_wstring(i*2+2);
++              compareTab.rewrite.pinyin += L"cháng";
++            }
++            compareTab.rewrite.input = compareTab.rewrite.original;
++          }
++          std::unique_ptr<weasel::Layout> enabled, disabled;
++          if (mode == 0) {
++            enabled.reset(new weasel::VerticalLayout(inlineStyle, compareTab, status, inlineDwr));
++            disabled.reset(new weasel::VerticalLayout(fixedStyle, compareTab, status, fixedDwr));
++          } else {
++            enabled.reset(new weasel::HorizontalLayout(inlineStyle, compareTab, status, inlineDwr));
++            disabled.reset(new weasel::HorizontalLayout(fixedStyle, compareTab, status, fixedDwr));
++          }
++          enabled->DoLayout(dc, inlineDwr); disabled->DoLayout(dc, fixedDwr);
++          assert(enabled->GetPreeditRect() == disabled->GetPreeditRect());
++          assert(enabled->GetContentSize() == disabled->GetContentSize());
++          assert(enabled->GetCandidateRect(0) == disabled->GetCandidateRect(0));
++        }
+         const auto before = tabLayout->GetPreeditRect();
+         assert(!tabLayout->ArrangeRewriteRow(true));
+         assert(tabLayout->GetPreeditRect() == before);
+-- 
+2.53.0.windows.2
+
