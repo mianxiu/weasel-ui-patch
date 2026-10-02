@@ -1,0 +1,144 @@
+From 80c113cb537fc5ab3da849c77cc87af09412cf51 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Sat, 3 Oct 2026 02:35:11 +0800
+Subject: [PATCH] Restore joined Tab highlight below the candidate after
+ spacing unification
+
+---
+ INSTALL-PATCH.md               |  2 +-
+ REWRITE-UI.md                  |  2 ++
+ WeaselUI/JoinedRewritePath.h   |  8 ++++++++
+ WeaselUI/WeaselPanel.cpp       | 19 +++++++++----------
+ rewrite-build.txt              |  2 +-
+ test/rewrite_pipeline_test.cpp | 33 +++++++++++++++++++++++++++++++++
+ 6 files changed, 54 insertions(+), 12 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index cea4283..dea745f 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -35,7 +35,7 @@ patch:
+ 
+ 把这三项合并到现有 `patch:` 下，不要覆盖整份配置。修改后重新部署并重启小狼毫服务。部分应用可能忽略线型或颜色。
+ 
+-完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-unified-tab-spacing-20261003`。
++完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-tab-joined-both-sides-20261003`。
+ 
+ ## 输入异常排查
+ 
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index d1bee15..5c23534 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -366,3 +366,5 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 修改后重新部署并重启小狼毫服务；首次安装新版 DLL 后须重开输入应用。后续仅调整 YAML 不需重装。文本宿主最终决定显示效果，个别应用可能忽略 TSF 的线型或颜色。完整示例随包提供：`inline-underline.custom.example.yaml`。
+ 
+ 2026-10-03：inline_preedit 开启和关闭时，Tab 共用字号、预留行高、上下 padding 和候选间距；普通非行内编码的布局保持原样。
++
++2026-10-03：补齐 Tab 在主候选下方时的圆角连接。仅连接紧邻候选且横向重叠的音节高亮，不改变字号、padding、文字位置和窗口高度。
+diff --git a/WeaselUI/JoinedRewritePath.h b/WeaselUI/JoinedRewritePath.h
+index 284f934..c013a2a 100644
+--- a/WeaselUI/JoinedRewritePath.h
++++ b/WeaselUI/JoinedRewritePath.h
+@@ -4,6 +4,14 @@
+ #include <gdiplus.h>
+ 
+ namespace weasel {
++// Bridge only the row adjacent to the candidate, keeping distant fills separate.
++inline void ExtendAdjacentRewriteHighlight(CRect& syllable, const CRect& candidate,
++                                          bool above, bool adjacent) {
++  if (!adjacent || syllable.left >= candidate.right || syllable.right <= candidate.left) return;
++  if (above) syllable.bottom = (std::max)(syllable.bottom, candidate.top + 1);
++  else syllable.top = (std::min)(syllable.top, candidate.bottom - 1);
++}
++
+ // Trace the union first, then round both convex outer and concave neck corners.
+ // Both layered windows draw this same path in their own coordinate systems.
+ inline void BuildJoinedRewritePath(Gdiplus::GraphicsPath& path, CRect body, CRect tag,
+diff --git a/WeaselUI/WeaselPanel.cpp b/WeaselUI/WeaselPanel.cpp
+index d332011..f4d8d7f 100644
+--- a/WeaselUI/WeaselPanel.cpp
++++ b/WeaselUI/WeaselPanel.cpp
+@@ -930,16 +930,15 @@ bool WeaselPanel::_DrawRewrite(CDCHandle dc, const CRect& rc, bool background) {
+           candidate = m_layout->GetHighlightRect();
+           candidate.InflateRect(DPI_SCALE(m_style.hilite_padding_x),
+                                 DPI_SCALE(m_style.hilite_padding_y));
+-          // Both inline modes reserve the same centered Tab slot.
+-          // Carry only the last syllable row's fill through its bottom padding;
+-          // the shared path still requires horizontal overlap with the candidate.
+-          if (m_style.layout_type == UIStyle::LAYOUT_HORIZONTAL &&
+-              rc.bottom <= m_layout->GetCandidateTextRect(0).top &&
+-              cell.back.bottom == layout.size.cy &&
+-              back.left < candidate.right && back.right > candidate.left &&
+-              m_layout->GetHighlightRect().top == m_layout->GetCandidateRect(0).top) {
+-            back.bottom = (std::max)((int)back.bottom, (int)candidate.top + 1);
+-          }
++          // The centered Tab slot needs the same bridge above and below.
++          const bool above = rc.bottom <= m_layout->GetCandidateTextRect(0).top;
++          const bool adjacent = m_style.layout_type == UIStyle::LAYOUT_HORIZONTAL &&
++              (above ? cell.back.bottom == layout.size.cy &&
++                           m_layout->GetHighlightRect().top == m_layout->GetCandidateRect(0).top
++                     : cell.back.top == 0 &&
++                           m_layout->GetHighlightRect().bottom ==
++                               m_layout->GetCandidateRect(m_candidateCount - 1).bottom);
++          ExtendAdjacentRewriteHighlight(back, candidate, above, adjacent);
+           const bool firstPair = m_ctx.cinfo.highlighted == 0 && !layout.cells.empty() &&
+               cell.back.TopLeft() == layout.cells.front().back.TopLeft() && !cell.unit.badge &&
+               layout.size.cy == cell.back.Height() &&
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 8897f10..4fb5964 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-unified-tab-spacing-20261003
++Build-ID: rewrite-ui-tab-joined-both-sides-20261003
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/rewrite_pipeline_test.cpp b/test/rewrite_pipeline_test.cpp
+index bec5aef..ed1d96d 100644
+--- a/test/rewrite_pipeline_test.cpp
++++ b/test/rewrite_pipeline_test.cpp
+@@ -344,6 +344,39 @@ int main() {
+           assert(enabled->GetPreeditRect() == disabled->GetPreeditRect());
+           assert(enabled->GetContentSize() == disabled->GetContentSize());
+           assert(enabled->GetCandidateRect(0) == disabled->GetCandidateRect(0));
++          if (mode == 1 && !multiline) {
++            // Reproduce the second-syllable highlight below the first candidate.
++            auto joinedTab = compareTab; joinedTab.rewrite.index = L"2";
++            joinedTab.cinfo.candies[0].str = L"功能以下这个";
++            weasel::HorizontalLayout joinedLayout(inlineStyle, joinedTab, status, inlineDwr);
++            joinedLayout.DoLayout(dc, inlineDwr);
++            Gdiplus::GdiplusStartupInput startup; ULONG_PTR token;
++            assert(Gdiplus::GdiplusStartup(&token, &startup, nullptr) == Gdiplus::Ok);
++            const auto originalSize = joinedLayout.GetContentSize();
++            for (bool below : {false, true}) {
++              joinedLayout.ArrangeRewriteRow(below);
++              const auto row = weasel::MeasureRewrite(joinedLayout, joinedTab.rewrite, inlineDwr);
++              const auto active = std::find_if(row.cells.begin(), row.cells.end(),
++                  [](const weasel::RewriteCell& cell) { return cell.unit.active && !cell.unit.badge; });
++              assert(active != row.cells.end());
++              auto fill = active->back;
++              const auto preedit = joinedLayout.GetPreeditRect();
++              fill.OffsetRect(preedit.left, preedit.top);
++              fill.InflateRect((int)(4 * inlineDwr->dpiScaleLayout),
++                               (int)((inlineStyle.hilite_padding_y / 2) * inlineDwr->dpiScaleLayout));
++              auto candidate = joinedLayout.GetHighlightRect();
++              candidate.InflateRect(joinedLayout._style.hilite_padding_x, joinedLayout._style.hilite_padding_y);
++              weasel::ExtendAdjacentRewriteHighlight(fill, candidate, !below, true);
++              Gdiplus::GraphicsPath path;
++              assert(weasel::BuildJoinedRewriteHighlight(path, candidate, fill, 13, 6, 4));
++              assert(joinedLayout.GetContentSize() == originalSize);
++              auto separate = fill; separate.OffsetRect(candidate.Width() * 2, 0);
++              const auto saved = separate;
++              weasel::ExtendAdjacentRewriteHighlight(separate, candidate, !below, true);
++              assert(separate == saved);
++            }
++          }
++
+         }
+         const auto before = tabLayout->GetPreeditRect();
+         assert(!tabLayout->ArrangeRewriteRow(true));
+-- 
+2.53.0.windows.2
+
