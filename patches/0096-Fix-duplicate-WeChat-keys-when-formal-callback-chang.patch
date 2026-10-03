@@ -1,0 +1,99 @@
+From 098124e7f473c187f75f1d8c24acb0d96128d03a Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Sat, 3 Oct 2026 18:48:27 +0800
+Subject: [PATCH] Fix duplicate WeChat keys when formal callback changes repeat
+ count
+
+---
+ INSTALL-PATCH.md        |  2 +-
+ WeaselTSF/WeaselTSF.h   |  7 ++++++-
+ rewrite-build.txt       |  2 +-
+ test/tsf_focus_test.cpp | 31 +++++++++++++++++++++++++++++++
+ 4 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index 006171b..fd4145f 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -35,7 +35,7 @@ patch:
+ 
+ 把这三项合并到现有 `patch:` 下，不要覆盖整份配置。修改后重新部署并重启小狼毫服务。部分应用可能忽略线型或颜色。
+ 
+-完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-key-event-trace-20261003`。
++完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-wechat-key-dedup-20261003`。
+ 
+ ## 输入异常排查
+ 
+diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
+index e0ec59a..6e13662 100644
+--- a/WeaselTSF/WeaselTSF.h
++++ b/WeaselTSF/WeaselTSF.h
+@@ -225,7 +225,12 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+     LONG messageTime = 0;
+     bool Matches(ITfContext* current, WPARAM currentKey, LPARAM currentFlags,
+                  LONG currentTime, bool sameMessage) const {
+-      return context == current && key == currentKey && flags == currentFlags &&
++      // Hosts such as WeChat change only the repeat count between test and
++      // formal callbacks (1 -> 0). Keep scan code and transition bits strict.
++      const bool flagsMatch = sameMessage
++          ? flags == currentFlags
++          : ((static_cast<ULONG>(flags ^ currentFlags) & 0xffff0000UL) == 0);
++      return context == current && key == currentKey && flagsMatch &&
+              (!sameMessage || messageTime == currentTime);
+     }
+   };
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 5a22e6a..cd6ce33 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-key-event-trace-20261003
++Build-ID: rewrite-ui-wechat-key-dedup-20261003
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test/tsf_focus_test.cpp b/test/tsf_focus_test.cpp
+index 609b4be..cd0d13e 100644
+--- a/test/tsf_focus_test.cpp
++++ b/test/tsf_focus_test.cpp
+@@ -343,6 +343,37 @@ struct TSFFocusTest {
+     service->OnKeyDown(&context, 'U', initialU, &eaten);
+     assert(eaten && !service->_fTestKeyDownPending);
+ 
++    // Captured WeChat callbacks: test repeat-count 1, formal repeat-count 0.
++    // A pending consumed key must be acknowledged without another edit/send.
++    const UINT keys[] = {'C', 'C', 'E', 'U', 'I', 'Y'};
++    const LPARAM scanFlags[] = {0x002e0000, 0x002e0000, 0x00120000, 0x00160000,
++                                0x00170000, 0x00150000};
++    for (size_t i = 0; i < _countof(keys); ++i) {
++      const LONG stamp = GetMessageTime();
++      service->_testKeyDown = {&context, keys[i], scanFlags[i] | 1, stamp};
++      service->_fTestKeyDownPending = TRUE;
++      assert(service->_testKeyDown.Matches(&context, keys[i], scanFlags[i], 0, false));
++      assert(!service->_testKeyDown.Matches(&context, keys[i], scanFlags[i], stamp, true));
++      assert(!service->_testKeyDown.Matches(&context, keys[i], scanFlags[i] | 1, stamp + 1, true));
++      assert(!service->_testKeyDown.Matches(&context, keys[i], scanFlags[i] | 0x40000000, 0, false));
++      assert(!service->_testKeyDown.Matches(&context, keys[i], scanFlags[i] | 0x01000000, 0, false));
++      assert(!service->_testKeyDown.Matches(&context, keys[i] + 1, scanFlags[i], 0, false));
++      assert(!service->_testKeyDown.Matches(nullptr, keys[i], scanFlags[i], 0, false));
++      const auto edits = context.pending.size();
++      eaten = FALSE;
++      service->OnKeyDown(&context, keys[i], scanFlags[i], &eaten);
++      assert(eaten && !service->_fTestKeyDownPending);
++      assert(context.pending.size() == edits);
++    }
++    // Key-up pairing also tolerates the host's count, but never matches a down.
++    service->_testKeyUp = {&context, 'C', static_cast<LPARAM>(0xc02e0001u), GetMessageTime()};
++    service->_fTestKeyUpPending = TRUE;
++    assert(!service->_testKeyUp.Matches(&context, 'C', 0x002e0000, 0, false));
++    eaten = FALSE;
++    const auto editsBeforeUp = context.pending.size();
++    service->OnKeyUp(&context, 'C', 0xc02e0000, &eaten);
++    assert(eaten && !service->_fTestKeyUpPending);
++    assert(context.pending.size() == editsBeforeUp);
+     // A different control on the same document can receive the next U
+     // without either a document-focus or thread-focus callback.
+     Context nextContext;
+-- 
+2.53.0.windows.2
+
