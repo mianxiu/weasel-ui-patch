@@ -35,7 +35,7 @@ patch:
 
 把这三项合并到现有 `patch:` 下，不要覆盖整份配置。修改后重新部署并重启小狼毫服务。部分应用可能忽略线型或颜色。
 
-完整示例随安装包提供。当前构建：`rewrite-ui-balanced-tab-bottom-20261003`。
+完整示例随安装包提供。当前构建：`rewrite-ui-wechat-key-dedup-20261003`。
 
 ## 输入异常排查
 
@@ -43,9 +43,12 @@ patch:
 
 `Fix-IME-First-Key.cmd` 提供可选的触摸键盘绕过办法，并支持恢复。它不会随安装自动执行，也不能保证解决吞字。
 
+修复微信等应用中因按键回调参数差异导致的重复输入。安装后必须完全退出并重开输入应用，才能加载新 DLL。
+
+需要排查输入异常时，可运行 `Start-Key-Trace.cmd` 开启按键记录；24 小时后自动停止，活动日志最多约 64 MiB。`Stop-Key-Trace.cmd` 关闭记录，`Capture-Key-Trace.cmd` 停止并打包日志。默认关闭，日志含按键码，请仅保留本机。
 ## 源码与维护
 
-本仓库保存 94 个补丁及维护脚本。重建源码：
+本仓库保存 96 个补丁及维护脚本。重建源码：
 
 ```powershell
 git clone https://github.com/mianxiu/weasel-ui-patch.git
