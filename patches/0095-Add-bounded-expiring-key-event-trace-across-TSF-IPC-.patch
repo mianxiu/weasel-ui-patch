@@ -1,0 +1,545 @@
+From c4915cac89b72b7bee4c0f059ea5722429c17ca9 Mon Sep 17 00:00:00 2001
+From: mianxiu <mianxiu8481@gmail.com>
+Date: Sat, 3 Oct 2026 11:33:03 +0800
+Subject: [PATCH] Add bounded expiring key event trace across TSF IPC and
+ engine
+
+---
+ Capture-Key-Trace.cmd             |   2 +
+ INSTALL-PATCH.md                  |  14 +++-
+ REWRITE-UI.md                     |  12 +++
+ Record-Key-Trace.cmd              |   6 ++
+ Record-Key-Trace.ps1              |  32 ++++++++
+ RimeWithWeasel/RimeWithWeasel.cpp |   2 +
+ Start-Key-Trace.cmd               |   2 +
+ Stop-Key-Trace.cmd                |   2 +
+ WeaselIPC/WeaselClientImpl.cpp    |   4 +-
+ WeaselTSF/KeyEventSink.cpp        |  15 +++-
+ WeaselTSF/WeaselTSF.cpp           |   6 +-
+ WeaselTSF/WeaselTSF.h             |   1 +
+ include/KeyEventTrace.h           | 126 ++++++++++++++++++++++++++++++
+ package-rewrite.ps1               |   3 +-
+ rewrite-build.txt                 |   2 +-
+ test-key-event-trace.cmd          |   9 +++
+ test/key_event_trace_test.cpp     |  53 +++++++++++++
+ 17 files changed, 285 insertions(+), 6 deletions(-)
+ create mode 100644 Capture-Key-Trace.cmd
+ create mode 100644 Record-Key-Trace.cmd
+ create mode 100644 Record-Key-Trace.ps1
+ create mode 100644 Start-Key-Trace.cmd
+ create mode 100644 Stop-Key-Trace.cmd
+ create mode 100644 include/KeyEventTrace.h
+ create mode 100644 test-key-event-trace.cmd
+ create mode 100644 test/key_event_trace_test.cpp
+
+diff --git a/Capture-Key-Trace.cmd b/Capture-Key-Trace.cmd
+new file mode 100644
+index 0000000..5e9f9d1
+--- /dev/null
++++ b/Capture-Key-Trace.cmd
+@@ -0,0 +1,2 @@
++@echo off
++call "%~dp0Record-Key-Trace.cmd" Capture
+diff --git a/INSTALL-PATCH.md b/INSTALL-PATCH.md
+index e6d49ee..006171b 100644
+--- a/INSTALL-PATCH.md
++++ b/INSTALL-PATCH.md
+@@ -35,7 +35,7 @@ patch:
+ 
+ 把这三项合并到现有 `patch:` 下，不要覆盖整份配置。修改后重新部署并重启小狼毫服务。部分应用可能忽略线型或颜色。
+ 
+-完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-balanced-tab-bottom-20261003`。
++完整示例见 `inline-underline.custom.example.yaml`。当前构建：`rewrite-ui-key-event-trace-20261003`。
+ 
+ ## 输入异常排查
+ 
+@@ -45,3 +45,15 @@ patch:
+ 程序和配置会备份，安装失败时自动恢复。排查时保留 `rewrite-backup-*`、`install.log` 和 `program-install.log`。
+ 
+ 包内含源码、校验表及许可证；词库需自行准备。
++
++## 可选按键记录
++
++仅排查随机重复输入时运行 `Start-Key-Trace.cmd`，24 小时后自动关闭。
++首次安装记录版 DLL 后，完全退出并重开需要测试的输入应用。
++
++复现后运行 `Capture-Key-Trace.cmd`：停止记录并打包日志。只停止用 `Stop-Key-Trace.cmd`；查看状态用 `Record-Key-Trace.cmd`。
++
++记录 Windows 消息、TSF 预检/正式回调、去重结果、IPC 会话和引擎处理次数。不记录正文、候选或剪贴板，但按键码可以推断输入内容，日志请保留在本机。
++位置：`%LOCALAPPDATA%\WeaselRewriteUI\KeyTrace`。循环保留 8 份，每份不超过 8 MiB；停止后手动导出的 ZIP 另占空间。
++
++日志中的 `dropped` 表示未能写入的记录数量；有缺失时不能据此作完整次数判断。线程消息钩子只观察消息，不修改或注入按键；窗口自身合成事件可能没有对应的队列消息。此版本只加记录，不改变按键去重行为。
+diff --git a/REWRITE-UI.md b/REWRITE-UI.md
+index b500b81..e08a9d2 100644
+--- a/REWRITE-UI.md
++++ b/REWRITE-UI.md
+@@ -370,3 +370,15 @@ Start-Process 'C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe'
+ 2026-10-03：补齐 Tab 在主候选下方时的圆角连接。仅连接紧邻候选且横向重叠的音节高亮，不改变字号、padding、文字位置和窗口高度。
+ 
+ 2026-10-03：Tab 行位于主候选下方时，底部外框留白与顶部主候选高亮的外框留白对齐；收紧框高，保持文字位置、字号和连接圆角。移动到屏幕底部切回上方排列时恢复原框高，不重新测量文本。
++
++## 可选按键记录
++
++仅排查随机重复输入时运行 `Start-Key-Trace.cmd`，24 小时后自动关闭。
++首次安装记录版 DLL 后，完全退出并重开需要测试的输入应用。
++
++复现后运行 `Capture-Key-Trace.cmd`：停止记录并打包日志。只停止用 `Stop-Key-Trace.cmd`；查看状态用 `Record-Key-Trace.cmd`。
++
++记录 Windows 消息、TSF 预检/正式回调、去重结果、IPC 会话和引擎处理次数。不记录正文、候选或剪贴板，但按键码可以推断输入内容，日志请保留在本机。
++位置：`%LOCALAPPDATA%\WeaselRewriteUI\KeyTrace`。循环保留 8 份，每份不超过 8 MiB；停止后手动导出的 ZIP 另占空间。
++
++日志中的 `dropped` 表示未能写入的记录数量；有缺失时不能据此作完整次数判断。线程消息钩子只观察消息，不修改或注入按键；窗口自身合成事件可能没有对应的队列消息。此版本只加记录，不改变按键去重行为。
+diff --git a/Record-Key-Trace.cmd b/Record-Key-Trace.cmd
+new file mode 100644
+index 0000000..64db34b
+--- /dev/null
++++ b/Record-Key-Trace.cmd
+@@ -0,0 +1,6 @@
++@echo off
++cd /d "%~dp0"
++set "TRACE_ACTION=%~1"
++if "%TRACE_ACTION%"=="" set "TRACE_ACTION=Status"
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Record-Key-Trace.ps1" -Action %TRACE_ACTION%
++pause
+diff --git a/Record-Key-Trace.ps1 b/Record-Key-Trace.ps1
+new file mode 100644
+index 0000000..3f6332d
+--- /dev/null
++++ b/Record-Key-Trace.ps1
+@@ -0,0 +1,32 @@
++[CmdletBinding()]
++param([ValidateSet('Start','Stop','Status','Capture')][string]$Action='Status')
++$ErrorActionPreference='Stop'
++$root=Join-Path $env:LOCALAPPDATA 'WeaselRewriteUI\KeyTrace'
++$marker=Join-Path $root 'enabled.until'
++New-Item -ItemType Directory -Force $root | Out-Null
++if($Action -eq 'Start'){
++  $until=[DateTime]::UtcNow.AddHours(24)
++  [IO.File]::WriteAllText($marker,$until.ToFileTimeUtc().ToString(),[Text.Encoding]::ASCII)
++  Write-Host ('Recording until '+$until.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss'))
++  Write-Host 'Reopen input applications after installing the diagnostic DLL.'
++  Write-Host 'Logs contain key codes; keep them private. Maximum: 8 files x 8 MiB.'
++}elseif($Action -eq 'Stop' -or $Action -eq 'Capture'){
++  [IO.File]::WriteAllText($marker,'0',[Text.Encoding]::ASCII)
++  Write-Host 'Recording stopped (takes effect within one second).'
++  if($Action -eq 'Capture'){
++    Start-Sleep -Seconds 2
++    $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
++    $archive=Join-Path $root ('key-trace-'+$stamp+'.zip')
++    $logs=@(Get-ChildItem -LiteralPath $root -Filter 'trace-*.log' -File)
++    if(!$logs.Count){throw 'No trace logs found. Reopen the affected app and enable recording.'}
++    ('Capture time: '+[DateTime]::Now.ToString('o')) | Set-Content (Join-Path $root 'capture-time.txt')
++    Compress-Archive -LiteralPath (@($logs.FullName)+(Join-Path $root 'capture-time.txt')) -DestinationPath $archive
++    Write-Host ('Saved: '+$archive)
++  }
++}else{
++  $until=0L
++  if(Test-Path -LiteralPath $marker){[long]::TryParse([IO.File]::ReadAllText($marker).Trim(),[ref]$until)|Out-Null}
++  if($until -gt [DateTime]::UtcNow.ToFileTimeUtc()){Write-Host ('Recording until '+[DateTime]::FromFileTimeUtc($until).ToLocalTime())}
++  else{Write-Host 'Recording is off'}
++}
++Write-Host ('Log folder: '+$root)
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 6b66e11..f4669fe 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -1,5 +1,6 @@
+ ﻿#include "stdafx.h"
+ #include <logging.h>
++#include <KeyEventTrace.h>
+ #include <RimeWithWeasel.h>
+ #include <StringAlgorithm.hpp>
+ #include <WeaselConstants.h>
+@@ -277,6 +278,7 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
+   if (m_disabled)
+     return FALSE;
+   RimeSessionId session_id = to_session_id(ipc_id);
++  keytrace::Write("engine", 0, reinterpret_cast<void*>((uintptr_t)ipc_id), keyEvent.keycode, keyEvent.mask, GetMessageTime());
+   Bool handled = rime_api->process_key(session_id, keyEvent.keycode,
+                                        expand_ibus_modifier(keyEvent.mask));
+   // vim_mode when keydown only
+diff --git a/Start-Key-Trace.cmd b/Start-Key-Trace.cmd
+new file mode 100644
+index 0000000..a0474b8
+--- /dev/null
++++ b/Start-Key-Trace.cmd
+@@ -0,0 +1,2 @@
++@echo off
++call "%~dp0Record-Key-Trace.cmd" Start
+diff --git a/Stop-Key-Trace.cmd b/Stop-Key-Trace.cmd
+new file mode 100644
+index 0000000..e53fbc4
+--- /dev/null
++++ b/Stop-Key-Trace.cmd
+@@ -0,0 +1,2 @@
++@echo off
++call "%~dp0Record-Key-Trace.cmd" Stop
+diff --git a/WeaselIPC/WeaselClientImpl.cpp b/WeaselIPC/WeaselClientImpl.cpp
+index 26122ad..3e97904 100644
+--- a/WeaselIPC/WeaselClientImpl.cpp
++++ b/WeaselIPC/WeaselClientImpl.cpp
+@@ -1,5 +1,6 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ #include "WeaselClientImpl.h"
++#include <KeyEventTrace.h>
+ #include <StringAlgorithm.hpp>
+ 
+ using namespace weasel;
+@@ -59,6 +60,7 @@ bool ClientImpl::ProcessKeyEvent(KeyEvent const& keyEvent) {
+   if (!_Active())
+     return false;
+ 
++  keytrace::Write("ipc", keytrace::current, reinterpret_cast<void*>((uintptr_t)session_id), keyEvent.keycode, keyEvent.mask, GetMessageTime());
+   LRESULT ret =
+       _SendMessage(WEASEL_IPC_PROCESS_KEY_EVENT, keyEvent, session_id);
+   return ret != 0;
+diff --git a/WeaselTSF/KeyEventSink.cpp b/WeaselTSF/KeyEventSink.cpp
+index 7ccc95a..b0783e3 100644
+--- a/WeaselTSF/KeyEventSink.cpp
++++ b/WeaselTSF/KeyEventSink.cpp
+@@ -3,6 +3,7 @@
+ #include "WeaselTSF.h"
+ #include <KeyEvent.h>
+ #include "CandidateList.h"
++#include <KeyEventTrace.h>
+ 
+ static weasel::KeyEvent prevKeyEvent;
+ static BOOL prevfEaten = FALSE;
+@@ -34,8 +35,11 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+       else if (ke.keycode == ibus::Down)
+         ke.keycode = ibus::Up;
+     }
+-    if (!keyCountToSimulate)
++    if (!keyCountToSimulate) {
++      weasel::keytrace::Write("send", weasel::keytrace::current, _pEditSessionContext, wParam, lParam, GetMessageTime(), ke.keycode, ke.mask);
+       *pfEaten = (BOOL)m_client.ProcessKeyEvent(ke);
++      weasel::keytrace::Write("sent", weasel::keytrace::current, _pEditSessionContext, wParam, lParam, GetMessageTime(), *pfEaten);
++    }
+ 
+     if (ke.keycode == ibus::Caps_Lock) {
+       if (prevKeyEvent.keycode == ibus::Caps_Lock && prevfEaten == TRUE &&
+@@ -63,6 +67,7 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+ }
+ 
+ STDMETHODIMP WeaselTSF::OnSetFocus(BOOL fForeground) {
++  weasel::keytrace::Write("focus", 0, _pEditSessionContext, 0, 0, GetMessageTime(), fForeground);
+   if (fForeground)
+     m_client.FocusIn();
+   else {
+@@ -110,6 +115,8 @@ STDMETHODIMP WeaselTSF::OnTestKeyDown(ITfContext* pContext,
+                                       WPARAM wParam,
+                                       LPARAM lParam,
+                                       BOOL* pfEaten) {
++  weasel::keytrace::Scope trace("OnTestKeyDown", pContext, wParam, lParam, pfEaten,
++      _fTestKeyDownPending, _testKeyDown.Matches(pContext, wParam, lParam, GetMessageTime(), true));
+   if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyUpPending = FALSE;
+   const LONG messageTime = GetMessageTime();
+@@ -133,6 +140,8 @@ STDMETHODIMP WeaselTSF::OnKeyDown(ITfContext* pContext,
+                                   WPARAM wParam,
+                                   LPARAM lParam,
+                                   BOOL* pfEaten) {
++  weasel::keytrace::Scope trace("OnKeyDown", pContext, wParam, lParam, pfEaten,
++      _fTestKeyDownPending, _testKeyDown.Matches(pContext, wParam, lParam, GetMessageTime(), false));
+   if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyUpPending = FALSE;
+   const bool tested = _fTestKeyDownPending &&
+@@ -151,6 +160,8 @@ STDMETHODIMP WeaselTSF::OnTestKeyUp(ITfContext* pContext,
+                                     WPARAM wParam,
+                                     LPARAM lParam,
+                                     BOOL* pfEaten) {
++  weasel::keytrace::Scope trace("OnTestKeyUp", pContext, wParam, lParam, pfEaten,
++      _fTestKeyUpPending, _testKeyUp.Matches(pContext, wParam, lParam, GetMessageTime(), true));
+   if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyDownPending = FALSE;
+   const LONG messageTime = GetMessageTime();
+@@ -173,6 +184,8 @@ STDMETHODIMP WeaselTSF::OnKeyUp(ITfContext* pContext,
+                                 WPARAM wParam,
+                                 LPARAM lParam,
+                                 BOOL* pfEaten) {
++  weasel::keytrace::Scope trace("OnKeyUp", pContext, wParam, lParam, pfEaten,
++      _fTestKeyUpPending, _testKeyUp.Matches(pContext, wParam, lParam, GetMessageTime(), false));
+   if (!_PrepareKeyContext(pContext)) { *pfEaten = FALSE; return S_OK; }
+   _fTestKeyDownPending = FALSE;
+   const bool tested = _fTestKeyUpPending &&
+diff --git a/WeaselTSF/WeaselTSF.cpp b/WeaselTSF/WeaselTSF.cpp
+index ba1299d..955f083 100644
+--- a/WeaselTSF/WeaselTSF.cpp
++++ b/WeaselTSF/WeaselTSF.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ 
+ #include <WeaselIPCData.h>
+ #include <thread>
+@@ -9,6 +9,7 @@
+ #include "LanguageBar.h"
+ #include "Compartment.h"
+ #include "ResponseParser.h"
++#include <KeyEventTrace.h>
+ 
+ static void error_message(const WCHAR* msg) {
+   static DWORD next_tick = 0;
+@@ -97,6 +98,7 @@ STDMETHODIMP WeaselTSF::Activate(ITfThreadMgr* pThreadMgr,
+ }
+ 
+ STDMETHODIMP WeaselTSF::Deactivate() {
++  if (_keyTraceMessageHook) { weasel::keytrace::ReleaseMessageHook(); _keyTraceMessageHook = nullptr; }
+   m_client.EndSession();
+ 
+   _InitTextEditSink(com_ptr<ITfDocumentMgr>());
+@@ -130,6 +132,8 @@ STDMETHODIMP WeaselTSF::ActivateEx(ITfThreadMgr* pThreadMgr,
+ 
+   _pThreadMgr = pThreadMgr;
+   _tfClientId = tfClientId;
++  _keyTraceMessageHook = weasel::keytrace::AcquireMessageHook();
++  weasel::keytrace::Write("activate-hook", 0, this, 0, 0, GetMessageTime(), _keyTraceMessageHook != nullptr);
+ 
+   if (!_InitThreadMgrEventSink())
+     goto ExitError;
+diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
+index 8e97809..e0ec59a 100644
+--- a/WeaselTSF/WeaselTSF.h
++++ b/WeaselTSF/WeaselTSF.h
+@@ -215,6 +215,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+ 
+   com_ptr<ITfContext> _pTextEditSinkContext;
+   DWORD _dwTextEditSinkCookie, _dwTextLayoutSinkCookie;
++  HHOOK _keyTraceMessageHook = nullptr;
+   BYTE _lpbKeyState[256];
+   BOOL _fTestKeyDownPending, _fTestKeyUpPending;
+   struct PendingKeyEvent {
+diff --git a/include/KeyEventTrace.h b/include/KeyEventTrace.h
+new file mode 100644
+index 0000000..a0e7c35
+--- /dev/null
++++ b/include/KeyEventTrace.h
+@@ -0,0 +1,126 @@
++#pragma once
++#include <windows.h>
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++// Explicitly enabled, expiring, bounded diagnostic trace. No composition text.
++namespace weasel::keytrace {
++inline std::wstring Root() {
++  wchar_t path[32768]{};
++  if (GetEnvironmentVariableW(L"WEASEL_KEY_TRACE_TEST_DIR", path, 32768)) return path;
++  if (!GetEnvironmentVariableW(L"LOCALAPPDATA", path, 32768)) return {};
++  return std::wstring(path) + L"\\WeaselRewriteUI\\KeyTrace";
++}
++inline ULONGLONG Now() {
++  FILETIME ft; GetSystemTimeAsFileTime(&ft);
++  return (ULONGLONG(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
++}
++inline bool Enabled() {
++  struct Cache { ULONGLONG checked = 0, until = 0; };
++  static thread_local Cache cache;
++  const auto tick = GetTickCount64();
++  if (!cache.checked || tick - cache.checked >= 1000) {
++    cache.checked = tick;
++    cache.until = 0;
++    const auto root = Root();
++    if (root.empty()) return false;
++    HANDLE file = CreateFileW((root + L"\\enabled.until").c_str(), GENERIC_READ,
++        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
++    if (file != INVALID_HANDLE_VALUE) {
++      char text[64]{}; DWORD read = 0;
++      if (ReadFile(file, text, 63, &read, nullptr)) cache.until = _strtoui64(text, nullptr, 10);
++      CloseHandle(file);
++    }
++  }
++  return cache.until > Now();
++}
++inline std::atomic<unsigned long long> sequence{0};
++inline thread_local unsigned long long current = 0;
++inline thread_local unsigned long long dropped = 0;
++inline void Write(const char* event, unsigned long long id, const void* context,
++                  WPARAM key, LPARAM flags, LONG messageTime, long long detail = 0,
++                  long long detail2 = 0) {
++  if (!Enabled()) return;
++  const auto root = Root();
++  unsigned hash = 2166136261u;
++  for (auto c : root) hash = (hash ^ c) * 16777619u;
++  wchar_t name[80]; swprintf_s(name, L"Local\\WeaselKeyTrace_%08x", hash);
++  HANDLE mutex = CreateMutexW(nullptr, FALSE, name);
++  if (!mutex) { ++dropped; return; }
++  const DWORD wait = WaitForSingleObject(mutex, 100);
++  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) { ++dropped; CloseHandle(mutex); return; }
++  const auto path = root + L"\\trace-0.log";
++  HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA | GENERIC_READ,
++      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
++  bool success = false;
++  if (file != INVALID_HANDLE_VALUE) {
++    LARGE_INTEGER size{};
++    if (GetFileSizeEx(file, &size) && size.QuadPart >= 8 * 1024 * 1024 - 2048) {
++      CloseHandle(file); file = INVALID_HANDLE_VALUE;
++      bool rotated = true;
++      for (int i = 6; i >= 0; --i) {
++        const auto from = root + L"\\trace-" + std::to_wstring(i) + L".log";
++        const auto to = root + L"\\trace-" + std::to_wstring(i+1) + L".log";
++        if (!MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING) &&
++            GetLastError() != ERROR_FILE_NOT_FOUND) { rotated = false; break; }
++      }
++      if (rotated) file = CreateFileW(path.c_str(), FILE_APPEND_DATA | GENERIC_READ,
++          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
++    }
++    if (file != INVALID_HANDLE_VALUE) {
++      wchar_t executable[MAX_PATH]{}; GetModuleFileNameW(nullptr, executable, MAX_PATH);
++      const wchar_t* app = wcsrchr(executable, L'\\'); app = app ? app+1 : executable;
++      char appUtf8[MAX_PATH*3]{};
++      WideCharToMultiByte(CP_UTF8, 0, app, -1, appUtf8, sizeof(appUtf8), nullptr, nullptr);
++      char line[2048];
++      const int length = sprintf_s(line,
++          "utc_ft=%llu tick=%llu pid=%lu tid=%lu app=%s event=%s id=%llu ctx=%p vk=%llu flags=%08lx msg=%ld detail=%lld detail2=%lld dropped=%llu\r\n",
++          Now(), GetTickCount64(), GetCurrentProcessId(), GetCurrentThreadId(), appUtf8, event, id, context,
++          (unsigned long long)key, (unsigned long)flags, messageTime, detail, detail2, dropped);
++      DWORD written = 0;
++      success = length > 0 && WriteFile(file, line, length, &written, nullptr) && written == length;
++      CloseHandle(file);
++    }
++  }
++  if (success) dropped = 0; else ++dropped;
++  ReleaseMutex(mutex); CloseHandle(mutex);
++}
++struct Scope {
++  const char* event; const void* context; WPARAM key; LPARAM flags;
++  BOOL* eaten; unsigned long long id = 0, parent = 0; bool active = false;
++  Scope(const char* phase, const void* ctx, WPARAM vk, LPARAM lp, BOOL* result,
++        bool pending, bool matched) : event(phase), context(ctx), key(vk), flags(lp), eaten(result) {
++    active = Enabled();
++    if (!active) return;
++    id = ++sequence; parent = current; current = id;
++    Write(event, id, context, key, flags, GetMessageTime(), pending, matched);
++    Write("parent", id, context, key, flags, GetMessageTime(), parent);
++  }
++  ~Scope() {
++    if (!active) return;
++    Write("return", id, context, key, flags, GetMessageTime(), *eaten);
++    current = parent;
++  }
++};
++inline LRESULT CALLBACK MessageHook(int code, WPARAM action, LPARAM data) {
++  if (code >= 0 && action == PM_REMOVE && Enabled()) {
++    const auto& msg = *reinterpret_cast<MSG*>(data);
++    if (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP ||
++        msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP)
++      Write("queue", 0, msg.hwnd, msg.wParam, msg.lParam, msg.time, msg.message);
++  }
++  return CallNextHookEx(nullptr, code, action, data);
++}
++inline thread_local HHOOK hook = nullptr;
++inline thread_local unsigned hookUsers = 0;
++inline HHOOK AcquireMessageHook() {
++  if (!hook) hook = SetWindowsHookExW(WH_GETMESSAGE, MessageHook, nullptr, GetCurrentThreadId());
++  if (hook) ++hookUsers;
++  return hook;
++}
++inline void ReleaseMessageHook() {
++  if (hookUsers && !--hookUsers) { UnhookWindowsHookEx(hook); hook = nullptr; }
++}
++}  // namespace weasel::keytrace
+diff --git a/package-rewrite.ps1 b/package-rewrite.ps1
+index f01c50b..93076e9 100644
+--- a/package-rewrite.ps1
++++ b/package-rewrite.ps1
+@@ -17,7 +17,8 @@ Copy-Item Apply-Patch.cmd,Apply-Patch.ps1,Install-Binaries.ps1,rewrite-build.txt
+ Copy-Item output/RewriteConfig.exe $destination -Force
+ Copy-Item Apply-Skin*.cmd,Apply-Skin.ps1 $destination -Force
+ Copy-Item Fix-IME-First-Key.cmd,Fix-IME-First-Key.ps1 $destination -Force
+-Copy-Item Collect-IME-Diagnostics.cmd,Collect-IME-Diagnostics.ps1 $destination -Force
++Copy-Item Collect-IME-Diagnostics.cmd,Collect-IME-Diagnostics.ps1 $destination -Force
++Copy-Item *-Key-Trace.cmd,Record-Key-Trace.ps1 $destination -Force
+ New-Item -ItemType Directory -Force "$destination/skins" | Out-Null
+ Copy-Item rime/skins/azure_pill*.yaml,rime/skins/README.md "$destination/skins" -Force
+ Copy-Item rime/skins/preview "$destination/skins/preview" -Recurse -Force
+diff --git a/rewrite-build.txt b/rewrite-build.txt
+index 02558c5..5a22e6a 100644
+--- a/rewrite-build.txt
++++ b/rewrite-build.txt
+@@ -1,4 +1,4 @@
+-Build-ID: rewrite-ui-balanced-tab-bottom-20261003
++Build-ID: rewrite-ui-key-event-trace-20261003
+ Weasel base: d73f6295e8252ed2f7b9c12bae32e9001b1afdaa
+ Features: integrated Tab preedit row with ordinary prefix numbers; 12pt skin; original inline composition
+ Targets: Windows x64 / x86; ARM64 not supported
+diff --git a/test-key-event-trace.cmd b/test-key-event-trace.cmd
+new file mode 100644
+index 0000000..3f1a232
+--- /dev/null
++++ b/test-key-event-trace.cmd
+@@ -0,0 +1,9 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++if "%~1"=="x86" (call C:\BuildTools\VC\Auxiliary\Build\vcvars32.bat) else (call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat)
++if errorlevel 1 exit /b 1
++cl /nologo /std:c++17 /EHsc /MT /utf-8 /DUNICODE /D_UNICODE /Iinclude test\key_event_trace_test.cpp /Fodeps\key_event_trace_test.obj /Fedeps\key_event_trace_test.exe /link user32.lib
++if errorlevel 1 exit /b 1
++deps\key_event_trace_test.exe
++exit /b %errorlevel%
+diff --git a/test/key_event_trace_test.cpp b/test/key_event_trace_test.cpp
+new file mode 100644
+index 0000000..383992f
+--- /dev/null
++++ b/test/key_event_trace_test.cpp
+@@ -0,0 +1,53 @@
++#include <windows.h>
++#include <KeyEventTrace.h>
++#include <cassert>
++#include <fstream>
++#include <iostream>
++#include <thread>
++#include <vector>
++using namespace weasel::keytrace;
++void marker(ULONGLONG until) {
++  std::ofstream file(Root() + L"\\enabled.until");
++  file << until;
++}
++int main() {
++  assert(!Root().empty());
++  marker(0); assert(!Enabled());
++  Write("off",0,nullptr,0,0,0);
++  assert(GetFileAttributesW((Root()+L"\\trace-0.log").c_str()) == INVALID_FILE_ATTRIBUTES);
++  marker(Now()+600000000); Sleep(1100); assert(Enabled());
++  BOOL eaten = TRUE;
++  { Scope scope("OnKeyDown", reinterpret_cast<void*>(123), 'C', 0x002e0001, &eaten, true, false);
++    Write("send",current,reinterpret_cast<void*>(123),'C',0x002e0001,GetMessageTime());
++  }
++  MSG msg{}; PeekMessageW(&msg,nullptr,0,0,PM_NOREMOVE);
++  const auto first = AcquireMessageHook(); assert(first);
++  assert(AcquireMessageHook() == first && hookUsers == 2);
++  assert(PostThreadMessageW(GetCurrentThreadId(),WM_KEYDOWN,'C',0x002e0001));
++  assert(PeekMessageW(&msg,nullptr,WM_KEYDOWN,WM_KEYDOWN,PM_REMOVE));
++  ReleaseMessageHook(); assert(hook && hookUsers == 1);
++  ReleaseMessageHook(); assert(!hook && !hookUsers);
++  std::ifstream file(Root()+L"\\trace-0.log");
++  const std::string data((std::istreambuf_iterator<char>(file)),{});
++  assert(data.find("event=queue") != data.npos && data.find("event=send") != data.npos);
++  assert(data.find("event=return") != data.npos && data.find("detail=1") != data.npos);
++  file.close();
++  std::vector<std::thread> workers;
++  for(int i=0;i<4;++i) workers.emplace_back([]{for(int j=0;j<100;++j)Write("parallel",0,nullptr,'C',0,0);});
++  for(auto& worker:workers)worker.join();
++  for(int i=0;i<10;++i) {
++    HANDLE fill=CreateFileW((Root()+L"\\trace-0.log").c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
++    assert(fill!=INVALID_HANDLE_VALUE);
++    LARGE_INTEGER size; size.QuadPart=8*1024*1024-2048;
++    assert(SetFilePointerEx(fill,size,nullptr,FILE_BEGIN) && SetEndOfFile(fill));CloseHandle(fill);
++    Write("rotate",0,nullptr,'C',0,0);
++  }
++  for(int i=0;i<8;++i) {
++    WIN32_FILE_ATTRIBUTE_DATA info{};
++    assert(GetFileAttributesExW((Root()+L"\\trace-"+std::to_wstring(i)+L".log").c_str(),GetFileExInfoStandard,&info));
++    assert(info.nFileSizeHigh==0 && info.nFileSizeLow<=8*1024*1024);
++  }
++  assert(GetFileAttributesW((Root()+L"\\trace-8.log").c_str())==INVALID_FILE_ATTRIBUTES);
++  marker(Now()-1); Sleep(1100); assert(!Enabled());
++  std::cout<<"Expiry, disabled mode, callback correlation, real message hook, concurrent writes and 64 MiB rotation passed\n";
++}
+-- 
+2.53.0.windows.2
+
